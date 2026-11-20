@@ -20,7 +20,7 @@ def _iso(value: datetime) -> str:
 
 @asynccontextmanager
 async def _write_window(worldline):
-    # The intent lock comes first. Keep history stable until the memory commit.
+    # Lock memory before history and hold both locks until the memory commit.
     memory = await get_db(worldline, "memory")
     try:
         await memory.execute("BEGIN IMMEDIATE")
@@ -30,7 +30,10 @@ async def _write_window(worldline):
             yield memory, history
             await memory.commit()
         finally:
-            await history.close()
+            try:
+                await history.rollback()
+            finally:
+                await history.close()
     finally:
         await memory.close()
 
@@ -48,7 +51,8 @@ async def _read_source(history, session_id, identity_mode, conversation_id, firs
 
 
 def _fingerprint(rows) -> str:
-    data = json.dumps([tuple(row)[:-1] for row in rows], ensure_ascii=False, separators=(",", ":"))
+    messages = [(row["id"], row["role"], row["content"], row["turn_id"], row["created_at"]) for row in rows]
+    data = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 

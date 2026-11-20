@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db, init_db
-from app.models import save_message
+from app.models import save_message, update_message_translation
 from app.routers.system_api import router
 from app.services.conversations import conversation_service
 
@@ -77,6 +77,23 @@ async def test_overlapping_registrations_are_serialized():
 
 
 @pytest.mark.asyncio
+async def test_translation_repair_preserves_registered_window():
+    from app.services.memory_v11.diaries import commit_diary, list_due_diary_windows, load_diary_source
+
+    window, diary_id = await registered()
+    [due] = await list_due_diary_windows(worldline=SCOPE["worldline"], now=NOW)
+    _, reply, _ = await load_diary_source(worldline=SCOPE["worldline"], window=due)
+    translation = "修复后的字幕"
+    assert await update_message_translation(
+        reply["id"], SCOPE["session_id"], window["conversation_id"], translation, SCOPE["worldline"],
+    )
+    messages = await load_diary_source(worldline=SCOPE["worldline"], window=due)
+    assert messages is not None
+    assert messages[1]["translation"] == translation
+    assert await commit_diary(**SCOPE, diary_id=diary_id, **BODY)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["pending", "completed", "epoch", "content", "deleted"])
 async def test_commit_discards_stale_source_or_deleted_window(change):
     from app.services.memory_v11.diaries import commit_diary, delete_diary, list_diaries, list_due_diary_windows
@@ -101,16 +118,20 @@ async def test_commit_discards_stale_source_or_deleted_window(change):
     assert tuple(row) == (None, None, None)
 
 
+async def link_diary_job(window, diary_id):
+    await sql("memory", """INSERT INTO memory_ingest_jobs(job_id,session_id,identity_mode,conversation_id,
+              source_message_id,pipeline_version,provider_id,model_id,state,created_at,updated_at)
+              VALUES(?,'owner','self',?,?,'diary-v1','local','fixture','pending','now','now')""",
+              (diary_id, window["conversation_id"], window["last_message_id"]))
+
+
 @pytest.mark.asyncio
 async def test_linked_job_uses_its_ingest_lease_and_diary_delete_cancels_it():
     from app.services.memory_v11.diaries import commit_diary, delete_diary, list_due_diary_windows
     from app.services.memory_v11.jobs import claim_memory_job, get_memory_job
 
     window, diary_id = await registered()
-    await sql("memory", """INSERT INTO memory_ingest_jobs(job_id,session_id,identity_mode,conversation_id,
-              source_message_id,pipeline_version,provider_id,model_id,state,created_at,updated_at)
-              VALUES(?,'owner','self',?,?,'diary-v1','local','fixture','pending','now','now')""",
-              (diary_id, window["conversation_id"], window["last_message_id"]))
+    await link_diary_job(window, diary_id)
     assert await list_due_diary_windows(worldline="steins_gate", now=NOW) == []
     assert not await commit_diary(**SCOPE, diary_id=diary_id, **BODY)
     assert await claim_memory_job(job_id=diary_id, worldline="steins_gate", lease_owner="writer")
@@ -175,6 +196,27 @@ async def test_conversation_erasure_and_export(action, forget_long_term):
         assert diaries == []
         [row] = await sql("memory", "SELECT body_ja,body_zh,verified_phrases_json FROM memory_diaries")
         assert tuple(row) == (None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_history_only_clear_discards_pending_window_and_cancels_linked_job():
+    from app.services.memory_v11.diaries import commit_diary
+    from app.services.memory_v11.jobs import claim_memory_job, get_memory_job
+
+    window, diary_id = await registered()
+    await link_diary_job(window, diary_id)
+    worldline = SCOPE["worldline"]
+    assert await claim_memory_job(job_id=diary_id, worldline=worldline, lease_owner="writer")
+
+    await conversation_service.forget(window["conversation_id"], SCOPE["session_id"], worldline, forget_long_term=False)
+
+    [diary] = await sql("memory", "SELECT state FROM memory_diaries WHERE diary_id=?", (diary_id,))
+    assert diary["state"] == "discarded"
+    job = await get_memory_job(diary_id, worldline=worldline)
+    assert (job["state"], job["retryable"], job["lease_owner"], job["last_error_code"]) == (
+        "cancelled", False, None, "source_missing",
+    )
+    assert not await commit_diary(**SCOPE, diary_id=diary_id, lease_owner="writer", **BODY)
 
 
 @pytest.mark.asyncio
