@@ -4,17 +4,19 @@ import contextlib
 import hashlib
 import io
 import json
-from pathlib import Path
 import secrets
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from verify_update_signature import main, verify_update
+
+VERSION = "1.2.3-rc.1+build.01"
 
 
 def b64(data):
@@ -42,11 +44,13 @@ class UpdateSignatureTests(unittest.TestCase):
             "pubkey": b64(b"untrusted comment: public key\n" + b64(public).encode() + b"\n"),
         }}}), encoding="utf-8")
 
-    def sign(self, algorithm=b"ED", line_end="\n"):
+    def sign(self, algorithm=b"ED", line_end="\n", version=VERSION):
         data = self.installer.read_bytes()
         message = hashlib.blake2b(data, digest_size=64).digest() if algorithm == b"ED" else data
         signed = self.private.sign(message)
         comment = "timestamp:123\tfile:" + self.installer.name
+        if version is not None:
+            comment += "\tversion:" + version
         global_sig = self.private.sign(signed + comment.encode("utf-8"))
         text = line_end.join(("untrusted comment: signature", b64(algorithm + self.key_id + signed),
                               "trusted comment: " + comment, b64(global_sig), ""))
@@ -54,7 +58,7 @@ class UpdateSignatureTests(unittest.TestCase):
 
     def write_signature(self, text):
         self.signature.write_text(text + "\n", encoding="utf-8")
-        self.latest.write_text(json.dumps({"platforms": {"windows-x86_64": {
+        self.latest.write_text(json.dumps({"version": VERSION, "platforms": {"windows-x86_64": {
             "signature": text, "url": "https://example.invalid/Amadeus%20Test_x64-setup.exe",
         }}}), encoding="utf-8")
 
@@ -63,7 +67,8 @@ class UpdateSignatureTests(unittest.TestCase):
 
     def edit_manifest(self, field, value):
         latest = json.loads(self.latest.read_text(encoding="utf-8"))
-        latest["platforms"]["windows-x86_64"][field] = value
+        target = latest if field == "version" else latest["platforms"]["windows-x86_64"]
+        target[field] = value
         self.latest.write_text(json.dumps(latest), encoding="utf-8")
 
     def test_pass_and_summary(self):
@@ -77,6 +82,31 @@ class UpdateSignatureTests(unittest.TestCase):
             with self.subTest(algorithm=algorithm):
                 self.sign(algorithm, "\r\n")
                 self.verify()
+
+    def test_missing_signed_version(self):
+        self.sign(version=None)
+        with self.assertRaisesRegex(ValueError, "trusted comment: missing version"):
+            self.verify()
+
+    def test_signed_version_mismatch(self):
+        for announced in ("1.2.4", "1.2.3-rc.2+build.01", "1.2.3-rc.1+build.1"):
+            with self.subTest(announced=announced):
+                self.edit_manifest("version", announced)
+                with self.assertRaisesRegex(ValueError, "signed version .* does not match latest.json version"):
+                    self.verify()
+
+    def test_signed_and_announced_version_accept_v_prefix(self):
+        self.edit_manifest("version", "v" + VERSION)
+        self.verify()
+        self.sign(version="v" + VERSION)
+        self.verify()
+
+    def test_invalid_announced_version(self):
+        for invalid in (None, "1.2", "01.2.3", "1.2.3-rc.01", "18446744073709551616.0.0"):
+            with self.subTest(invalid=invalid):
+                self.edit_manifest("version", invalid)
+                with self.assertRaisesRegex(ValueError, "latest.json version: expected a semantic version"):
+                    self.verify()
 
     def test_one_byte_installer_change(self):
         self.installer.write_bytes(b"Fake installer\x00\xff")

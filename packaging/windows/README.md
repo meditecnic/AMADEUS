@@ -209,8 +209,9 @@ py -3.11 packaging/windows/build_installer.py --work-dir 'X:/build-artifacts/ins
 实际传给 Tauri 的 JSON 配置、各阶段日志、冻结证据及安装包。
 `WORK_DIR/installer-result.json` 指向最新成功结果，记录各阶段耗时、工具及链接器路径、
 主程序导入表和链接器版本、安装包大小与 SHA-256。缓存和 Cargo 输出可在同一工作目录复用。
-构建器显式选择该 VS 2026 的 `link.exe`，并启用 `STATIC_VCRUNTIME`；最终仍以主程序
-实际 PE 导入表没有动态 VC 运行库导入为验收条件。实际编译阶段透传 `-- --locked`。
+构建器显式选择该 VS 2026 的 `link.exe`，由 Tauri 配置的 `build.windows.staticVCRuntime`
+启用静态 VC 运行库链接，并检查主程序的 PE 导入表是否含有动态 VC 运行库。
+实际编译阶段透传 `-- --locked`。
 
 两个构建脚本共用 `bundle_support.sanitized_build_environment`，只继承白名单中的
 Windows 系统/用户目录、PATH/PATHEXT、Cargo/Rustup 目录与工具链选择、标准代理和
