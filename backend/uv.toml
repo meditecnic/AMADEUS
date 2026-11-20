@@ -1,5 +1,7 @@
 # sherpa-onnx 1.13.8's sdist PKG-INFO omits this dependency. Match the
 # published wheel METADATA so universal compilation includes its core package.
+# Keep `version` and `requires-dist` in sync whenever upgrading sherpa-onnx
+# (verify whether the newer release's sdist still omits sherpa-onnx-core).
 [[dependency-metadata]]
 name = "sherpa-onnx"
 version = "1.13.8"
