@@ -557,3 +557,36 @@ async def test_move_waits_for_cancelled_requests_sqlite_thread(data_root, manage
             await asyncio.gather(move, return_exceptions=True)
         if relocation_state._thread_work:
             await asyncio.gather(*relocation_state._thread_work, return_exceptions=True)
+
+
+def test_nsis_installer_location_and_marker_payloads_roundtrip_startup_validation(tmp_path, monkeypatch):
+    from app.services.backups import BackupError
+
+    identity_dir = tmp_path / 'com.amadeus.desktop'
+    custom_dir = (tmp_path / '自定义 数据' / 'Amadeus Data').resolve()
+    identity_dir.mkdir(parents=True)
+    custom_dir.mkdir(parents=True)
+
+    marker_path = custom_dir / location.MARKER
+    marker_path.write_bytes(b'{"format":1}')
+
+    escaped = str(custom_dir).replace('\\', '\\\\').replace('"', '\\"')
+    location_path = identity_dir / 'data-location.json'
+    location_path.write_bytes(f'{{"path":"{escaped}"}}'.encode('utf-8'))
+
+    monkeypatch.setenv('AMADEUS_DATA_DIR', str(custom_dir))
+    monkeypatch.delenv('AMADEUS_DB_PATH', raising=False)
+    monkeypatch.setenv('AMADEUS_LOCATION_FILE', str(location_path))
+
+    record = location.read_location()
+    assert record == {'path': str(custom_dir)}
+    info = location.location()
+    assert info['source'] == 'file'
+    assert info['movable'] is True
+    location.validate_startup()
+
+    # Unescaped backslash payload is rejected cleanly
+    location_path.write_bytes(b'{"path":"D:\\unescaped\\ndata"}')
+    with pytest.raises(BackupError) as exc_info:
+        location.read_location()
+    assert exc_info.value.code == 'location_file_invalid'

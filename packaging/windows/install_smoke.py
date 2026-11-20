@@ -60,17 +60,28 @@ def is_external_url(value: str) -> bool:
         return True
 
 
-def check_clean(local: Path) -> Path:
+def check_clean(local: Path, custom_data: Path | None = None) -> Path:
     root = local / IDENTIFIER
     require(not root.exists(), f"Refusing existing user data: {root}; use a clean disposable runner")
+    if custom_data is not None:
+        require(custom_data.is_absolute(), f"--data-dir must be an absolute path: {custom_data}")
+        require(not custom_data.exists(), f"Refusing existing custom data directory: {custom_data}")
+        return custom_data
     return root / "data"
 
 
-def installed_backend_logs(data: Path) -> Path:
+def installer_command(installer: Path, custom_data: Path | None = None) -> list[str]:
+    if custom_data is None:
+        return [str(installer), "/S"]
+    require(custom_data.is_absolute(), f"--data-dir must be an absolute path: {custom_data}")
+    return [str(installer), "/S", f"/DATADIR={custom_data}"]
+
+
+def installed_backend_logs(data: Path, identity_root: Path | None = None) -> Path:
     desktop_logs = ("backend-stdout.log", "backend-stderr.log", "backend-startup.log")
     misplaced = [name for name in desktop_logs if (data / "logs" / name).exists()]
     require(not misplaced, f"Desktop logs found inside movable data: {', '.join(misplaced)}")
-    return data.parent / "logs"
+    return (identity_root or data.parent) / "logs"
 
 
 def save_backend_logs(logs: Path, evidence: Path) -> None:
@@ -369,15 +380,36 @@ def backend_pids() -> set[int]:
     return {pid for pid, (_, name) in process_snapshot().items() if name.lower() == "amadeus-backend.exe"}
 
 
-def exercise(installer: Path, root: Path, timeout: float, result: dict, provider_port: int) -> None:
-    data = check_clean(Path(os.environ["LOCALAPPDATA"]))
-    logs = installed_backend_logs(data)
+def exercise(
+    installer: Path,
+    root: Path,
+    timeout: float,
+    result: dict,
+    provider_port: int,
+    custom_data: Path | None = None,
+) -> None:
+    local_appdata = Path(os.environ["LOCALAPPDATA"])
+    identity_root = local_appdata / IDENTIFIER
+    data = check_clean(local_appdata, custom_data)
+    logs = installed_backend_logs(data, identity_root)
     print("INSTALL_STEP clean user-data root", flush=True)
     require(registration() is None and not backend_pids(), "Existing installation/backend; use a clean runner")
     env = sanitized_build_environment()  # Removes inherited AMADEUS_*, signing keys and provider credentials.
     env.update({"AMADEUS_CUSTOM_PROVIDER_BASE_URL": f"http://127.0.0.1:{provider_port}/v1",
                 "AMADEUS_CUSTOM_PROVIDER_MODEL": "frozen-smoke", "AMADEUS_CREDENTIAL_BACKEND": "memory"})
-    result["install"] = command_step([str(installer), "/S"], "install", root, env)
+    result["install"] = command_step(installer_command(installer, custom_data), "install", root, env)
+    if custom_data is not None:
+        location_json = identity_root / "data-location.json"
+        require(location_json.is_file(), "NSIS /DATADIR install did not write data-location.json")
+        require(not location_json.read_bytes().startswith(b"\xef\xbb\xbf"), "data-location.json must not have UTF-8 BOM")
+        require(json.loads(location_json.read_text(encoding="utf-8")).get("path") == str(custom_data),
+                "data-location.json path mismatch after /DATADIR install")
+        marker_json = custom_data / "amadeus-data.json"
+        require(marker_json.is_file() and json.loads(marker_json.read_text(encoding="utf-8")).get("format") == 1,
+                "Custom data directory missing valid amadeus-data.json marker")
+    else:
+        require(not (identity_root / "data-location.json").exists(),
+                "Default silent install should not write redundant data-location.json")
     entry = registration()
     require(entry is not None, "HKCU uninstall registration missing after install")
     install = Path(entry["location"])
@@ -465,10 +497,10 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
                 raise
             cdp.screenshot(root / "online.png")
             print("INSTALL_STEP real login and keyless local provider reached ONLINE", flush=True)
-            require(data.is_dir(), "Default LOCALAPPDATA data directory was not created")
+            require(data.is_dir(), "Configured data directory was not created")
             backends = backend_pids()
             require(len(backends) == 1 and backends <= tracked, "Expected one installed backend child")
-            installed_backend_logs(data)
+            installed_backend_logs(data, identity_root)
             stdout = (logs / "backend-stdout.log").read_text(encoding="utf-8")
             ready = [json.loads(line.split(" ", 1)[1]) for line in stdout.splitlines()
                      if line.startswith("AMADEUS_BACKEND_READY ")]
@@ -566,7 +598,7 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             subprocess.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
         save_backend_logs(logs, root)
-    installed_backend_logs(data)
+    installed_backend_logs(data, identity_root)
     result["desktop_logs_outside_data"] = True
     retained = {p.relative_to(data).as_posix(): digest(p) for p in data.rglob("*") if p.is_file()}
     require(retained, "Default data directory was empty before uninstall")
@@ -588,9 +620,12 @@ def arguments(argv=None):
     parser.add_argument("--installer", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--startup-timeout", type=float, default=120)
+    parser.add_argument("--data-dir", type=Path, default=None, help="Optional custom data directory for /DATADIR=...")
     args = parser.parse_args(argv)
     if not 0 < args.startup_timeout <= 300:
         parser.error("--startup-timeout must be greater than 0 and at most 300 seconds")
+    if args.data_dir is not None and not args.data_dir.is_absolute():
+        parser.error("--data-dir must be an absolute path")
     return args
 
 
@@ -602,7 +637,10 @@ def main(argv=None) -> int:
     try:
         require(os.name == "nt", "install smoke requires an elevated, interactive Windows runner")
         with fake_service(root / "tts-probe.json", 9880, sentinel=True), fake_service(root / "provider.json") as (port, requests):
-            exercise(args.installer.resolve(strict=True), root, args.startup_timeout, result, port)
+            if args.data_dir is not None:
+                exercise(args.installer.resolve(strict=True), root, args.startup_timeout, result, port, args.data_dir)
+            else:
+                exercise(args.installer.resolve(strict=True), root, args.startup_timeout, result, port)
             require(not any(row["method"] == "POST" for row in requests), "Unexpected model POST request")
             result["model_requests"] = 0
         result["ok"] = True

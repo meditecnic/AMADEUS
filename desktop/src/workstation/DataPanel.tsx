@@ -10,7 +10,7 @@ import {
   type AuthState, type Backup, type DataLocation, type DataLocationCheckResult, type DataLocationIssue,
   type DiskCategory, type DiskUsage, type ExportRequest,
 } from './dataApi';
-import { inShell, pickPath, restartApp, revealInFolder, saveBlob } from './shell';
+import { inShell, pickPath, restartApp, revealInFolder, saveBlob, saveFile } from './shell';
 
 /*
  * 05 数据: the startup passcode, backups (make one, restore to one, delete one), export, and where the data lives with
@@ -514,16 +514,31 @@ function ExportGroup({ relocated, onRelocating }: { relocated: boolean; onReloca
   const [worldline, setWorldline] = useState<Worldlines>('all');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const clearStatus = () => {
+    setNote(null);
+    setSavedPath(null);
+    setRevealError(null);
+  };
 
   const run = async () => {
     if (busy || relocated) return;
     setBusy(true);
-    setNote(null);
+    clearStatus();
     try {
       const request: ExportRequest = kind === 'memory' ? { kind, format: 'json', worldline } : { kind, format, worldline };
       const { blob, filename } = await exportArchive(request);
-      saveBlob(blob, filename);
-      setNote({ text: `已导出 ${filename}` });
+      if (inShell) {
+        const path = await saveFile(blob, filename);
+        if (!path) return;
+        setSavedPath(path);
+        setNote({ text: `已导出 ${filename}` });
+      } else {
+        saveBlob(blob, filename);
+        setNote({ text: `已导出 ${filename}` });
+      }
     } catch (failure) {
       if (isDataRelocatingFailure(failure)) onRelocating();
       setNote({ text: errorText(failure, '没有导出来。'), bad: true });
@@ -537,22 +552,49 @@ function ExportGroup({ relocated, onRelocating }: { relocated: boolean; onReloca
       <div className="ws2-m-group" id="ws2-data-export">导出</div>
       <div className="ws2-m-row is-choice">
         <div className="ws2-m-label"><b>内容</b></div>
-        <Choice label="导出内容" value={kind} onChange={(value) => { setKind(value); setNote(null); }} options={[
+        <Choice label="导出内容" value={kind} onChange={(value) => { setKind(value); clearStatus(); }} options={[
           { value: 'conversations', label: '对话' }, { value: 'memory', label: '记忆' },
         ]} />
       </div>
       <div className="ws2-m-row is-choice">
         <div className="ws2-m-label"><b>格式</b>{kind === 'memory' ? <small>记忆只导出 JSON</small> : null}</div>
-        <Choice label="导出格式" value={kind === 'memory' ? 'json' : format} onChange={setFormat} options={[
+        <Choice label="导出格式" value={kind === 'memory' ? 'json' : format} onChange={(value) => { setFormat(value); clearStatus(); }} options={[
           { value: 'md', label: 'Markdown', disabled: kind === 'memory' }, { value: 'json', label: 'JSON' },
         ]} />
       </div>
       <div className="ws2-m-row is-choice">
         <div className="ws2-m-label"><b>世界线</b></div>
-        <Choice label="导出哪条世界线" value={worldline} onChange={setWorldline} options={[
+        <Choice label="导出哪条世界线" value={worldline} onChange={(value) => { setWorldline(value); clearStatus(); }} options={[
           { value: 'all', label: '两条都要' }, { value: 'sg', label: 'SG 线' }, { value: 'beta', label: 'β 线' },
         ]} />
       </div>
+      {savedPath && !relocated ? (
+        <div className="ws2-m-row ws2-m-path" data-testid="export-saved-path">
+          <div className="ws2-m-label">
+            <b><span className="ws2-path">{savedPath}</span></b>
+            <small className={revealError ? 'is-bad' : 'is-done'} role={revealError ? 'alert' : undefined}>
+              {revealError ?? '已保存到此位置'}
+            </small>
+          </div>
+          {inShell ? (
+            <span className="ws2-m-acts">
+              <button
+                type="button"
+                className="ws2-m-btn"
+                onClick={() => {
+                  setRevealError(null);
+                  revealInFolder(savedPath).then(
+                    (shown) => { if (shown === false) setRevealError('没能打开这个文件夹。'); },
+                    () => setRevealError('没能打开这个文件夹。'),
+                  );
+                }}
+              >
+                在文件夹中显示
+              </button>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="ws2-m-foot">
         {note ? <p className={`ws2-m-note ${note.bad ? 'is-bad' : 'is-done'}`} role="status">{note.text}</p>
           : relocated ? <p className="ws2-m-note is-bad" role="status">数据已迁移，重启 AMADEUS 后才能导出。</p>
