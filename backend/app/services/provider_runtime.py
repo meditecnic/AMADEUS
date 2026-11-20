@@ -9,7 +9,7 @@ import uuid
 from urllib.parse import urlsplit, urlunsplit
 
 from app.services.deepseek import DeepSeekService
-from app.services.model_catalog import is_user_custom_provider, model_catalog
+from app.services.model_catalog import is_user_custom_provider, model_catalog, supports_custom_reasoning
 from app.services.provider_adapters import (
     GeminiAdapter,
     OpenAICompatibleAdapter,
@@ -18,6 +18,7 @@ from app.services.provider_adapters import (
 from app.services.provider_registry import (
     ProviderCapabilities,
     ProviderDefinition,
+    ProviderModelCache,
     ProviderRegistry,
     ProviderTask,
 )
@@ -25,6 +26,7 @@ from app.services.provider_registry import (
 
 deepseek_service = DeepSeekService()
 provider_registry = ProviderRegistry(model_catalog=model_catalog)
+provider_model_cache = ProviderModelCache()
 provider_registry.register(
     ProviderDefinition(
         id="deepseek",
@@ -82,13 +84,12 @@ def _compatible_capabilities(*, reasoning: bool = False) -> ProviderCapabilities
 
 
 def normalize_custom_base_url(value: str) -> str:
-    raw = value.strip().rstrip("/")
-    parsed = urlsplit(raw)
+    parsed = urlsplit(value.strip().rstrip("/"))
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
-        or parsed.username
-        or parsed.password
+        or parsed.username is not None
+        or parsed.password is not None
         or parsed.query
         or parsed.fragment
     ):
@@ -96,8 +97,8 @@ def normalize_custom_base_url(value: str) -> str:
     path = parsed.path.rstrip("/")
     suffix = "/chat/completions"
     if path.lower().endswith(suffix):
-        path = path[:-len(suffix)]
-    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+        path = path[:-len(suffix)].rstrip("/")
+    return urlunsplit((parsed.scheme, parsed.netloc.lower(), path, "", ""))
 
 
 def normalize_custom_display_name(value: str) -> str:
@@ -130,7 +131,7 @@ def _register_compatible(
     default_model: str,
     base_url_configurable: bool = False,
     credential_required: bool = True,
-    thinking_request_mode: str | None = None,
+    reasoning: bool = False,
 ) -> None:
     adapter = OpenAICompatibleAdapter(
         provider_id=provider_id,
@@ -138,41 +139,18 @@ def _register_compatible(
         default_model=default_model,
         message_builder=deepseek_service.build_persona_messages,
         credential_required=credential_required,
-        thinking_request_mode=thinking_request_mode,
     )
     provider_registry.register(
         ProviderDefinition(
             id=provider_id,
             display_name=display_name,
             default_model=default_model,
-            capabilities=_compatible_capabilities(
-                reasoning=thinking_request_mode is not None
-            ),
+            capabilities=_compatible_capabilities(reasoning=reasoning),
             base_url_configurable=base_url_configurable,
             credential_required=credential_required,
         ),
         adapter,
     )
-
-
-_register_compatible(
-    provider_id="glm",
-    display_name="GLM",
-    base_url="https://open.bigmodel.cn/api/paas/v4",
-    default_model="glm-5.2",
-    thinking_request_mode="reasoning_effort",
-)
-_register_compatible(
-    provider_id="custom",
-    display_name="OpenAI-compatible",
-    base_url=normalize_custom_base_url(os.getenv(
-        "AMADEUS_CUSTOM_PROVIDER_BASE_URL",
-        "http://127.0.0.1:1234/v1",
-    )),
-    default_model=os.getenv("AMADEUS_CUSTOM_PROVIDER_MODEL", "local-model"),
-    base_url_configurable=True,
-    credential_required=False,
-)
 
 
 def custom_provider_settings(provider_id: str = "custom") -> dict[str, str]:
@@ -243,12 +221,16 @@ def configure_custom_provider(
         id=settings["provider_id"],
         display_name=settings["display_name"],
         default_model=settings["default_model"],
-        capabilities=_compatible_capabilities(),
+        capabilities=_compatible_capabilities(reasoning=supports_custom_reasoning(adapter.base_url)),
         base_url_configurable=True,
         credential_required=False,
     )
     if any(item.id == settings["provider_id"] for item in provider_registry.list_definitions()):
+        previous = provider_registry.snapshot(definition.id, allow_unavailable=True)
         provider_registry.replace(definition, adapter)
+        if previous.adapter.base_url != adapter.base_url:
+            provider_model_cache.clear(definition.id)
+            model_catalog.clear_discovery(definition.id)
     else:
         provider_registry.upsert(definition, adapter)
     return settings
@@ -287,7 +269,8 @@ async def restore_custom_provider_configuration() -> None:
             for definition in provider_registry.list_definitions():
                 if definition.id == provider_id:
                     adapter = provider_registry.snapshot(provider_id, allow_unavailable=True).adapter
-                    provider_registry.replace(replace(definition, default_model=str(row["default_model"])), adapter)
+                    model = model_catalog.request_id(provider_id, str(row["default_model"]))
+                    provider_registry.replace(replace(definition, default_model=model), adapter)
                     break
             continue
         if provider_id == "custom":
@@ -308,11 +291,23 @@ async def restore_custom_provider_configuration() -> None:
             is_user_custom_provider(definition.id)
             and definition.id not in enabled_ids
         ):
-            provider_registry.unregister(definition.id)
+            unregister_custom_provider(definition.id)
+            provider_model_cache.clear(definition.id)
+            model_catalog.clear_discovery(definition.id)
 
     # Compatibility: only when no persisted `custom` row exists at all.
     if not has_custom_row:
         ensure_default_custom_singleton()
+
+
+_register_compatible(
+    provider_id="glm",
+    display_name="GLM",
+    base_url="https://open.bigmodel.cn/api/paas/v4",
+    default_model="glm-5.2",
+    reasoning=True,
+)
+ensure_default_custom_singleton()
 
 
 openai_adapter = OpenAIResponsesAdapter(
@@ -363,7 +358,7 @@ provider_registry.register(
                 }
             ),
             parameters=frozenset(
-                {"temperature", "tools", "tool_choice", "reasoning_effort"}
+                {"tools", "tool_choice", "reasoning_effort"}
             ),
             structured_output=True,
             tools=True,

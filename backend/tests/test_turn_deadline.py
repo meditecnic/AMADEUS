@@ -75,6 +75,30 @@ def test_normal_turn_frames_match_main(app_client, fake_providers):
 
 
 @pytest.mark.timeout(5)
+@pytest.mark.parametrize(("effort", "uses_tools"), [("disabled", True), ("high", False)])
+def test_deepseek_off_uses_normal_tool_route(app_client, fake_providers, monkeypatch, effort, uses_tools):
+    calls = []
+
+    async def capture(**kwargs):
+        calls.append(kwargs)
+        async for chunk in fast_reply(**kwargs):
+            yield chunk
+
+    monkeypatch.setattr(chat_ws.config, "PI_AGENT_ENABLED", False)
+    monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: False)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(capture))
+    with app_client.websocket_connect(f"/ws/chat?session_id={uuid4()}") as ws:
+        authenticate(ws)
+        ws.send_json({"type": "config_update", "reasoning_effort": effort})
+        assert ws.receive_json() == {"type": "config_applied", "reasoning_effort": effort}
+        ws.send_json({"type": "chat", "content": "おはよう"})
+        assert receive_turn(ws)[-1]["type"] == "turn.completed"
+
+    assert calls[0]["reasoning_effort"] == effort
+    assert (calls[0]["tools"] is not None) is uses_tools
+
+
+@pytest.mark.timeout(5)
 @pytest.mark.parametrize("partial", [False, True])
 def test_deadline_cancels_stream_preserves_text_and_allows_next_chat(
     app_client, fake_providers, monkeypatch, partial,

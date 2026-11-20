@@ -41,7 +41,7 @@ def test_ids_only_discovery_keeps_official_capabilities_and_separate_pro_pricing
         assert by_id["deepseek-flash"]["context_window"] == 1_048_576
         assert by_id["deepseek-flash"]["max_output_tokens"] == 393_216
         assert by_id["deepseek-flash"]["thinking_control"]["request_mode"] == (
-            "reasoning_effort"
+            "thinking_and_effort"
         )
         assert by_id["deepseek-v4-flash"]["lifecycle"] == "unavailable"
         assert by_id["deepseek-v4-flash"]["callable"] is False

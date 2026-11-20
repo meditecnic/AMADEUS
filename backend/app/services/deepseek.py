@@ -8,7 +8,12 @@ from app.services.model_catalog import model_catalog
 from app.services.model_usage import usage_call
 from app.services.model_headers import model_headers
 from app.services.persona_bible import persona_bible
-from app.services.provider_adapters import ProviderRequestError, iter_provider_lines, model_http_client
+from app.services.provider_adapters import (
+    ProviderRequestError,
+    apply_thinking_and_effort,
+    iter_provider_lines,
+    model_http_client,
+)
 
 
 class DeepSeekTranslationError(RuntimeError):
@@ -41,29 +46,24 @@ def build_chat_payload(
         "model": model,
         "messages": messages,
         "stream": True,
-        "temperature": temperature if temperature is not None else 0.7,
+        "temperature": temperature if temperature is not None else 0.75,
     }
     if max_output_tokens is not None:
         payload["max_tokens"] = max_output_tokens
 
-    uses_thinking = model_catalog.uses_native_reasoning("deepseek", model)
+    effort = model_catalog.normalize_control("deepseek", model, reasoning_effort)
     has_tools = tools is not None
     forced_tool_choice = (
         has_tools
         and tool_choice is not None
         and tool_choice != "auto"
     )
-    if uses_thinking:
-        # Tool-free requests can use native thinking without replaying reasoning.
-        payload["thinking"] = {
-            "type": "disabled" if has_tools else "enabled"
-        }
-        if reasoning_effort and not has_tools:
-            payload["reasoning_effort"] = reasoning_effort
+    if effort is not None:
+        apply_thinking_and_effort(payload, "disabled" if has_tools else effort)
 
     if has_tools:
         payload["tools"] = tools
-        if tool_choice is not None and (not uses_thinking or forced_tool_choice):
+        if tool_choice is not None and (effort is None or forced_tool_choice):
             payload["tool_choice"] = tool_choice
 
     return payload
@@ -143,7 +143,7 @@ class DeepSeekService(LLMInterface):
         memory_summary: Optional[str] = None,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: float = 0.75,
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
@@ -271,8 +271,8 @@ class DeepSeekService(LLMInterface):
             ],
             "temperature": 0.3
         }
-        if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
-            payload["thinking"] = {"type": "disabled"}
+        if model_catalog.control_for("deepseek", payload["model"]) is not None:
+            apply_thinking_and_effort(payload, "disabled")
         
         async with usage_call("deepseek", model or self.model) as usage, model_http_client(
             self, httpx.AsyncClient, timeout=20.0,
@@ -323,8 +323,8 @@ class DeepSeekService(LLMInterface):
             "messages": messages,
             "temperature": 0.3
         }
-        if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
-            payload["thinking"] = {"type": "disabled"}
+        if model_catalog.control_for("deepseek", payload["model"]) is not None:
+            apply_thinking_and_effort(payload, "disabled")
         
         async with usage_call("deepseek", model or self.model) as usage, model_http_client(
             self, httpx.AsyncClient, timeout=15.0,
@@ -366,10 +366,12 @@ class DeepSeekService(LLMInterface):
             "temperature": temperature,
             "response_format": {"type": "json_object"},
         }
-        if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
-            payload["thinking"] = {"type": "enabled" if reasoning_effort else "disabled"}
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
+        if reasoning_effort is None:
+            effort = "disabled" if model_catalog.control_for("deepseek", payload["model"]) else None
+        else:
+            effort = model_catalog.normalize_control("deepseek", payload["model"], reasoning_effort)
+        if effort is not None:
+            apply_thinking_and_effort(payload, effort)
         headers = {
             **model_headers(),
             "Authorization": f"Bearer {effective_api_key}",

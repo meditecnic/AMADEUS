@@ -18,14 +18,15 @@ const flashModel: ModelCatalogEntry = {
     kind: 'effort',
     label: '推理强度',
     native: true,
-    default: 'high',
-    request_mode: 'reasoning_effort',
+    default: 'low',
+    request_mode: 'thinking_and_effort',
     options: [
+      { value: 'disabled', label: 'OFF' },
       { value: 'low', label: 'LOW' },
       { value: 'high', label: 'HIGH' },
       { value: 'max', label: 'MAX' },
     ],
-    aliases: { medium: 'high', xhigh: 'max' },
+    aliases: { none: 'disabled', minimal: 'low', medium: 'high', xhigh: 'high', ultra: 'max' },
   },
 };
 
@@ -42,7 +43,7 @@ const openAiModel: ModelCatalogEntry = {
     default: 'medium',
     request_mode: 'reasoning_effort',
     options: [
-      { value: 'none', label: 'NONE' },
+      { value: 'none', label: 'OFF' },
       { value: 'low', label: 'LOW' },
       { value: 'medium', label: 'MEDIUM' },
       { value: 'high', label: 'HIGH' },
@@ -277,9 +278,45 @@ describe('ProviderControls', () => {
       'max',
     );
     expect(resolveThinkingValue(flashModel.thinking_control, 'xhigh', 'high')).toBe(
-      'max',
+      'high',
     );
+    expect(resolveThinkingValue(flashModel.thinking_control, 'none', 'high')).toBe('disabled');
     expect(resolveThinkingValue(null, 'high', 'high')).toBeNull();
+  });
+
+  it('hides a cached control when its custom connection changes address', () => {
+    const cachedModel: ModelCatalogEntry = {
+      ...openAiModel,
+      source: 'dynamic',
+      thinking_base_url: 'https://api.openai.com/v1',
+    };
+    const profile: ProviderMetadata = {
+      ...providers[2],
+      id: 'custom:fixture',
+      base_url: cachedModel.thinking_base_url,
+      default_model: cachedModel.id,
+      default_model_capability: cachedModel,
+    };
+    const controls = (provider: ProviderMetadata) => (
+      <ProviderControls
+        providers={[provider]}
+        activeProviderId={provider.id}
+        activeModelId={cachedModel.id}
+        models={[cachedModel]}
+        disabled={false}
+        loadingModels={false}
+        thinkingValue="medium"
+        onProviderChange={vi.fn()}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+        onRefreshModels={vi.fn()}
+        onConfigureCredential={vi.fn()}
+      />
+    );
+    const { rerender } = render(controls(profile));
+    expect(screen.getByRole('button', { name: '推理强度' })).toBeInTheDocument();
+    rerender(controls({ ...profile, base_url: 'https://api.x.ai/v1' }));
+    expect(screen.queryByRole('button', { name: '推理强度' })).not.toBeInTheDocument();
   });
 
   it('marks disabled custom providers as non-selectable unavailable options', () => {

@@ -224,16 +224,20 @@ def test_tool_results_do_not_fabricate_reasoning_dependent_messages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "kwargs", "expected_thinking"),
+    ("method", "kwargs", "expected_effort"),
     [
-        ("translate_to_zh", {}, "disabled"),
-        ("compress_history", {}, "disabled"),
-        ("complete_json", {}, "disabled"),
-        ("complete_json", {"reasoning_effort": "low"}, "enabled"),
+        ("translate_to_zh", {}, None),
+        ("compress_history", {}, None),
+        ("complete_json", {}, None),
+        ("complete_json", {"reasoning_effort": None}, None),
+        ("complete_json", {"reasoning_effort": "none"}, None),
+        ("complete_json", {"reasoning_effort": "low"}, "low"),
+        ("complete_json", {"reasoning_effort": "xhigh"}, "high"),
+        ("complete_json", {"reasoning_effort": "ultra"}, "max"),
     ],
 )
 async def test_auxiliary_requests_control_deepseek_thinking(
-    monkeypatch, method, kwargs, expected_thinking
+    monkeypatch, method, kwargs, expected_effort
 ):
     requests = []
 
@@ -256,8 +260,11 @@ async def test_auxiliary_requests_control_deepseek_thinking(
     )
 
     (payload,) = requests
-    assert payload["thinking"] == {"type": expected_thinking}
-    if expected_thinking == "enabled":
-        assert payload["reasoning_effort"] == "low"
+    if expected_effort is not None:
+        assert payload["thinking"] == {"type": "enabled"}
+        assert payload["reasoning_effort"] == expected_effort
+        assert "temperature" not in payload
     else:
+        assert payload["thinking"] == {"type": "disabled"}
         assert "reasoning_effort" not in payload
+        assert payload["temperature"] == (0.1 if method == "complete_json" else 0.3)

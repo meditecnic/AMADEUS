@@ -18,11 +18,11 @@ export interface ModelThinkingOption {
 }
 
 export interface ModelThinkingControl {
-  kind: 'effort' | 'level' | 'prompt_depth' | string;
+  kind: 'effort' | 'level';
   label: string;
   native: boolean;
   default: string;
-  request_mode: 'prompt_depth' | 'reasoning_effort' | 'gemini_thinking_level' | string;
+  request_mode: 'thinking_and_effort' | 'openai_reasoning_effort' | 'reasoning_effort' | 'gemini_thinking_level';
   options: ModelThinkingOption[];
   aliases?: Record<string, string>;
 }
@@ -50,6 +50,7 @@ export interface ModelCatalogEntry {
   persona_certification?: string;
   evidence?: string[];
   thinking_control: ModelThinkingControl | null;
+  thinking_base_url?: string;
   disclosed_version?: string | null;
   compatibility_of?: string | null;
   compatibility_scope?: string | null;
@@ -236,7 +237,10 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const modelOptions = mergeModels(activeModelId, activeProvider, models);
   const activeModel = modelOptions.find((row) => row.id === activeModelId);
-  const thinkingControl = activeModel?.thinking_control ?? null;
+  const thinkingControl = activeModel?.thinking_base_url
+    && activeModel.thinking_base_url !== activeProvider?.base_url
+    ? null
+    : activeModel?.thinking_control ?? null;
   const selectedThinking = resolveThinkingValue(
     thinkingControl,
     thinkingValue,

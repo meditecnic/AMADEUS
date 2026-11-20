@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 from datetime import date
@@ -23,12 +23,25 @@ _LIFECYCLES = {
 }
 _BLOCKED_LIFECYCLES = {"retired", "unavailable"}
 _REQUEST_MODES = {
-    "prompt_depth",
+    "thinking_and_effort",
+    "openai_reasoning_effort",
     "reasoning_effort",
     "gemini_thinking_level",
 }
 _COMPATIBILITY_SCOPES = {"official_direct"}
 _LIVE_DISPLAY_KEYS = ("name", "display_name")
+_CUSTOM_ENDPOINTS = {
+    "https://api.moonshot.cn/v1": "moonshot",
+    "https://api.moonshot.ai/v1": "moonshot",
+    "https://api.kimi.com/coding/v1": "moonshot",
+    "https://api.kimi.ai/coding/v1": "moonshot",
+    "https://api.z.ai/api/paas/v4": "glm",
+    "https://open.bigmodel.cn/api/paas/v4": "glm",
+    "https://api.x.ai/v1": "xai",
+    "https://api.openai.com/v1": "openai",
+    "https://api.deepseek.com": "deepseek",
+    "https://api.deepseek.com/v1": "deepseek",
+}
 
 
 class ModelUnavailableError(ValueError):
@@ -40,6 +53,10 @@ def is_user_custom_provider(provider_id: str) -> bool:
     return provider_id == "custom" or provider_id.startswith("custom:")
 
 
+def supports_custom_reasoning(base_url: str) -> bool:
+    return base_url in _CUSTOM_ENDPOINTS
+
+
 @dataclass(frozen=True, slots=True)
 class ModelControl:
     kind: str
@@ -49,10 +66,18 @@ class ModelControl:
     request_mode: str
     options: tuple[tuple[str, str], ...]
     aliases: tuple[tuple[str, str], ...]
+    disable_with_tools: bool = False
 
     @property
     def values(self) -> frozenset[str]:
         return frozenset(value for value, _label in self.options)
+
+    def normalize(self, raw: Any) -> str:
+        if isinstance(raw, str):
+            if raw in self.values:
+                return raw
+            return dict(self.aliases).get(raw, self.default)
+        return self.default
 
     def public(self) -> dict[str, Any]:
         return {
@@ -67,6 +92,32 @@ class ModelControl:
             ],
             "aliases": dict(self.aliases),
         }
+
+
+def _required_effort(
+    mode: str, values: tuple[str, ...], default: str, **aliases: str
+) -> ModelControl:
+    return ModelControl(
+        kind="effort",
+        label="推理强度",
+        native=True,
+        default=default,
+        request_mode=mode,
+        options=tuple((value, value.upper()) for value in values),
+        aliases=tuple((dict.fromkeys(("none", "minimal", "disabled"), "low") | aliases).items()),
+    )
+
+
+_KIMI_CONTROL = _required_effort(
+    "openai_reasoning_effort", ("low", "high", "max"), "max", medium="high", xhigh="max",
+)
+_GLM_53_CONTROL = replace(_KIMI_CONTROL, request_mode="thinking_and_effort")
+_GROK_CONTROL = _required_effort(
+    "openai_reasoning_effort", ("low", "medium", "high", "xhigh"), "high", max="xhigh",
+)
+_GPT_62_CONTROL = _required_effort(
+    "openai_reasoning_effort", ("low", "medium", "high", "xhigh", "max"), "medium",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,7 +450,7 @@ class ModelCatalog:
 
     def _effective_lifecycle(self, model: CatalogModel) -> str:
         discovered = self._discovered.get(model.provider_id)
-        if discovered is not None and model.id not in discovered:
+        if discovered is not None and self.request_id(model.provider_id, model.id) not in discovered:
             return "unavailable"
         return model.lifecycle
 
@@ -439,7 +490,7 @@ class ModelCatalog:
     ) -> dict[str, Any]:
         return {
             "id": model_id,
-            "request_id": model_id,
+            "request_id": self.request_id(provider_id, model_id),
             "display_name": display_name,
             "display_source": display_source,
             "lifecycle": lifecycle,
@@ -460,6 +511,7 @@ class ModelCatalog:
     def _public_known(self, model: CatalogModel) -> dict[str, Any]:
         lifecycle = self._effective_lifecycle(model)
         live = self._live_metadata(model.provider_id, model.id)
+        control = self.control_for(model.provider_id, model.id)
         return dict(self._public_row(
             provider_id=model.provider_id,
             model_id=model.id,
@@ -480,11 +532,7 @@ class ModelCatalog:
             persona_certification=model.persona_certification,
             evidence=list(model.evidence),
             live=live,
-            thinking_control=(
-                model.thinking_control.public()
-                if model.thinking_control is not None
-                else None
-            ),
+            thinking_control=control.public() if control is not None else None,
             disclosed_version=model.disclosed_version,
             compatibility_of=model.compatibility_of,
             compatibility_scope=model.compatibility_scope,
@@ -498,11 +546,13 @@ class ModelCatalog:
         *,
         available: bool = True,
         live_metadata: dict[str, Any] | None = None,
+        base_url: str | None = None,
     ) -> dict[str, Any]:
         live = dict(live_metadata or {})
         lifecycle = "unverified" if available else "unavailable"
         live_name = self._live_display_name(live, model_id)
-        return self._public_row(
+        control = self.control_for(provider_id, model_id, base_url)
+        row = self._public_row(
             provider_id=provider_id,
             model_id=model_id,
             display_name=live_name or model_id,
@@ -516,10 +566,15 @@ class ModelCatalog:
             persona_certification="not_evaluated",
             evidence=[],
             live=live,
-            thinking_control=None,
+            thinking_control=control.public() if control is not None else None,
         )
+        if control is not None:
+            row["thinking_base_url"] = base_url
+        return row
 
-    def public_model(self, provider_id: str, model_id: str) -> dict[str, Any]:
+    def public_model(
+        self, provider_id: str, model_id: str, *, base_url: str | None = None
+    ) -> dict[str, Any]:
         known = self._models.get((provider_id, model_id))
         if known is not None:
             return self._public_known(known)
@@ -533,9 +588,12 @@ class ModelCatalog:
                 else self._allows_undiscovered(provider_id)
             ),
             live_metadata=self._live_metadata(provider_id, model_id),
+            base_url=base_url,
         )
 
-    def list_provider(self, provider_id: str) -> list[dict[str, Any]]:
+    def list_provider(
+        self, provider_id: str, *, base_url: str | None = None
+    ) -> list[dict[str, Any]]:
         rows = [
             self._public_known(self._models[(provider_id, model_id)])
             for model_id in self._providers.get(provider_id, ())
@@ -547,6 +605,7 @@ class ModelCatalog:
                 provider_id,
                 model_id,
                 live_metadata=self._live_metadata(provider_id, model_id),
+                base_url=base_url,
             )
             for model_id in sorted(discovered - known_ids)
         )
@@ -557,6 +616,8 @@ class ModelCatalog:
         provider_id: str,
         discovered_models: Iterable[str],
         discovered_metadata: Iterable[dict[str, Any]] = (),
+        *,
+        base_url: str | None = None,
     ) -> list[dict[str, Any]]:
         discovered = frozenset(
             model_id.strip()
@@ -572,7 +633,7 @@ class ModelCatalog:
             if model_id and model_id in discovered:
                 metadata[model_id] = dict(raw)
         self._discovered_metadata[provider_id] = metadata
-        return self.list_provider(provider_id)
+        return self.list_provider(provider_id, base_url=base_url)
 
     def pricing_for(self, provider_id: str, model_id: str) -> dict | None:
         model = self._models.get((provider_id, model_id))
@@ -588,34 +649,63 @@ class ModelCatalog:
                 return model_id
         return None
 
-    def uses_native_reasoning(self, provider_id: str, model_id: str) -> bool:
-        control = self.control_for(provider_id, model_id)
+    def request_id(self, provider_id: str, model_id: str) -> str:
+        model = self._models.get((provider_id, model_id))
+        if provider_id == "gemini" and model is not None and model.compatibility_of:
+            return model.compatibility_of
+        return model_id
+
+    def uses_native_reasoning(
+        self, provider_id: str, model_id: str, base_url: str | None = None
+    ) -> bool:
+        control = self.control_for(provider_id, model_id, base_url)
         return (
             control is not None
             and control.native
-            and control.request_mode == "reasoning_effort"
+            and control.request_mode != "gemini_thinking_level"
         )
 
-    def control_for(self, provider_id: str, model_id: str) -> ModelControl | None:
+    def control_for(
+        self, provider_id: str, model_id: str, base_url: str | None = None
+    ) -> ModelControl | None:
+        if is_user_custom_provider(provider_id):
+            return self._custom_control(base_url, model_id)
+        model_id = self.request_id(provider_id, model_id)
         model = self._models.get((provider_id, model_id))
         return model.thinking_control if model is not None else None
+
+    def _custom_control(self, base_url: str | None, model_id: str) -> ModelControl | None:
+        family = _CUSTOM_ENDPOINTS.get(base_url) if base_url is not None else None
+        if family == "moonshot" and model_id.startswith("kimi-k3.1"):
+            return _KIMI_CONTROL
+        if family == "glm":
+            if model_id.startswith("glm-5.3"):
+                return _GLM_53_CONTROL
+            return self.control_for("glm", model_id)
+        if family == "xai" and model_id.startswith("grok-4.7"):
+            return _GROK_CONTROL
+        if family == "openai":
+            if model_id.startswith("gpt-6.2-"):
+                return _GPT_62_CONTROL
+            if model_id in {"gpt-5.6-luna", "gpt-6-luna"}:
+                control = self.control_for("openai", "gpt-5.6-luna")
+                if control is not None:
+                    return replace(control, request_mode="openai_reasoning_effort")
+        if family == "deepseek":
+            control = self.control_for("deepseek", model_id)
+            if control is not None:
+                return replace(control, disable_with_tools=True)
+        return None
 
     def normalize_control(
         self,
         provider_id: str,
         model_id: str,
         raw: Any,
+        base_url: str | None = None,
     ) -> str | None:
-        control = self.control_for(provider_id, model_id)
-        if control is None:
-            return None
-        if isinstance(raw, str) and raw in control.values:
-            return raw
-        if isinstance(raw, str):
-            alias_target = dict(control.aliases).get(raw)
-            if alias_target is not None:
-                return alias_target
-        return control.default
+        control = self.control_for(provider_id, model_id, base_url)
+        return control.normalize(raw) if control is not None else None
 
     def ensure_callable(self, provider_id: str, model_id: str) -> None:
         model = self._models.get((provider_id, model_id))

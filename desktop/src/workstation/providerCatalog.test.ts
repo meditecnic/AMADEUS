@@ -42,8 +42,10 @@ describe('provider catalog', () => {
 
   it('keeps chat models and suggests the preferred one', () => {
     expect(chatModels(['gpt-5.1', 'text-embedding-3-large', 'whisper-1', 'tts-1'])).toEqual(['gpt-5.1']);
-    const moonshot = CATALOG.find((entry) => entry.id === 'moonshot');
-    expect(suggestModel(moonshot, ['moonshot-v1-8k', 'kimi-k2-turbo-preview'])).toBe('kimi-k2-turbo-preview');
+    const moonshot = catalogEntry('moonshot');
+    expect(suggestModel(moonshot, ['kimi-k2-turbo-preview', 'kimi-k3', 'kimi-k3.1-pro'])).toBe('kimi-k3.1-pro');
+    expect(suggestModel(moonshot, ['kimi-k2-turbo-preview', 'kimi-k3'])).toBe('kimi-k3');
+    expect(suggestModel(catalogEntry('deepseek'), ['deepseek-chat', 'deepseek-flash'])).toBe('deepseek-flash');
     expect(suggestModel(undefined, ['b', 'a'])).toBe('b');
   });
 

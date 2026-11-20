@@ -78,7 +78,7 @@ export const CATALOG: CatalogEntry[] = [
 
   // China
   { id: 'deepseek', builtin: 'deepseek', name: 'DeepSeek', blurb: '深度求索。中文好，价格低，国内直连。', group: 'cn', popular: true,
-    keyUrl: 'https://platform.deepseek.com/api_keys', prefer: ['deepseek-chat'], aliases: '深度求索' },
+    keyUrl: 'https://platform.deepseek.com/api_keys', prefer: ['deepseek-flash'], aliases: '深度求索' },
   { id: 'dashscope', name: '通义千问（阿里云百炼）', blurb: '阿里云百炼平台的 Qwen 系列，按量付费。', group: 'cn', popular: true,
     regions: [{ label: '国内', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }, { label: '国际', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1' }],
     keyUrl: 'https://bailian.console.aliyun.com/', prefer: ['qwen-plus', 'qwen-max', 'qwen3'], aliases: 'qwen aliyun alibaba bailian 阿里 百炼 千问 通义' },
@@ -86,7 +86,7 @@ export const CATALOG: CatalogEntry[] = [
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys', aliases: 'zhipu bigmodel glm 智谱' },
   { id: 'moonshot', name: 'Kimi（月之暗面）', blurb: 'Moonshot AI 开放平台的 Kimi 系列，按量付费，长文本见长。', group: 'cn', popular: true,
     regions: [{ label: '国内', baseUrl: 'https://api.moonshot.cn/v1' }, { label: '海外', baseUrl: 'https://api.moonshot.ai/v1' }],
-    keyUrl: 'https://platform.moonshot.cn/console/api-keys', prefer: ['kimi-k3', 'kimi-k2', 'kimi-latest'], aliases: 'moonshot kimi 月之暗面' },
+    keyUrl: 'https://platform.moonshot.cn/console/api-keys', prefer: ['kimi-k3.1', 'kimi-k3'], aliases: 'moonshot kimi 月之暗面' },
   { id: 'volcengine', name: '火山方舟（豆包）', blurb: '字节跳动火山引擎的豆包与第三方模型，按量付费。', group: 'cn',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', keyUrl: 'https://console.volcengine.com/ark', prefer: ['doubao'], aliases: 'volcengine ark doubao 豆包 字节 火山' },
   { id: 'siliconflow', name: '硅基流动', blurb: '一个密钥用多家开源模型（DeepSeek、Qwen、GLM 等），有免费额度。', group: 'cn', popular: true,
