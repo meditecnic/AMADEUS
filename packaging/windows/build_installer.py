@@ -80,7 +80,7 @@ def main() -> int:
         raise RuntimeError(f"--vc-redist must select the latest VS 2026 Redist: {toolchain['redist']}")
     env.update({"TEMP": str(work / "tmp"), "TMP": str(work / "tmp"),
                 "npm_config_cache": str(work / "npm-cache"), "CARGO_TARGET_DIR": str(work / "cargo-target"),
-                "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8", "STATIC_VCRUNTIME": "true"})
+                "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"})
     devcmd = Path(toolchain["installation"]) / "Common7/Tools/VsDevCmd.bat"
     command = f'"{env["COMSPEC"]}" /d /s /c ""{devcmd}" -no_logo -arch=x64 -host_arch=x64 >nul && set"'
     developer_env = subprocess.check_output(command, env=env, encoding="mbcs")

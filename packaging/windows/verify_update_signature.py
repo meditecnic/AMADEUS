@@ -6,12 +6,37 @@ import base64
 import binascii
 import hashlib
 import json
-from pathlib import Path
+import re
 import sys
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+SEMVER = re.compile(
+    r"(0|[1-9][0-9]{0,19})\.(0|[1-9][0-9]{0,19})\.(0|[1-9][0-9]{0,19})"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+
+
+def verify_signed_version(trusted_comment: str, announced: object) -> None:
+    signed = next((field.removeprefix("version:") for field in trusted_comment.split("\t")
+                   if field.startswith("version:")), None)
+    if signed is None:
+        raise ValueError("trusted comment: missing version field")
+    announced_version = announced.lstrip("v") if isinstance(announced, str) else ""
+    match = SEMVER.fullmatch(announced_version)
+    if match is None or any(int(part) >= 2**64 for part in match.groups()[:3]):
+        raise ValueError("latest.json version: expected a semantic version")
+    if any(part.startswith("0") and len(part) > 1 and part.isdigit()
+           for part in (match[4] or "").split(".")):
+        raise ValueError("latest.json version: expected a semantic version")
+    # The updater parses the manifest as SemVer. Its canonical spelling preserves
+    # prerelease and build metadata, so equality also requires both to match.
+    if signed.lstrip("v") != announced_version:
+        raise ValueError(f"signed version {signed!r} does not match latest.json version {announced!r}")
 
 
 def decode64(value: str, label: str) -> bytes:
@@ -44,7 +69,8 @@ def verify_update(installer: Path, signature: Path, config: Path, latest: Path) 
         raise ValueError("signature: invalid minisign packet or algorithm")
     if packet[2:10] != public[2:10]:
         raise ValueError("key id: signature does not match configured public key")
-    if not lines[2].startswith("trusted comment: "):
+    trusted_comment = lines[2].removeprefix("trusted comment: ")
+    if trusted_comment == lines[2]:
         raise ValueError("trusted comment: missing minisign prefix")
     global_signature = decode64(lines[3], "trusted comment global signature")
     if len(global_signature) != 64:
@@ -66,15 +92,17 @@ def verify_update(installer: Path, signature: Path, config: Path, latest: Path) 
     except InvalidSignature as error:
         raise ValueError("installer signature: verification failed") from error
     try:
-        key.verify(global_signature, packet[10:] + lines[2][17:].encode("utf-8"))
+        key.verify(global_signature, packet[10:] + trusted_comment.encode("utf-8"))
     except InvalidSignature as error:
         raise ValueError("trusted comment global signature: verification failed") from error
-    windows = json.loads(latest.read_text(encoding="utf-8"))["platforms"]["windows-x86_64"]
+    manifest = json.loads(latest.read_text(encoding="utf-8"))
+    windows = manifest["platforms"]["windows-x86_64"]
     # release_artifacts.latest_manifest strips the sidecar's outer whitespace.
     if windows["signature"] != signature_text:
         raise ValueError("latest.json signature: does not match .sig contents")
     if unquote(urlsplit(windows["url"]).path.rsplit("/", 1)[-1]) != installer.name:
         raise ValueError("latest.json url: filename does not match installer")
+    verify_signed_version(trusted_comment, manifest.get("version"))
     return {"key_id": public[2:10][::-1].hex().upper(), "filename": installer.name,
             "size": size, "sha256": sha.hexdigest()}
 
