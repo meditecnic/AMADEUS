@@ -361,33 +361,45 @@ async def _transition_owned(
     error_code: str | None = None,
     permanent: bool = False,
     attempt_count: int = 0,
+    expected_truncate: int | None = None,
 ) -> dict[str, Any]:
     """Complete/fail/cancel only while this owner still holds an unexpired processing lease."""
     now = _utc_now()
     now_s = _iso(now)
-    err_hash = (
-        hashlib.sha256(error_code.encode("utf-8")).hexdigest()[:16] if error_code else None
-    )
-    next_attempt = None
-    final_state = state
-    # S4-ARCHIVE Gate 2: stamp the persisted retry-eligibility authority at
-    # the moment the failure lands. permanent → 0; transient (including
-    # auto-retry exhaustion) → 1. Non-failed outcomes keep the neutral 1.
-    final_retryable = 1
-    if state == "failed_or_retry":
-        if permanent or attempt_count >= MAX_AUTO_RETRIES:
-            final_state = "failed"
-            final_retryable = 0 if permanent else 1
-        else:
-            final_state = "pending"
-            delay = min(60, 2 ** max(1, attempt_count))
-            next_attempt = _iso(now + timedelta(seconds=delay))
-
     db = await get_db(worldline, "memory")
     try:
+        if expected_truncate is not None:
+            from app.services.conversation_erasure import truncate_cursor
+
+            await db.execute("BEGIN IMMEDIATE")
+            scope = await (await db.execute(
+                "SELECT session_id,identity_mode,conversation_id FROM memory_ingest_jobs WHERE job_id=?",
+                (job_id,),
+            )).fetchone()
+            if scope is not None and await truncate_cursor(db, **scope) != expected_truncate:
+                state, error_code = "requeue", None
+        err_hash = (
+            hashlib.sha256(error_code.encode("utf-8")).hexdigest()[:16] if error_code else None
+        )
+        next_attempt = None
+        final_state = "pending" if state == "requeue" else state
+        # S4-ARCHIVE Gate 2: stamp the persisted retry-eligibility authority at
+        # the moment the failure lands. permanent → 0; transient (including
+        # auto-retry exhaustion) → 1. Non-failed outcomes keep the neutral 1.
+        final_retryable = 1
+        if state == "failed_or_retry":
+            if permanent or attempt_count >= MAX_AUTO_RETRIES:
+                final_state = "failed"
+                final_retryable = 0 if permanent else 1
+            else:
+                final_state = "pending"
+                delay = min(60, 2 ** max(1, attempt_count))
+                next_attempt = _iso(now + timedelta(seconds=delay))
+
         cur = await db.execute(
             """UPDATE memory_ingest_jobs
                SET state=?,
+                   attempt_count=attempt_count-?,
                    retryable=?,
                    last_error_code=?,
                    last_error_hash=?,
@@ -406,6 +418,7 @@ async def _transition_owned(
                AND lease_expires_at > ?""",
             (
                 final_state,
+                int(state == "requeue"),
                 final_retryable,
                 error_code,
                 err_hash,
@@ -1054,7 +1067,24 @@ async def process_memory_job(
 
     completion_fn: MemoryCompletionFn = memory_completion or default_memory_completion
 
+    from app.services.conversation_erasure import truncate_cursor, validate_ingest_sources
+    from app.services.memory_v11.contracts import MemoryValidationError
+
+    scope = {key: job[key] for key in ("session_id", "identity_mode", "conversation_id")}
+
+    async def reject_stale(code: str) -> dict[str, Any]:
+        return await _transition_owned(
+            job_id=job_id, worldline=wl, lease_owner=lease_owner,
+            state="requeue" if code == "conversation_truncated" else "cancelled",
+            error_code=MemoryJobErrorCode.SOURCE_MISSING.value if code == "source_erased" else None,
+        )
+
     try:
+        cursor_db = await get_db(wl, "memory")
+        try:
+            expected_truncate = await truncate_cursor(cursor_db, **scope)
+        finally:
+            await cursor_db.close()
         source = await _load_user_source(
             session_id=job["session_id"],
             worldline=wl,
@@ -1128,6 +1158,7 @@ async def process_memory_job(
                 error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
                 permanent=False,
                 attempt_count=int(job["attempt_count"] or 0),
+                expected_truncate=expected_truncate,
             )
 
         try:
@@ -1156,6 +1187,7 @@ async def process_memory_job(
                 error_code=MemoryJobErrorCode.PROVIDER_UNAVAILABLE.value,
                 permanent=False,
                 attempt_count=int(job["attempt_count"] or 0),
+                expected_truncate=expected_truncate,
             )
         if not isinstance(completion_payload, Mapping):
             return await _transition_owned(
@@ -1166,6 +1198,7 @@ async def process_memory_job(
                 error_code=MemoryJobErrorCode.INVALID_JSON.value,
                 permanent=False,
                 attempt_count=int(job["attempt_count"] or 0),
+                expected_truncate=expected_truncate,
             )
 
         # S3F-2A: strict container/item/count validation BEFORE any receipt /
@@ -1188,6 +1221,7 @@ async def process_memory_job(
                 error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
                 permanent=True,
                 attempt_count=int(job["attempt_count"] or 0),
+                expected_truncate=expected_truncate,
             )
 
         applied = {}
@@ -1235,15 +1269,12 @@ async def process_memory_job(
                         "source_message_id": int(job["source_message_id"]),
                         "pipeline_version": job["pipeline_version"],
                         "attempt_no": int(job["attempt_count"] or 1),
+                        "truncate_cursor": expected_truncate,
                     },
                 )
             except Exception as exc:
-                from app.services.memory_v11.contracts import MemoryValidationError
-                if getattr(exc, 'code', None) == 'source_erased':
-                    return await _transition_owned(
-                        job_id=job_id, worldline=wl, lease_owner=lease_owner,
-                        state='cancelled', error_code=MemoryJobErrorCode.SOURCE_MISSING.value,
-                    )
+                if isinstance(exc, MemoryValidationError) and exc.code in ("source_erased", "conversation_truncated"):
+                    return await reject_stale(exc.code)
                 return await _transition_owned(
                     job_id=job_id,
                     worldline=wl,
@@ -1252,6 +1283,7 @@ async def process_memory_job(
                     error_code=exc.code if isinstance(exc, MemoryValidationError) else "operation_failed",
                     permanent=False,
                     attempt_count=int(job["attempt_count"] or 0),
+                    expected_truncate=expected_truncate,
                 )
         else:
             # S3F-1 D28: valid EMPTY completion → receipt-only Memory
@@ -1267,6 +1299,10 @@ async def process_memory_job(
             db = await get_db(wl, "memory")
             try:
                 await db.execute("BEGIN IMMEDIATE")
+                await validate_ingest_sources(
+                    db, **scope, source_message_ids=[int(job["source_message_id"])],
+                    expected_truncate=expected_truncate,
+                )
                 # Final full-cursor check under the write lock (idempotent).
                 if not await has_ingest_receipt(
                     db,
@@ -1286,8 +1322,10 @@ async def process_memory_job(
                         receipt_kind=RECEIPT_KIND_EMPTY,
                     )
                 await db.commit()
-            except Exception:
+            except Exception as exc:
                 await db.rollback()
+                if isinstance(exc, MemoryValidationError) and exc.code in ("source_erased", "conversation_truncated"):
+                    return await reject_stale(exc.code)
                 return await _transition_owned(
                     job_id=job_id,
                     worldline=wl,
@@ -1296,6 +1334,7 @@ async def process_memory_job(
                     error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
                     permanent=False,
                     attempt_count=int(job["attempt_count"] or 0),
+                    expected_truncate=expected_truncate,
                 )
             finally:
                 await db.close()

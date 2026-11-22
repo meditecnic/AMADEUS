@@ -193,9 +193,23 @@ async def delete_diary(*, session_id: str, identity_mode: str, worldline: str, d
         await db.close()
 
 
-async def erase_conversation_diaries(db, request: dict) -> None:
+async def erase_conversation_diaries(db, request: dict) -> list[str]:
     """Apply a durable erasure intent in its existing memory write transaction."""
     scope = (request["session_id"], request["identity_mode"], request["conversation_id"])
+    cutoff = request.get("cutoff_message_id")
+    if cutoff is not None:
+        scope_sql = "session_id=? AND identity_mode=? AND conversation_id=?"
+        removed = await (await db.execute(
+            f"""DELETE FROM memory_diaries WHERE {scope_sql}
+                AND (first_message_id>=? OR (deleted_at IS NULL AND (state!='written' OR last_message_id>=?)))
+                RETURNING diary_id""", (*scope, cutoff, cutoff),
+        )).fetchall()
+        await db.execute(
+            f"""UPDATE memory_diaries SET last_message_id=? WHERE {scope_sql}
+                AND deleted_at IS NOT NULL AND first_message_id<? AND last_message_id>=?""",
+            (request['last_retained_message_id'], *scope, cutoff, cutoff),
+        )
+        return [row['diary_id'] for row in removed]
     if request["action"] == "delete" or request["forget_long_term"]:
         await db.execute(
             f"""UPDATE memory_diaries SET {_CLEAR_BODY}
@@ -209,3 +223,4 @@ async def erase_conversation_diaries(db, request: dict) -> None:
                  AND EXISTS (SELECT 1 FROM json_each(?) WHERE value BETWEEN first_message_id AND last_message_id)""",
             (*scope, request["source_message_ids"]),
         )
+    return []
