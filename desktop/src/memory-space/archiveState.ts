@@ -1,7 +1,12 @@
 import {
   correctFactText,
+  createTopic,
+  deleteDiary,
   deleteExperience,
   deleteFact,
+  deleteTopic,
+  fetchConversationTitles,
+  fetchDiaries,
   fetchExperiencesPage,
   fetchFactsPage,
   fetchMemoryStatus,
@@ -15,6 +20,7 @@ import {
   updateFactPresentation,
   type ArchiveResult,
   type ArchiveScope,
+  type DiaryBrowseRow,
   type ExperienceBrowseRow,
   type FactBrowseRow,
   type FailedJobRow,
@@ -37,7 +43,7 @@ import {
 // per-scope restore, and honest outcome mapping. Existing HTTP endpoints are
 // the real adapters; no projection request is ever issued from here.
 
-export type ArchiveRecordKind = 'fact' | 'experience';
+export type ArchiveRecordKind = 'fact' | 'experience' | 'diary';
 
 export type ArchiveListStatus = 'idle' | 'loading' | 'ready' | 'failed';
 
@@ -56,6 +62,12 @@ export type ExperienceListState = {
   total: number;
   offset: number;
   hasMore: boolean;
+  errorCode: string | null;
+};
+
+export type DiaryListState = {
+  status: ArchiveListStatus;
+  rows: DiaryBrowseRow[];
   errorCode: string | null;
 };
 
@@ -86,11 +98,13 @@ export type ArchiveDeleteFlow = {
 } | null;
 
 export type ArchiveTopicRename = { topicId: string; draft: string; saving: boolean } | null;
+export type ArchiveTopicCreate = { draft: string; saving: boolean } | null;
+export type ArchiveTopicNotice = { kind: 'info' | 'error'; text: string } | null;
 
 // §4.14: closing/switching with unsaved Fact edits requires an explicit
 // discard choice. This product state (never window.confirm) names the
 // original action that will run only after the user discards.
-export type ArchiveDiscardAction = 'back' | 'exit-archive' | 'scope-switch' | 'close-memory';
+export type ArchiveDiscardAction = 'back' | 'exit-archive' | 'scope-switch' | 'close-memory' | 'select-diary';
 export type ArchiveDiscardConfirm = { action: ArchiveDiscardAction } | null;
 
 export type ArchivePendingState = {
@@ -120,12 +134,17 @@ export type ArchiveState = {
   filters: ArchiveFilters;
   facts: FactListState;
   experiences: ExperienceListState;
+  diaries: DiaryListState;
+  conversationTitles: Record<string, string>;
   topics: { status: ArchiveListStatus; items: TopicRow[] };
   selection: ArchiveSelection;
   details: ArchiveDetailsState;
   editor: ArchiveEditorState;
   deleteFlow: ArchiveDeleteFlow;
   topicRename: ArchiveTopicRename;
+  topicCreate: ArchiveTopicCreate;
+  topicNotice: ArchiveTopicNotice;
+  topicDeleting: boolean;
   discardConfirm: ArchiveDiscardConfirm;
   pending: ArchivePendingState;
   announcement: string;
@@ -138,14 +157,14 @@ export type ArchiveIntent =
   | { type: 'set-topic'; topicId: string | null }
   | { type: 'set-within'; within: ArchiveWithin | null; topicId?: string | null }
   | { type: 'set-pinned-only'; pinnedOnly: boolean }
-  | { type: 'page'; kind: ArchiveRecordKind; offset: number }
+  | { type: 'page'; kind: 'fact' | 'experience'; offset: number }
   | { type: 'select'; kind: ArchiveRecordKind; recordId: string }
   | { type: 'open-editor' }
   | { type: 'edit-input'; text: string }
   | { type: 'save-edit' }
   | { type: 'discard-draft' }
   | { type: 'reapply-draft' }
-  | { type: 'toggle-pin'; kind: ArchiveRecordKind; recordId: string }
+  | { type: 'toggle-pin'; kind: 'fact' | 'experience'; recordId: string }
   | { type: 'assign-topic'; topicId: string | null }
   | { type: 'request-delete' }
   | { type: 'cancel-delete' }
@@ -154,6 +173,12 @@ export type ArchiveIntent =
   | { type: 'rename-topic-input'; text: string }
   | { type: 'rename-topic-save' }
   | { type: 'rename-topic-cancel' }
+  | { type: 'create-topic-start' }
+  | { type: 'create-topic-input'; text: string }
+  | { type: 'create-topic-save' }
+  | { type: 'create-topic-cancel' }
+  | { type: 'delete-topic'; topicId: string }
+  | { type: 'dismiss-topic-notice' }
   | { type: 'ignore-observation'; observationId: string }
   | { type: 'confirm-observation'; observationId: string }
   | { type: 'retry-job'; jobId: string }
@@ -163,7 +188,7 @@ export type ArchiveIntent =
 
 export type ArchiveOpenOptions = {
   restore?: boolean;
-  focus?: { kind: ArchiveRecordKind; recordId: string };
+  focus?: { kind: 'fact' | 'experience'; recordId: string };
 };
 
 export type ArchiveModule = {
@@ -230,6 +255,10 @@ function initialExperiences(): ExperienceListState {
   return { status: 'idle', rows: [], total: 0, offset: 0, hasMore: false, errorCode: null };
 }
 
+function initialDiaries(): DiaryListState {
+  return { status: 'idle', rows: [], errorCode: null };
+}
+
 function initialState(scope: ArchiveScope | null): ArchiveState {
   return {
     scope,
@@ -237,12 +266,17 @@ function initialState(scope: ArchiveScope | null): ArchiveState {
     filters: { query: '', topicId: null, pinnedOnly: false },
     facts: initialFacts(),
     experiences: initialExperiences(),
+    diaries: initialDiaries(),
+    conversationTitles: {},
     topics: { status: 'idle', items: [] },
     selection: null,
     details: { status: 'idle', payload: null, errorCode: null },
     editor: null,
     deleteFlow: null,
     topicRename: null,
+    topicCreate: null,
+    topicNotice: null,
+    topicDeleting: false,
     discardConfirm: null,
     pending: {
       status: 'idle',
@@ -270,7 +304,7 @@ export function createArchiveModule(deps?: {
    *  (Constellation reading outcome / activation / projection) purge the same
    *  record. The projection itself is re-fetched from the backend — never
    *  edited client-side. */
-  onRecordErased?: (kind: ArchiveRecordKind, recordId: string) => void;
+  onRecordErased?: (kind: 'fact' | 'experience', recordId: string) => void;
   /** Notified when a confirmed discard completes an exit-archive action. */
   onExitArchive?: () => void;
   /** Notified when a confirmed discard completes a close of the memory space. */
@@ -292,6 +326,9 @@ export function createArchiveModule(deps?: {
   // commit over newer results. Scope switches keep the global epoch + abort.
   let factsSeq = 0;
   let experiencesSeq = 0;
+  let diariesSeq = 0;
+  let topicsSeq = 0;
+  let titlesLoadedKey: string | null = null;
   // Same latest-request-wins discipline for details and pending loads:
   // A→B→A details re-selection must not let the FIRST A response win, and
   // overlapping pending loads must never commit an older observations/status
@@ -302,6 +339,7 @@ export function createArchiveModule(deps?: {
   let disposed = false;
   // Deferred while a pending draft waits for an explicit discard choice.
   let pendingScopeChange: { scope: ArchiveScope; options: ArchiveOpenOptions } | null = null;
+  let pendingDiarySelectId: string | null = null;
 
   function notify() {
     state = { ...state };
@@ -412,13 +450,51 @@ export function createArchiveModule(deps?: {
   async function loadTopics(guardEpoch: number) {
     if (!state.scope) return;
     const scope = state.scope;
+    const mySeq = ++topicsSeq;
     const result = await fetchTopics(scope, { fetcher, signal: inflight?.signal });
-    if (stale(guardEpoch) || scopeKey(scope) !== scopeKey(state.scope)) return;
+    if (stale(guardEpoch) || mySeq !== topicsSeq || scopeKey(scope) !== scopeKey(state.scope)) return;
     if (result.type === 'ok') {
       commit({ topics: { status: 'ready', items: result.payload } }, { persist: false });
       return;
     }
     commit({ topics: { status: 'failed', items: [] } }, { persist: false });
+  }
+
+  async function loadDiaries() {
+    if (!state.scope) return;
+    const scope = state.scope;
+    const mySeq = ++diariesSeq;
+    commit({ diaries: { ...state.diaries, status: 'loading', errorCode: null } }, { persist: false });
+    const result = await fetchDiaries(scope, { fetcher, signal: inflight?.signal });
+    if (disposed || mySeq !== diariesSeq || scopeKey(scope) !== scopeKey(state.scope)) return;
+    if (result.type === 'ok') {
+      commit({
+        diaries: {
+          status: 'ready',
+          rows: result.payload,
+          errorCode: null,
+        },
+      }, { persist: false });
+      return;
+    }
+    commit({
+      diaries: {
+        ...state.diaries,
+        status: 'failed',
+        errorCode: result.type === 'backend-failure' ? result.code : 'transport_error',
+      },
+    }, { persist: false });
+  }
+
+  async function loadConversationTitles(guardEpoch: number) {
+    if (!state.scope) return;
+    const scope = state.scope;
+    const key = scopeKey(scope);
+    if (titlesLoadedKey === key) return;
+    titlesLoadedKey = key;
+    const titles = await fetchConversationTitles(scope, { fetcher, signal: inflight?.signal });
+    if (stale(guardEpoch) || scopeKey(scope) !== scopeKey(state.scope)) return;
+    commit({ conversationTitles: titles }, { persist: false });
   }
 
   async function loadPending(guardEpoch: number) {
@@ -453,7 +529,7 @@ export function createArchiveModule(deps?: {
   }
 
   async function loadDetails(
-    selection: NonNullable<ArchiveSelection>,
+    selection: { kind: 'fact' | 'experience'; recordId: string },
     guardEpoch: number,
     options: { deepLink?: boolean } = {},
   ) {
@@ -519,6 +595,12 @@ export function createArchiveModule(deps?: {
     // A star-map deep link can open a record outside the current list page.
     // Matching, scope-validated details still provide its text and revision.
     if (!state.selection) return null;
+    if (state.selection.kind === 'diary') {
+      const row = state.diaries.rows.find((item) => item.diaryId === state.selection?.recordId);
+      if (!row) return null;
+      const preview = (row.bodyZh.trim() || row.bodyJa.trim()).replace(/\s+/g, ' ');
+      return { text: preview.length > 48 ? `${preview.slice(0, 48)}…` : preview };
+    }
     if (state.selection.kind === 'fact') {
       const row = state.facts.rows.find((item) => item.factId === state.selection?.recordId);
       if (!row) {
@@ -543,7 +625,9 @@ export function createArchiveModule(deps?: {
     void loadFacts();
     void loadExperiences();
     void loadTopics(guardEpoch);
-    if (state.selection) void loadDetails(state.selection, guardEpoch);
+    if (state.selection && state.selection.kind !== 'diary') {
+      void loadDetails({ kind: state.selection.kind, recordId: state.selection.recordId }, guardEpoch);
+    }
   }
 
   const SAVING_NOTICE = '正在保存，请稍候';
@@ -573,8 +657,12 @@ export function createArchiveModule(deps?: {
     // Invalidate every kind-scoped request from the previous scope too.
     factsSeq += 1;
     experiencesSeq += 1;
+    diariesSeq += 1;
+    topicsSeq += 1;
     detailsSeq += 1;
     pendingSeq += 1;
+    titlesLoadedKey = null;
+    pendingDiarySelectId = null;
     inflight?.abort();
     inflight = new AbortController();
     const guardEpoch = epoch;
@@ -591,11 +679,15 @@ export function createArchiveModule(deps?: {
     notify();
     void loadFacts();
     void loadExperiences();
+    void loadDiaries();
     void loadTopics(guardEpoch);
     void loadPending(guardEpoch);
+    if (state.activeKind === 'diary') {
+      void loadConversationTitles(guardEpoch);
+    }
     const focus = options.focus ?? state.selection;
-    if (focus) {
-      void loadDetails(focus, guardEpoch, { deepLink: Boolean(options.focus) });
+    if (focus && focus.kind !== 'diary') {
+      void loadDetails({ kind: focus.kind, recordId: focus.recordId }, guardEpoch, { deepLink: Boolean(options.focus) });
     }
     return true;
   }
@@ -604,9 +696,24 @@ export function createArchiveModule(deps?: {
     if (!state.scope) return;
     const guardEpoch = epoch;
     switch (intent.type) {
-      case 'set-kind':
-        commit({ activeKind: intent.kind });
+      case 'set-kind': {
+        const switchingDiary = intent.kind === 'diary' || state.selection?.kind === 'diary';
+        const clearSelection = switchingDiary
+          && !state.editor
+          && !state.deleteFlow
+          && state.selection?.kind !== intent.kind;
+        commit({
+          activeKind: intent.kind,
+          ...(clearSelection
+            ? { selection: null, details: { status: 'idle', payload: null, errorCode: null } }
+            : {}),
+          ...(intent.kind !== 'fact' ? { topicCreate: null, topicRename: null, topicNotice: null } : {}),
+        });
+        if (intent.kind === 'diary') {
+          void loadConversationTitles(guardEpoch);
+        }
         return;
+      }
       case 'set-query':
         commit({
           filters: { ...state.filters, query: intent.query },
@@ -620,6 +727,8 @@ export function createArchiveModule(deps?: {
         commit({
           filters: { ...state.filters, topicId: intent.topicId },
           facts: { ...state.facts, offset: 0 },
+          topicNotice: null,
+          topicRename: null,
         });
         void loadFacts();
         return;
@@ -658,6 +767,26 @@ export function createArchiveModule(deps?: {
         }
         return;
       case 'select':
+        if (intent.kind === 'diary') {
+          if (state.editor?.status === 'saving') {
+            commit({ announcement: SAVING_NOTICE }, { persist: false });
+            return;
+          }
+          if (state.editor) {
+            pendingDiarySelectId = intent.recordId;
+            commit({ discardConfirm: { action: 'select-diary' } }, { persist: false });
+            return;
+          }
+          detailsSeq += 1;
+          commit({
+            selection: { kind: 'diary', recordId: intent.recordId },
+            details: { status: 'idle', payload: null, errorCode: null },
+            editor: null,
+            deleteFlow: null,
+            focusFallback: null,
+          });
+          return;
+        }
         void loadDetails({ kind: intent.kind, recordId: intent.recordId }, guardEpoch);
         return;
       case 'open-editor': {
@@ -687,7 +816,8 @@ export function createArchiveModule(deps?: {
       case 'discard-draft':
         // Explicit discard invalidates any in-flight save completion.
         saveGeneration += 1;
-        commit({ editor: null });
+        pendingDiarySelectId = null;
+        commit({ editor: null, discardConfirm: null });
         return;
       case 'reapply-draft':
         // Deliberate reapply against the newly reviewed backend version.
@@ -733,7 +863,11 @@ export function createArchiveModule(deps?: {
       case 'rename-topic-start': {
         const topic = state.topics.items.find((item) => item.topicId === intent.topicId);
         if (!topic) return;
-        commit({ topicRename: { topicId: topic.topicId, draft: topic.displayLabel, saving: false } });
+        commit({
+          topicCreate: null,
+          topicNotice: null,
+          topicRename: { topicId: topic.topicId, draft: topic.displayLabel, saving: false },
+        });
         return;
       }
       case 'rename-topic-input':
@@ -745,6 +879,29 @@ export function createArchiveModule(deps?: {
         return;
       case 'rename-topic-cancel':
         commit({ topicRename: null });
+        return;
+      case 'create-topic-start':
+        commit({
+          topicRename: null,
+          topicNotice: null,
+          topicCreate: { draft: '', saving: false },
+        });
+        return;
+      case 'create-topic-input':
+        if (!state.topicCreate) return;
+        commit({ topicCreate: { ...state.topicCreate, draft: intent.text } });
+        return;
+      case 'create-topic-save':
+        void saveTopicCreate(guardEpoch);
+        return;
+      case 'create-topic-cancel':
+        commit({ topicCreate: null, topicNotice: null });
+        return;
+      case 'delete-topic':
+        void runDeleteTopic(intent.topicId, guardEpoch);
+        return;
+      case 'dismiss-topic-notice':
+        commit({ topicNotice: null }, { persist: false });
         return;
       case 'confirm-discard': {
         // Explicit discard: drop the draft, then execute the original action.
@@ -768,10 +925,26 @@ export function createArchiveModule(deps?: {
           }
           return;
         }
+        if (action === 'select-diary') {
+          const targetId = pendingDiarySelectId;
+          pendingDiarySelectId = null;
+          if (targetId) {
+            detailsSeq += 1;
+            commit({
+              selection: { kind: 'diary', recordId: targetId },
+              details: { status: 'idle', payload: null, errorCode: null },
+              editor: null,
+              deleteFlow: null,
+              focusFallback: null,
+            });
+          }
+          return;
+        }
         return;
       }
       case 'cancel-discard': {
-        // Continue editing: keep the draft AND the deferred/exit action.
+        // Continue editing: keep the draft AND clear any deferred diary selection.
+        pendingDiarySelectId = null;
         commit({ discardConfirm: null }, { persist: false });
         return;
       }
@@ -949,7 +1122,7 @@ export function createArchiveModule(deps?: {
     }
   }
 
-  async function togglePin(kind: ArchiveRecordKind, recordId: string, guardEpoch: number) {
+  async function togglePin(kind: 'fact' | 'experience', recordId: string, guardEpoch: number) {
     const scope = state.scope;
     if (!scope || state.editor?.status === 'saving' || state.deleteFlow?.status === 'deleting') return;
     if (kind === 'fact') {
@@ -993,6 +1166,36 @@ export function createArchiveModule(deps?: {
     const flow = state.deleteFlow;
     if (!scope || !flow || flow.status !== 'confirming') return;
     commit({ deleteFlow: { ...flow, status: 'deleting' } });
+    if (flow.kind === 'diary') {
+      const result = await deleteDiary(scope, flow.recordId, { fetcher });
+      if (stale(guardEpoch)) return;
+      if (result.type === 'ok' || result.type === 'not-found') {
+        const rows = state.diaries.rows.filter((row) => row.diaryId !== flow.recordId);
+        commit({
+          diaries: { ...state.diaries, rows },
+          selection: null,
+          details: { status: 'idle', payload: null, errorCode: null },
+          deleteFlow: null,
+          announcement: result.type === 'ok' ? '手记已删除' : '该手记在此范围内不再可用',
+        });
+        void loadDiaries();
+        return;
+      }
+      commit({
+        deleteFlow: {
+          ...flow,
+          status: 'failed',
+          errorCode:
+            result.type === 'conflict' || result.type === 'validation'
+              ? result.code
+              : result.type === 'backend-failure'
+                ? result.code
+                : 'transport_error',
+        },
+        announcement: '删除失败，手记未变更',
+      });
+      return;
+    }
     const result =
       flow.kind === 'fact' && typeof flow.expectedVersion === 'number'
         ? await deleteFact(scope, flow.recordId, flow.expectedVersion, { fetcher })
@@ -1067,6 +1270,102 @@ export function createArchiveModule(deps?: {
     });
   }
 
+  async function saveTopicCreate(guardEpoch: number) {
+    const scope = state.scope;
+    const creating = state.topicCreate;
+    if (!scope || !creating || creating.saving) return;
+    const label = creating.draft.trim();
+    if (!label) {
+      commit({
+        topicNotice: { kind: 'error', text: '请输入主题名称。' },
+        announcement: '请输入主题名称。',
+      }, { persist: false });
+      return;
+    }
+    const existingIds = new Set(state.topics.items.map((item) => item.topicId));
+    commit({ topicCreate: { ...creating, saving: true }, topicNotice: null }, { persist: false });
+    const result = await createTopic(scope, label, { fetcher });
+    if (stale(guardEpoch)) return;
+    if (result.type === 'ok') {
+      const reused = existingIds.has(result.payload.topicId);
+      const noticeText = reused
+        ? `已存在同名主题「${result.payload.displayLabel}」，已沿用原主题。`
+        : `已新建主题「${result.payload.displayLabel}」。`;
+      const items = reused
+        ? state.topics.items
+        : [
+            ...state.topics.items,
+            { topicId: result.payload.topicId, displayLabel: result.payload.displayLabel, activeFactCount: 0 },
+          ];
+      commit({
+        topics: { ...state.topics, items },
+        topicCreate: null,
+        topicNotice: { kind: 'info', text: noticeText },
+        announcement: noticeText,
+      });
+      void loadTopics(guardEpoch);
+      return;
+    }
+    const errText = result.type === 'conflict'
+      ? '该名称与已有主题冲突，未能创建。'
+      : '新建主题失败，请稍后重试。';
+    commit({
+      topicCreate: { ...creating, saving: false },
+      topicNotice: { kind: 'error', text: errText },
+      announcement: errText,
+    }, { persist: false });
+  }
+
+  async function runDeleteTopic(topicId: string, guardEpoch: number) {
+    const scope = state.scope;
+    if (!scope || state.topicDeleting) return;
+    const topic = state.topics.items.find((item) => item.topicId === topicId);
+    const label = topic?.displayLabel ?? '该主题';
+    const notEmptyText = `「${label}」里还有认知，不能直接删除；请先将里面的认知移到其他主题或改为未归组。`;
+    if (topic && topic.activeFactCount > 0) {
+      commit({
+        topicRename: null,
+        topicNotice: { kind: 'error', text: notEmptyText },
+        announcement: notEmptyText,
+      }, { persist: false });
+      return;
+    }
+    commit({ topicDeleting: true, topicNotice: null, topicRename: null }, { persist: false });
+    const result = await deleteTopic(scope, topicId, { fetcher });
+    if (stale(guardEpoch)) return;
+    if (result.type === 'ok' || result.type === 'not-found') {
+      const items = state.topics.items.filter((item) => item.topicId !== topicId);
+      const clearingFilter = state.filters.topicId === topicId;
+      const msg = result.type === 'ok' ? `已删除空主题「${label}」。` : '该主题已不存在。';
+      commit({
+        topics: { ...state.topics, items },
+        ...(clearingFilter
+          ? {
+              filters: { ...state.filters, topicId: null },
+              facts: { ...state.facts, offset: 0 },
+            }
+          : {}),
+        topicDeleting: false,
+        topicNotice: { kind: 'info', text: msg },
+        announcement: msg,
+      });
+      void loadTopics(guardEpoch);
+      if (clearingFilter) void loadFacts();
+      return;
+    }
+    const errText = result.type === 'conflict' && result.code === 'topic_not_empty'
+      ? notEmptyText
+      : '删除主题失败，主题未变更。';
+    commit({
+      topicDeleting: false,
+      topicNotice: { kind: 'error', text: errText },
+      announcement: errText,
+    }, { persist: false });
+    if (result.type === 'conflict' && result.code === 'topic_not_empty') {
+      void loadTopics(guardEpoch);
+    }
+  }
+
   async function saveTopicRename(guardEpoch: number) {
     const scope = state.scope;
     const rename = state.topicRename;
@@ -1089,6 +1388,10 @@ export function createArchiveModule(deps?: {
   }
 
   function handleBack(): boolean {
+    if (state.topicCreate) {
+      commit({ topicCreate: null, topicNotice: null });
+      return true;
+    }
     if (state.topicRename) {
       commit({ topicRename: null });
       return true;

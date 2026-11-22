@@ -110,7 +110,7 @@ Geometry, layout and copy are identical across worldlines; only materials change
 | Ground | Fine grid (80px / 16px, as login) | 16px dot grid plus faint grid |
 | Month rings | Dashed 5/6 | Dotted 1/4 |
 | Accent (selection, today) | `#8fdcff` | `#e98a4f` |
-| Her colour (SOUL core, new) | `#ff9cc3` | `#c9a063` |
+| Her colour (SOUL core, new) | `#ff9cc3` | `#f28ca8` |
 | Motion | 120 / 200 / 320ms, `cubic-bezier(.2,0,0,1)` | 156 / 260 / 416ms, `cubic-bezier(.5,0,.15,1.12)` |
 
 No orange on the SG sheet (the header nixie readout is existing Workstation chrome).

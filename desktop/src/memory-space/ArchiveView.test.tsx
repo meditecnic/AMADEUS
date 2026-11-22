@@ -534,3 +534,198 @@ describe('ArchiveView secondary 待处理 region', () => {
     });
   });
 });
+
+describe('ArchiveView diaries and topic management', () => {
+  it('reads bilingual diary without leaking verified_phrases, confirms deletion, and renders empty state', async () => {
+    let diaries = [
+      {
+        diary_id: 'd1',
+        conversation_id: 'conv-lab',
+        body_ja: '方眼紙に実験記録を手書きするのは悪くない。',
+        body_zh: '在方格纸上手写实验记录倒不坏。',
+        written_at: '2026-11-18T12:00:00Z',
+        source_count: 8,
+        verified_phrases_json: '["SECRET_PHRASE_NEVER_RENDER"]',
+      },
+    ];
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/conversations?')) {
+        return { status: 200, body: [{ id: 'conv-lab', title: '实验记录' }] };
+      }
+      if (url.startsWith('/api/memory/diaries/d1?') && init?.method === 'DELETE') {
+        diaries = [];
+        return { status: 204, body: null };
+      }
+      if (url.startsWith('/api/memory/diaries?')) {
+        return { status: 200, body: { scope: scopeBody(), diaries } };
+      }
+      return viewResponder({ value: false })(url, init);
+    });
+    const module = createArchiveModule();
+    await act(async () => { module.open(SCOPE); });
+    render(<ArchiveView module={module} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-tab-diary')).toHaveTextContent('手记（1）');
+    });
+    fireEvent.click(screen.getByTestId('archive-tab-diary'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-diaries-section')).toBeInTheDocument();
+    });
+    const diariesText = screen.getByTestId('archive-diaries-section').textContent ?? '';
+    expect(diariesText).toContain('来自对话「实验记录」');
+    expect(diariesText).not.toMatch(/只有自己|私密|悄悄/);
+    fireEvent.click(screen.getByText('在方格纸上手写实验记录倒不坏。'));
+
+    expect(screen.getByTestId('archive-diary-ja')).toHaveTextContent('方眼紙に実験記録を手書きするのは悪くない。');
+    expect(screen.getByTestId('archive-diary-zh')).toHaveTextContent('在方格纸上手写实验记录倒不坏。');
+    expect(screen.getByTestId('archive-diary-meta')).toHaveTextContent('来自对话「实验记录」');
+    const archiveText = screen.getByTestId('archive-view').textContent ?? '';
+    expect(archiveText).not.toContain('SECRET_PHRASE_NEVER_RENDER');
+    expect(archiveText).not.toMatch(/只有自己|私密|悄悄/);
+    // Diaries cannot be edited, pinned, or assigned a topic.
+    expect(screen.queryByTestId('archive-edit-fact')).toBeNull();
+    expect(screen.queryByTestId('archive-toggle-pin')).toBeNull();
+    expect(screen.queryByTestId('archive-assign-topic')).toBeNull();
+
+    // Two-step deletion confirmation explains permanent erasure and no rewrite.
+    fireEvent.click(screen.getByTestId('archive-delete-record'));
+    const confirm = screen.getByTestId('archive-delete-confirm');
+    expect(confirm.textContent).toContain('确认删除这条手记？');
+    expect(confirm.textContent).toContain('正文会永久删除');
+    expect(confirm.textContent).toContain('不会为这段对话重新写一篇');
+    fireEvent.click(screen.getByTestId('archive-delete-confirm-button'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-diaries-empty')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('archive-tab-diary')).toHaveTextContent('手记（0）');
+    expect(screen.getByTestId('archive-diaries-empty').textContent).toContain('聊够几轮');
+    module.dispose();
+  });
+
+  it('shows empty user-retained topics, creates new or reuses duplicate topics, and deletes empty vs refuses non-empty topics', async () => {
+    let topics = [
+      { topic_id: 't1', display_label: '咖啡', fact_count: 1 },
+      { topic_id: 't-empty', display_label: '想读的论文', fact_count: 0 },
+    ];
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/memory/topics?') && init?.method === 'POST') {
+        const label = (JSON.parse(String(init.body)) as { display_label: string }).display_label.trim();
+        const existing = topics.find((item) => item.display_label === label);
+        if (existing) {
+          return {
+            status: 200,
+            body: {
+              topic_id: existing.topic_id,
+              display_label: existing.display_label,
+              normalized_label: existing.display_label.toLowerCase(),
+              user_retained: true,
+              scope: scopeBody(),
+            },
+          };
+        }
+        const created = { topic_id: 't-new', display_label: label, fact_count: 0 };
+        topics = [...topics, created];
+        return {
+          status: 200,
+          body: {
+            topic_id: created.topic_id,
+            display_label: created.display_label,
+            normalized_label: created.display_label.toLowerCase(),
+            user_retained: true,
+            scope: scopeBody(),
+          },
+        };
+      }
+      if (url.startsWith('/api/memory/topics/t1?') && init?.method === 'DELETE') {
+        return { status: 409, body: { detail: { code: 'topic_not_empty', message: 'not empty' } } };
+      }
+      if (url.startsWith('/api/memory/topics/t-empty?') && init?.method === 'DELETE') {
+        topics = topics.filter((item) => item.topic_id !== 't-empty');
+        return { status: 204, body: null };
+      }
+      if (url.startsWith('/api/memory/topics?')) {
+        return { status: 200, body: { scope: scopeBody(), topics } };
+      }
+      if (url.startsWith('/api/memory/diaries?')) {
+        return { status: 200, body: { scope: scopeBody(), diaries: [] } };
+      }
+      return viewResponder({ value: false })(url, init);
+    });
+
+    const module = createArchiveModule();
+    await act(async () => { module.open(SCOPE); });
+    render(<ArchiveView module={module} />);
+
+    await waitFor(() => {
+      expect(module.snapshot().topics.items.map((item) => `${item.displayLabel}（${item.activeFactCount}）`)).toContain('想读的论文（0）');
+    });
+    act(() => { module.dispatch({ type: 'set-topic', topicId: 't-empty' }); });
+    expect(screen.getByTestId('archive-topic-select')).toHaveTextContent('想读的论文（0）');
+    act(() => { module.dispatch({ type: 'set-topic', topicId: null }); });
+
+    // Create a brand new topic.
+    fireEvent.click(screen.getByTestId('archive-topic-create'));
+    fireEvent.change(screen.getByTestId('archive-topic-create-input'), { target: { value: '临时灵感' } });
+    fireEvent.click(screen.getByTestId('archive-topic-create-save'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-topic-notice')).toHaveTextContent('已新建主题「临时灵感」。');
+    });
+    act(() => { module.dispatch({ type: 'set-topic', topicId: 't-new' }); });
+    expect(screen.getByTestId('archive-topic-select')).toHaveTextContent('临时灵感（0）');
+
+    // Create a duplicate topic name -> clarifies reuse of existing topic.
+    fireEvent.click(screen.getByTestId('archive-topic-create'));
+    fireEvent.change(screen.getByTestId('archive-topic-create-input'), { target: { value: '咖啡' } });
+    fireEvent.click(screen.getByTestId('archive-topic-create-save'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-topic-notice')).toHaveTextContent('已存在同名主题「咖啡」，已沿用原主题。');
+    });
+
+    // Select non-empty topic and try to delete -> human-readable refusal.
+    act(() => { module.dispatch({ type: 'set-topic', topicId: 't1' }); });
+    fireEvent.click(screen.getByTestId('archive-topic-delete'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-topic-notice')).toHaveTextContent('「咖啡」里还有认知，不能直接删除');
+    });
+
+    // Stale count (local 0, server returns 409 topic_not_empty) -> also shows human-readable refusal.
+    topics = [...topics, { topic_id: 't-stale', display_label: '刚新增认知', fact_count: 0 }];
+    act(() => { module.dispatch({ type: 'set-topic', topicId: 't-empty' }); });
+    fireEvent.click(screen.getByTestId('archive-topic-delete'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-topic-notice')).toHaveTextContent('已删除空主题「想读的论文」。');
+    });
+    expect(module.snapshot().topics.items.some((item) => item.topicId === 't-empty')).toBe(false);
+    expect(screen.getByTestId('archive-topic-select')).toHaveTextContent('全部主题');
+    module.dispose();
+  });
+
+  it('refuses topic deletion with human copy when backend returns 409 topic_not_empty on stale count', async () => {
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/memory/topics/t-stale?') && init?.method === 'DELETE') {
+        return { status: 409, body: { detail: { code: 'topic_not_empty', message: 'not empty' } } };
+      }
+      if (url.startsWith('/api/memory/topics?')) {
+        return { status: 200, body: { scope: scopeBody(), topics: [{ topic_id: 't-stale', display_label: '刚新增认知', fact_count: 0 }] } };
+      }
+      if (url.startsWith('/api/memory/diaries?')) {
+        return { status: 200, body: { scope: scopeBody(), diaries: [] } };
+      }
+      return viewResponder({ value: false })(url, init);
+    });
+    const module = createArchiveModule();
+    await act(async () => { module.open(SCOPE); });
+    render(<ArchiveView module={module} />);
+    await waitFor(() => {
+      expect(module.snapshot().topics.items).toHaveLength(1);
+    });
+    act(() => { module.dispatch({ type: 'set-topic', topicId: 't-stale' }); });
+    fireEvent.click(screen.getByTestId('archive-topic-delete'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-topic-notice')).toHaveTextContent('「刚新增认知」里还有认知，不能直接删除');
+    });
+    module.dispose();
+  });
+});

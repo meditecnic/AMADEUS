@@ -37,6 +37,15 @@ export type FactsPagePayload = { rows: FactBrowseRow[] } & ArchivePagination;
 export type ExperiencesPagePayload = { rows: ExperienceBrowseRow[] } & ArchivePagination;
 
 export type TopicRow = { topicId: string; displayLabel: string; activeFactCount: number };
+export type CreatedTopicPayload = { topicId: string; displayLabel: string; userRetained: boolean };
+export type DiaryBrowseRow = {
+  diaryId: string;
+  conversationId: string;
+  bodyJa: string;
+  bodyZh: string;
+  writtenAt: string;
+  sourceCount: number;
+};
 export type ObservationRow = {
   observationId: string;
   displayText: string | null;
@@ -135,6 +144,13 @@ async function mapResponse<T>(
     if (response.status === 409) return { type: 'conflict', code };
     if (response.status === 422) return { type: 'validation', code };
     return { type: 'backend-failure', code, status: response.status };
+  }
+  if (response.status === 204) {
+    const payload = parse(undefined);
+    if (payload === null) {
+      return { type: 'backend-failure', code: 'invalid_payload', status: response.status };
+    }
+    return { type: 'ok', payload };
   }
   let body: unknown;
   try {
@@ -362,6 +378,59 @@ function parseObservations(body: unknown, expected: ArchiveScope): ObservationRo
   return rows;
 }
 
+function parseCreatedTopic(body: unknown, expected: ArchiveScope): CreatedTopicPayload | null {
+  if (!body || typeof body !== 'object') return null;
+  const candidate = body as Record<string, unknown>;
+  if (!responseScopeMatches(candidate, expected)) return null;
+  if (!isString(candidate.topic_id) || !candidate.topic_id || !isString(candidate.display_label)) {
+    return null;
+  }
+  return {
+    topicId: candidate.topic_id,
+    displayLabel: candidate.display_label,
+    userRetained: candidate.user_retained !== false,
+  };
+}
+
+function parseDiaries(body: unknown, expected: ArchiveScope): DiaryBrowseRow[] | null {
+  if (!body || typeof body !== 'object') return null;
+  const candidate = body as { diaries?: unknown };
+  if (!responseScopeMatches(candidate, expected)) return null;
+  if (!Array.isArray(candidate.diaries)) return null;
+  const rows: DiaryBrowseRow[] = [];
+  for (const raw of candidate.diaries) {
+    if (!raw || typeof raw !== 'object') return null;
+    const row = raw as Record<string, unknown>;
+    if (
+      !isString(row.diary_id)
+      || !row.diary_id
+      || !isString(row.conversation_id)
+      || !isString(row.body_ja)
+      || !isString(row.body_zh)
+      || !isString(row.written_at)
+      || !row.written_at
+    ) {
+      return null;
+    }
+    rows.push({
+      diaryId: row.diary_id,
+      conversationId: row.conversation_id,
+      bodyJa: row.body_ja,
+      bodyZh: row.body_zh,
+      writtenAt: row.written_at,
+      sourceCount: typeof row.source_count === 'number' && Number.isFinite(row.source_count)
+        ? row.source_count
+        : 0,
+      // verified_phrases_json is intentionally dropped: internal awareness field only.
+    });
+  }
+  return rows;
+}
+
+function parseEmpty(): true {
+  return true;
+}
+
 function parseEcho(body: unknown): Record<string, unknown> | null {
   return body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
 }
@@ -533,6 +602,94 @@ export function renameTopic(
     { display_label: displayLabel },
     options,
   );
+}
+
+export function createTopic(
+  scope: ArchiveScope,
+  displayLabel: string,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<CreatedTopicPayload>> {
+  const params = scopeParams(scope);
+  return execute(
+    `/api/memory/topics?${params.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_label: displayLabel }),
+    },
+    options,
+    (body) => parseCreatedTopic(body, scope),
+  );
+}
+
+export function deleteTopic(
+  scope: ArchiveScope,
+  topicId: string,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<true>> {
+  const params = scopeParams(scope);
+  return execute(
+    `/api/memory/topics/${encodeURIComponent(topicId)}?${params.toString()}`,
+    { method: 'DELETE' },
+    options,
+    parseEmpty,
+  );
+}
+
+export function fetchDiaries(
+  scope: ArchiveScope,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<DiaryBrowseRow[]>> {
+  const params = scopeParams(scope);
+  return execute(
+    `/api/memory/diaries?${params.toString()}`,
+    undefined,
+    options,
+    (body) => parseDiaries(body, scope),
+  );
+}
+
+export function deleteDiary(
+  scope: ArchiveScope,
+  diaryId: string,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<true>> {
+  const params = scopeParams(scope);
+  return execute(
+    `/api/memory/diaries/${encodeURIComponent(diaryId)}?${params.toString()}`,
+    { method: 'DELETE' },
+    options,
+    parseEmpty,
+  );
+}
+
+export async function fetchConversationTitles(
+  scope: ArchiveScope,
+  options: ArchiveRequestOptions = {},
+): Promise<Record<string, string>> {
+  const fetcher = options.fetcher ?? fetch;
+  const params = new URLSearchParams({
+    session_id: scope.sessionId,
+    worldline: scope.worldline,
+  });
+  const init: RequestInit = options.signal ? { signal: options.signal } : {};
+  try {
+    const response = await apiFetch(`/api/conversations?${params.toString()}`, init, fetcher);
+    if (!response.ok) return {};
+    const body: unknown = await response.json();
+    if (!Array.isArray(body)) return {};
+    const map: Record<string, string> = {};
+    for (const raw of body) {
+      if (!raw || typeof raw !== 'object') continue;
+      const row = raw as Record<string, unknown>;
+      if (isString(row.id) && row.id && isString(row.title) && row.title.trim()) {
+        map[row.id] = row.title.trim();
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
 }
 
 export function ignoreObservation(

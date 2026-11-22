@@ -48,6 +48,11 @@ export const ForgetConversationModal: React.FC<ForgetConversationModalProps> = (
           <small>你手动确认、修改或置顶的记忆，以及其他对话也提过的事会保留。</small>
         </span>
       </label>
+      <p className="ws2-dialog-hint" data-testid="forget-diary-note">
+        {forgetLongTerm
+          ? '这段对话对应的手记也会一并删除，无法恢复。'
+          : '她已写下的手记会保留；若勾选上方选项，这段对话的手记也会一并删除。'}
+      </p>
     </ConfirmDialog>
   );
 };

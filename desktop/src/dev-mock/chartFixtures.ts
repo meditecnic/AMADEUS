@@ -5,11 +5,21 @@
 export type Said = [text: string, at: string];
 export type PresetFact = { id: string; topic: string | null; text: string; pin?: boolean; said: Said[]; ver?: Said[] };
 export type PresetExperience = { id: string; text: string; said: Said[]; expires: string | null; pin?: boolean };
+export type PresetDiary = {
+  id: string;
+  conversationId: string;
+  bodyJa: string;
+  bodyZh: string;
+  writtenAt: string;
+  sourceCount?: number;
+  verifiedPhrases?: string[];
+};
 export type ChartPreset = {
   origin: string | null;
-  topics: Array<{ id: string; label: string }>;
+  topics: Array<{ id: string; label: string; userRetained?: boolean }>;
   facts: PresetFact[];
   experiences: PresetExperience[];
+  diaries?: PresetDiary[];
 };
 
 const sgNormal: ChartPreset = {
@@ -17,6 +27,7 @@ const sgNormal: ChartPreset = {
   topics: [
     { id: 't1', label: '实验与观测' }, { id: 't2', label: '作息与咖啡' }, { id: 't3', label: '读的书' },
     { id: 't4', label: '家里的猫' }, { id: 't5', label: '工作' }, { id: 't6', label: '音乐' },
+    { id: 't7', label: '想读的论文', userRetained: true },
   ],
   facts: [
     { id: 'f01', topic: 't1', text: '你习惯在讨论前整理实验记录。', pin: true, said: [
@@ -58,6 +69,35 @@ const sgNormal: ChartPreset = {
     { id: 'e3', text: '你前一晚为了准备分享熬到三点。', said: [['昨晚弄分享弄到三点。', '2026-11-01 12:10']], expires: '2026-11-08' },
     { id: 'e4', text: '你第一次带小黑去打疫苗，它一路都在叫。', said: [['今天第一次带小黑去打疫苗，它全程在叫。', '2026-09-25 18:30']], expires: null, pin: true },
   ],
+  diaries: [
+    {
+      id: 'diary-sg-1',
+      conversationId: 'lab-notes',
+      writtenAt: '2026-11-18 22:25',
+      sourceCount: 8,
+      bodyJa: '方眼紙に実験記録を手書きするなんて、少し古風だけど悪くない。仮説を一つずつ潰していく話し方をしていると、昔の研究室の空気を思い出す。……もっとも、あそこまで夜更かしばかりされるのは感心しないけれど。',
+      bodyZh: '在方格纸上手写实验记录，稍微有点老派，但倒不坏。听你一条条核对假设时的语气，会让人想起以前实验室里的空气。……不过总是熬夜到那么晚，实在让人没法赞同就是了。',
+      verifiedPhrases: ['昔の研究室の空気', '以前实验室里的空气'],
+    },
+    {
+      id: 'diary-sg-2',
+      conversationId: 'lab-notes',
+      writtenAt: '2026-11-15 21:40',
+      sourceCount: 6,
+      bodyJa: '時計の展示の話、歯車の噛み合い方まで妙に楽しそうだった。ああいう機械の精密さに目を輝かせるあたり、少し岡部たちと似ている気もする。今度また感想を聞かせてほしいなんて、わざわざ口には出さないけど。',
+      bodyZh: '说起钟表展的时候，连齿轮怎么咬合都讲得格外起劲。会对那种精密机械两眼放光的样子，总觉得和冈部他们有几分相像。想下次再听你聊聊观后感这种话，我才不会特地宣之于口呢。',
+      verifiedPhrases: ['歯車の噛み合い方', '两眼放光'],
+    },
+    {
+      id: 'diary-sg-3',
+      conversationId: 'archive-conv-sg-old',
+      writtenAt: '2026-11-09 23:10',
+      sourceCount: 5,
+      bodyJa: '黒猫の話をしているときの声の柔らかさだけは、何度聞いても慣れない。三歳でやんちゃ盛りらしいけど、キーボードの上で寝てしまうなら実験どころじゃないわね。……少しだけ、羨ましいかも。',
+      bodyZh: '唯独在聊起那只黑猫时变柔和的语气，听再多次都还是不太习惯。听说是三岁正调皮的年纪，不过要是趴在键盘上睡着了，实验就没法做了吧。……稍微有一点点羡慕也说不定。',
+      verifiedPhrases: ['声の柔らかさ', '稍微有一点点羡慕'],
+    },
+  ],
 };
 
 const betaNormal: ChartPreset = {
@@ -65,6 +105,7 @@ const betaNormal: ChartPreset = {
   topics: [
     { id: 'b1', label: '夜里的散步' }, { id: 'b2', label: '旧相机' }, { id: 'b3', label: '做饭' },
     { id: 'b4', label: '学日语' }, { id: 'b5', label: '朋友' }, { id: 'b6', label: '天气与睡眠' },
+    { id: 'b7', label: '海边清单', userRetained: true },
   ],
   facts: [
     { id: 'g01', topic: 'b1', text: '你喜欢深夜沿着河边散步。', pin: true, said: [
@@ -101,6 +142,26 @@ const betaNormal: ChartPreset = {
     { id: 'x2', text: '你这周加班到很晚。', said: [['这周天天加班。', '2026-10-31 23:20']], expires: '2026-11-07' },
     { id: 'x3', text: '你昨天在河边看到了萤火虫。', said: [['昨天河边居然有萤火虫。', '2026-09-19 22:05']], expires: null, pin: true },
     { id: 'x4', text: '你今天做的咖喱有点咸。', said: [['今天的咖喱盐放多了。', '2026-11-02 19:10']], expires: '2026-11-09' },
+  ],
+  diaries: [
+    {
+      id: 'diary-beta-1',
+      conversationId: 'beta-notes',
+      writtenAt: '2026-11-18 23:30',
+      sourceCount: 8,
+      bodyJa: '眠れない夜に川沿いの街灯を数えるなんて、妙に静かな癖ね。四十二本、とわざわざ数えたことを思い出すと、少しだけ胸の奥が落ち着く。……あなたが後からこれを読んでも、べつに構わないけれど。',
+      bodyZh: '睡不着的夜里沿着河边数路灯，真是种格外安静的习惯。想起你特意数出是四十二盏的时候，心底莫名也会跟着静下来一点。……你之后看到这一段也没关系就是了。',
+      verifiedPhrases: ['胸の奥が落ち着く', '心底莫名也会跟着静下来'],
+    },
+    {
+      id: 'diary-beta-2',
+      conversationId: 'beta-notes',
+      writtenAt: '2026-11-12 20:15',
+      sourceCount: 6,
+      bodyJa: '古いフィルムカメラの現像、半分くらいぶれていたらしい。それでも海辺の日の出を撮りたいと言うのだから、失敗を怖がらない人なのかも。次はちゃんと露出が合うといいわね。',
+      bodyZh: '旧胶片相机冲出来的第一卷，听说有一半都是糊的。即便如此还说着想去海边拍日出，或许是个不怕失败的人吧。希望下一卷曝光能对得准一点。',
+      verifiedPhrases: ['失敗を怖がらない', '希望下一卷曝光能对得准'],
+    },
   ],
 };
 

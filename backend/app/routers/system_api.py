@@ -769,6 +769,14 @@ async def create_memory_topic(request: Request, scope: dict = Depends(_memory_sc
         return {**await create_topic(**scope, display_label=display_label), "scope": scope}
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
 
 
 @router.delete("/api/memory/topics/{topic_id}", status_code=204)
@@ -780,13 +788,33 @@ async def delete_memory_topic(topic_id: str, scope: dict = Depends(_memory_scope
         await delete_empty_topic(**scope, topic_id=topic_id)
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
 
 
 @router.get("/api/memory/diaries")
 async def list_memory_diaries(scope: dict = Depends(_memory_scope_params)):
+    from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.diaries import list_diaries
 
-    return await list_diaries(**scope)
+    try:
+        return await list_diaries(**scope)
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
 
 
 @router.delete("/api/memory/diaries/{diary_id}", status_code=204)
@@ -798,6 +826,14 @@ async def delete_memory_diary(diary_id: str, scope: dict = Depends(_memory_scope
         await delete_diary(**scope, diary_id=diary_id)
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
 
 
 @router.patch("/api/memory/topics/{topic_id}")

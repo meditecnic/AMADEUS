@@ -528,11 +528,11 @@ export type ExperienceReadingModel = {
 };
 
 const CHANGE_KIND_ZH: Record<string, string> = {
-  create: '建立',
-  refine: '细化',
-  supersede: '修订替代',
-  user_edit: '用户修订',
-  legacy_import: '历史导入',
+  create: '初次记下',
+  refine: '后来补充',
+  supersede: '按新说法更新',
+  user_edit: '由你改过',
+  legacy_import: '旧记录迁入',
 };
 
 export function changeKindHuman(changeKind: string): string {

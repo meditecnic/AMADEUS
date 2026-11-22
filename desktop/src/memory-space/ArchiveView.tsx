@@ -2,7 +2,7 @@ import { MemorySelect } from './MemorySelect';
 import { motion, useReducedMotion } from 'motion/react';
 import { useState, useSyncExternalStore } from 'react';
 
-import type { ArchiveScope } from './archiveApi';
+import type { ArchiveScope, DiaryBrowseRow } from './archiveApi';
 import {
   scopeLabel,
   type ArchiveModule,
@@ -120,6 +120,41 @@ function ExperienceReading({ model }: { model: ExperienceReadingModel }) {
   );
 }
 
+function diarySourceLabel(conversationId: string, titles: Record<string, string>): string {
+  const title = titles[conversationId];
+  return title ? `来自对话「${title}」` : '来自一段早先的对话';
+}
+
+function DiaryReading({ row, sourceLabel }: { row: DiaryBrowseRow; sourceLabel: string }) {
+  const writtenHuman = formatTimeHuman(row.writtenAt);
+  return (
+    <div className="archive-reading archive-diary-reading">
+      <p className="archive-diary-aside">她在对话之后写下并留在记忆档案里，知道你也看得到；这里可以阅读或删除，不能修改。</p>
+      <p className="archive-diary-meta" data-testid="archive-diary-meta">
+        {[writtenHuman, sourceLabel].filter(Boolean).join(' · ')}
+      </p>
+      <div className="archive-diary-sheet">
+        <p className="archive-diary-ja" lang="ja" data-testid="archive-diary-ja">
+          {row.bodyJa}
+        </p>
+        <div className="archive-diary-zh-block">
+          <span className="archive-diary-zh-label">中文译文</span>
+          <p className="archive-diary-zh" lang="zh-CN" data-testid="archive-diary-zh">
+            {row.bodyZh}
+          </p>
+        </div>
+      </div>
+      <details data-testid="archive-diagnostics">
+        <summary>诊断</summary>
+        <dl>
+          <div><dt>diary_id</dt><dd>{row.diaryId}</dd></div>
+          <div><dt>conversation_id</dt><dd>{row.conversationId}</dd></div>
+        </dl>
+      </details>
+    </div>
+  );
+}
+
 export function ArchiveView({ module, scope, width, reducedMotion: motionPreference }: ArchiveViewProps) {
   const systemReducedMotion = useReducedMotion();
   const reducedMotion = motionPreference ?? systemReducedMotion;
@@ -137,8 +172,13 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
     state.selection?.kind === 'experience'
       ? state.experiences.rows.find((row) => row.experienceId === state.selection?.recordId) ?? null
       : null;
+  const selectedDiaryRow =
+    state.selection?.kind === 'diary'
+      ? state.diaries.rows.find((row) => row.diaryId === state.selection?.recordId) ?? null
+      : null;
 
   const readingModel: FactReadingModel | ExperienceReadingModel | null = (() => {
+    if (state.selection?.kind === 'diary') return null;
     if (state.details.status !== 'ready' || !state.details.payload) return null;
     const payload = state.details.payload;
     if ('fact' in payload) {
@@ -153,6 +193,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
   const detailOpen = state.selection !== null || state.details.status !== 'idle';
   const activeList = state.activeKind === 'fact' ? state.facts : state.experiences;
   const filtered = Boolean(state.filters.query || state.filters.topicId || state.filters.pinnedOnly || state.filters.within);
+  const topicOnlyFilter = Boolean(state.filters.topicId && !state.filters.query && !state.filters.pinnedOnly && !state.filters.within);
   const selectedTopicId = (selectedFactRow ? selectedFactRow.topicId : readingModel?.kind === 'fact' ? readingModel.diagnostics.topicIdRaw : null) ?? '';
   const showList = !narrow || !detailOpen;
   const showDetail = !narrow || detailOpen;
@@ -199,80 +240,174 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
           >
             片段（{state.experiences.total}）
           </button>
-        </div>
-        <label className="archive-search">
-          <span className="sr-only">搜索档案</span>
-          <input
-            data-testid="archive-query"
-            value={state.filters.query}
-            placeholder="搜索记忆内容"
-            aria-label="搜索档案"
-            onChange={(event) => module.dispatch({ type: 'set-query', query: event.target.value })}
-          />
-        </label>
-        <MemorySelect
-          aria-label="主题筛选"
-          data-testid="archive-topic-select"
-          value={state.filters.topicId ?? ''}
-          onValueChange={(value) =>
-            module.dispatch({ type: 'set-topic', topicId: value || null })
-          }
-        >
-          <option value="">全部主题</option>
-          {state.topics.items.map((topic) => (
-            <option key={topic.topicId} value={topic.topicId}>
-              {topic.displayLabel}（{topic.activeFactCount}）
-            </option>
-          ))}
-        </MemorySelect>
-        {state.topicRename ? (
-          <span className="archive-topic-rename">
-            <input
-              aria-label="主题新名称"
-              data-testid="archive-topic-rename-input"
-              value={state.topicRename.draft}
-              onChange={(event) =>
-                module.dispatch({ type: 'rename-topic-input', text: event.target.value })
-              }
-            />
-            <button
-              type="button"
-              data-testid="archive-topic-rename-save"
-              disabled={state.topicRename.saving}
-              onClick={() => module.dispatch({ type: 'rename-topic-save' })}
-            >
-              保存名称
-            </button>
-            <button
-              type="button"
-              onClick={() => module.dispatch({ type: 'rename-topic-cancel' })}
-            >
-              取消
-            </button>
-          </span>
-        ) : state.filters.topicId ? (
           <button
             type="button"
-            data-testid="archive-topic-rename"
-            onClick={() =>
-              module.dispatch({ type: 'rename-topic-start', topicId: state.filters.topicId as string })
-            }
+            role="tab"
+            id="archive-tab-diary"
+            data-testid="archive-tab-diary"
+            aria-selected={state.activeKind === 'diary'}
+            aria-controls="archive-panel-diary"
+            onClick={() => module.dispatch({ type: 'set-kind', kind: 'diary' })}
           >
-            重命名该主题
+            手记（{state.diaries.rows.length}）
           </button>
+        </div>
+        {state.activeKind !== 'diary' ? (
+          <>
+            <label className="archive-search">
+              <span className="sr-only">搜索档案</span>
+              <input
+                data-testid="archive-query"
+                value={state.filters.query}
+                placeholder="搜索记忆内容"
+                aria-label="搜索档案"
+                onChange={(event) => module.dispatch({ type: 'set-query', query: event.target.value })}
+              />
+            </label>
+            <MemorySelect
+              aria-label="主题筛选"
+              data-testid="archive-topic-select"
+              value={state.filters.topicId ?? ''}
+              onValueChange={(value) =>
+                module.dispatch({ type: 'set-topic', topicId: value || null })
+              }
+            >
+              <option value="">全部主题</option>
+              {state.topics.items.map((topic) => (
+                <option key={topic.topicId} value={topic.topicId}>
+                  {topic.displayLabel}（{topic.activeFactCount}）
+                </option>
+              ))}
+            </MemorySelect>
+            {state.topicCreate ? (
+              <span className="archive-topic-create" data-testid="archive-topic-create-form">
+                <input
+                  aria-label="新主题名称"
+                  data-testid="archive-topic-create-input"
+                  placeholder="输入主题名称"
+                  value={state.topicCreate.draft}
+                  disabled={state.topicCreate.saving}
+                  onChange={(event) =>
+                    module.dispatch({ type: 'create-topic-input', text: event.target.value })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      module.dispatch({ type: 'create-topic-save' });
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault();
+                      module.dispatch({ type: 'create-topic-cancel' });
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  data-testid="archive-topic-create-save"
+                  disabled={state.topicCreate.saving}
+                  onClick={() => module.dispatch({ type: 'create-topic-save' })}
+                >
+                  创建
+                </button>
+                <button
+                  type="button"
+                  data-testid="archive-topic-create-cancel"
+                  onClick={() => module.dispatch({ type: 'create-topic-cancel' })}
+                >
+                  取消
+                </button>
+              </span>
+            ) : state.topicRename ? (
+              <span className="archive-topic-rename">
+                <input
+                  aria-label="主题新名称"
+                  data-testid="archive-topic-rename-input"
+                  value={state.topicRename.draft}
+                  onChange={(event) =>
+                    module.dispatch({ type: 'rename-topic-input', text: event.target.value })
+                  }
+                />
+                <button
+                  type="button"
+                  data-testid="archive-topic-rename-save"
+                  disabled={state.topicRename.saving}
+                  onClick={() => module.dispatch({ type: 'rename-topic-save' })}
+                >
+                  保存名称
+                </button>
+                <button
+                  type="button"
+                  onClick={() => module.dispatch({ type: 'rename-topic-cancel' })}
+                >
+                  取消
+                </button>
+              </span>
+            ) : (
+              <>
+                {state.activeKind === 'fact' ? (
+                  <button
+                    type="button"
+                    data-testid="archive-topic-create"
+                    onClick={() => module.dispatch({ type: 'create-topic-start' })}
+                  >
+                    + 新建主题
+                  </button>
+                ) : null}
+                {state.filters.topicId ? (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="archive-topic-rename"
+                      onClick={() =>
+                        module.dispatch({ type: 'rename-topic-start', topicId: state.filters.topicId as string })
+                      }
+                    >
+                      重命名该主题
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="archive-topic-delete"
+                      disabled={state.topicDeleting}
+                      onClick={() =>
+                        module.dispatch({ type: 'delete-topic', topicId: state.filters.topicId as string })
+                      }
+                    >
+                      删除该主题
+                    </button>
+                  </>
+                ) : null}
+              </>
+            )}
+            <label>
+              <input
+                type="checkbox"
+                data-testid="archive-pinned-only"
+                checked={state.filters.pinnedOnly}
+                onChange={(event) =>
+                  module.dispatch({ type: 'set-pinned-only', pinnedOnly: event.target.checked })
+                }
+              />
+              仅置顶
+            </label>
+          </>
         ) : null}
-        <label>
-          <input
-            type="checkbox"
-            data-testid="archive-pinned-only"
-            checked={state.filters.pinnedOnly}
-            onChange={(event) =>
-              module.dispatch({ type: 'set-pinned-only', pinnedOnly: event.target.checked })
-            }
-          />
-          仅置顶
-        </label>
       </div>
+
+      {state.topicNotice ? (
+        <p
+          className={`archive-topic-notice is-${state.topicNotice.kind}`}
+          role={state.topicNotice.kind === 'error' ? 'alert' : 'status'}
+          data-testid="archive-topic-notice"
+        >
+          <span>{state.topicNotice.text}</span>
+          <button
+            type="button"
+            data-testid="archive-topic-notice-dismiss"
+            onClick={() => module.dispatch({ type: 'dismiss-topic-notice' })}
+          >
+            知道了
+          </button>
+        </p>
+      ) : null}
 
       {state.filters.within ? (
         <p className="archive-within" data-testid="archive-within">
@@ -355,7 +490,11 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 ))}
               </ul>
               {state.facts.status === 'ready' && !state.facts.rows.length ? (
-                <p data-testid="archive-facts-empty">此范围内没有可显示的认知。</p>
+                <p data-testid="archive-facts-empty">
+                  {topicOnlyFilter
+                    ? '这个主题里还没有认知。可以把已有认知归到这里，或直接删除这个空主题。'
+                    : '此范围内没有可显示的认知。'}
+                </p>
               ) : null}
               <div className="archive-pager">
                 <span data-testid="archive-facts-total">共 {state.facts.total} 条</span>
@@ -461,31 +600,147 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
               </div>
             </section>
             ) : null}
+
+            {state.activeKind === 'diary' ? (
+            <section
+              role="tabpanel"
+              id="archive-panel-diary"
+              aria-labelledby="archive-tab-diary"
+              aria-label="手记档案"
+              data-testid="archive-diaries-section"
+            >
+              <div className="archive-diary-list-head">
+                <h3>手记</h3>
+                <p className="archive-diary-whisper">她在对话之后留在记忆档案里的手记，知道你也看得到。</p>
+              </div>
+              {state.diaries.status === 'loading' ? <p>正在读取手记…</p> : null}
+              {state.diaries.status === 'failed' ? (
+                <p role="alert">手记列表暂时不可用。</p>
+              ) : null}
+              <ul>
+                {state.diaries.rows.map((row) => {
+                  const meta = [
+                    formatTimeHuman(row.writtenAt),
+                    diarySourceLabel(row.conversationId, state.conversationTitles),
+                  ].filter(Boolean).join(' · ');
+                  return (
+                    <li key={row.diaryId}>
+                      <button
+                        type="button"
+                        data-testid="archive-row"
+                        data-kind="diary"
+                        data-selected={
+                          state.selection?.kind === 'diary' && state.selection.recordId === row.diaryId
+                            ? 'true'
+                            : 'false'
+                        }
+                        onClick={() =>
+                          module.dispatch({ type: 'select', kind: 'diary', recordId: row.diaryId })
+                        }
+                      >
+                        <span className="archive-row-kind is-diary">手记</span>
+                        <span className="archive-row-text">{row.bodyZh || row.bodyJa}</span>
+                        {meta ? <span className="archive-row-time">{meta}</span> : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {state.diaries.status === 'ready' && !state.diaries.rows.length ? (
+                <p className="archive-diaries-empty" data-testid="archive-diaries-empty">
+                  她还没有写下手记。同一段对话聊够几轮，或停下来过一会儿后，她会在后台记下一小段放在这里。
+                </p>
+              ) : null}
+              <p className="archive-diary-total" data-testid="archive-diaries-total">
+                共 {state.diaries.rows.length} 篇
+              </p>
+            </section>
+            ) : null}
           </div>
         ) : null}
 
         {showDetail ? (
-          <aside className="archive-detail" data-testid="archive-detail" aria-label="选中记录" data-empty={!state.selection && state.details.status === 'idle'}>
+          <aside
+            className="archive-detail"
+            data-testid="archive-detail"
+            aria-label="选中记录"
+            data-empty={!state.selection && state.details.status === 'idle'}
+            data-reading-kind={state.selection?.kind === 'diary' && selectedDiaryRow ? 'diary' : undefined}
+          >
             {narrow ? (
               <button type="button" data-testid="archive-back" onClick={() => module.dispatch({ type: 'back' })}>
                 返回列表
               </button>
             ) : null}
             {!state.selection && state.details.status === 'idle' ? (
-              <div className="archive-detail-empty">
-                <span className="archive-empty-caption" aria-hidden="true">记忆 / 读取区</span>
-                <p>{activeList.status === 'loading' ? '正在读取记忆' : activeList.status === 'failed' ? '记忆暂时不可用' : activeList.total === 0 ? filtered ? '没有符合条件的记忆' : '这里还没有记忆' : '选择一条记忆，展开它的来处'}</p>
-                <span>{activeList.status === 'failed' ? '目录读取失败，请稍后重试。' : filtered ? '可以调整搜索内容或筛选范围。' : '认知、片段与来源，会在这里连成线索。'}</span>
-              </div>
+              state.activeKind === 'diary' ? (
+                <div className="archive-detail-empty is-diary">
+                  <span className="archive-empty-caption" aria-hidden="true">记忆档案 / 手记</span>
+                  <p>
+                    {state.diaries.status === 'loading'
+                      ? '正在读取手记'
+                      : state.diaries.status === 'failed'
+                        ? '手记暂时不可用'
+                        : state.diaries.rows.length === 0
+                          ? '这里还没有她的手记'
+                          : '翻开一条她的手记'}
+                  </p>
+                  <span>
+                    {state.diaries.status === 'failed'
+                      ? '目录读取失败，请稍后重试。'
+                      : state.diaries.rows.length === 0
+                        ? '同一段对话聊够几轮，或停下来过一会儿后，她会在后台写下一小段留在这里。'
+                        : '她在对话之后写下、留给你们共看的手记；你可以阅读或删除，不能修改。'}
+                  </span>
+                </div>
+              ) : (
+                <div className="archive-detail-empty">
+                  <span className="archive-empty-caption" aria-hidden="true">记忆 / 读取区</span>
+                  <p>{activeList.status === 'loading' ? '正在读取记忆' : activeList.status === 'failed' ? '记忆暂时不可用' : activeList.total === 0 ? (state.activeKind === 'fact' && topicOnlyFilter ? '这个主题里还没有认知' : filtered ? '没有符合条件的记忆' : '这里还没有记忆') : '选择一条记忆，展开它的来处'}</p>
+                  <span>{activeList.status === 'failed' ? '目录读取失败，请稍后重试。' : state.activeKind === 'fact' && topicOnlyFilter && activeList.total === 0 ? '可以把已有认知归到这里，或直接删除这个空主题。' : filtered ? '可以调整搜索内容或筛选范围。' : '认知、片段与来源，会在这里连成线索。'}</span>
+                </div>
+              )
             ) : null}
-            {state.details.status === 'loading' ? <p>正在读取记录…</p> : null}
-            {state.details.status === 'not-found' ? (
+            {state.selection?.kind === 'diary' ? (
+              selectedDiaryRow ? (
+                <motion.div
+                  className="archive-reading-page is-diary"
+                  key={`diary:${selectedDiaryRow.diaryId}`}
+                  initial={reducedMotion ? false : { opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: reducedMotion ? 0 : 0.3 }}
+                >
+                  <p className="archive-detail-kind is-diary">
+                    她的手记{effectiveScope ? ` · ${scopeLabel(effectiveScope)}` : ''}
+                  </p>
+                  <DiaryReading
+                    row={selectedDiaryRow}
+                    sourceLabel={diarySourceLabel(selectedDiaryRow.conversationId, state.conversationTitles)}
+                  />
+                  <div className="archive-governance">
+                    <button
+                      type="button"
+                      data-testid="archive-delete-record"
+                      onClick={() => module.dispatch({ type: 'request-delete' })}
+                    >
+                      删除
+                    </button>
+                  </div>
+                </motion.div>
+              ) : state.diaries.status === 'loading' ? (
+                <p>正在读取手记…</p>
+              ) : (
+                <p role="status">该手记在此范围内不再可用</p>
+              )
+            ) : null}
+            {state.selection?.kind !== 'diary' && state.details.status === 'loading' ? <p>正在读取记录…</p> : null}
+            {state.selection?.kind !== 'diary' && state.details.status === 'not-found' ? (
               <p role="status">该记忆在此范围内不再可用</p>
             ) : null}
-            {state.details.status === 'failed' ? (
+            {state.selection?.kind !== 'diary' && state.details.status === 'failed' ? (
               <p role="alert">记录暂时不可用。</p>
             ) : null}
-            {state.details.status === 'ready' && readingModel ? (
+            {state.selection?.kind !== 'diary' && state.details.status === 'ready' && readingModel ? (
               <motion.div className="archive-reading-page" key={`${state.selection?.kind}:${state.selection?.recordId}`}
                 initial={reducedMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: reducedMotion ? 0 : 0.3 }}>
@@ -541,7 +796,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                     disabled={state.selection?.kind === 'experience' && !selectedExperienceRow}
                     title={state.selection?.kind === 'experience' && !selectedExperienceRow ? '需要在列表中确认这条片段的置顶状态' : undefined}
                     onClick={() => {
-                      if (!state.selection) return;
+                      if (!state.selection || state.selection.kind === 'diary') return;
                       module.dispatch({
                         type: 'toggle-pin',
                         kind: state.selection.kind,
@@ -616,6 +871,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
 
             {state.deleteFlow ? (
               <div
+                ref={(node) => { node?.scrollIntoView?.({ block: 'nearest' }); }}
                 className="archive-delete-confirm"
                 role="alertdialog"
                 aria-label="删除确认"
@@ -624,11 +880,15 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 {state.deleteFlow.status === 'confirming' ? (
                   <>
                     <p>
-                      确认删除这条{state.deleteFlow.kind === 'fact' ? '认知' : '片段'}？
+                      确认删除这条{state.deleteFlow.kind === 'fact' ? '认知' : state.deleteFlow.kind === 'experience' ? '片段' : '手记'}？
                     </p>
                     <p>「{state.deleteFlow.summary}」</p>
                     <p>范围：{state.deleteFlow.scopeLabel}</p>
-                    <p>删除由后端执行内容清除，没有撤销。</p>
+                    <p>
+                      {state.deleteFlow.kind === 'diary'
+                        ? '正文会永久删除，无法撤销；她从下一轮起不会再想起这件事，也不会为这段对话重新写一篇。'
+                        : '删除由后端执行内容清除，没有撤销。'}
+                    </p>
                     <button
                       type="button"
                       data-testid="archive-delete-confirm-button"
