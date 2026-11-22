@@ -1176,7 +1176,7 @@ export function createArchiveModule(deps?: {
           selection: null,
           details: { status: 'idle', payload: null, errorCode: null },
           deleteFlow: null,
-          announcement: result.type === 'ok' ? '日记已删除' : '该日记在此范围内不再可用',
+          announcement: result.type === 'ok' ? '手记已删除' : '该手记在此范围内不再可用',
         });
         void loadDiaries();
         return;
@@ -1192,7 +1192,7 @@ export function createArchiveModule(deps?: {
                 ? result.code
                 : 'transport_error',
         },
-        announcement: '删除失败，日记未变更',
+        announcement: '删除失败，手记未变更',
       });
       return;
     }

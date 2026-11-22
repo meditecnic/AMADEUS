@@ -129,7 +129,7 @@ function DiaryReading({ row, sourceLabel }: { row: DiaryBrowseRow; sourceLabel: 
   const writtenHuman = formatTimeHuman(row.writtenAt);
   return (
     <div className="archive-reading archive-diary-reading">
-      <p className="archive-diary-aside">她以为这里只有自己看得见。</p>
+      <p className="archive-diary-aside">她在对话之后写下并留在记忆档案里，知道你也看得到；这里可以阅读或删除，不能修改。</p>
       <p className="archive-diary-meta" data-testid="archive-diary-meta">
         {[writtenHuman, sourceLabel].filter(Boolean).join(' · ')}
       </p>
@@ -249,7 +249,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
             aria-controls="archive-panel-diary"
             onClick={() => module.dispatch({ type: 'set-kind', kind: 'diary' })}
           >
-            日记（{state.diaries.rows.length}）
+            手记（{state.diaries.rows.length}）
           </button>
         </div>
         {state.activeKind !== 'diary' ? (
@@ -606,16 +606,16 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
               role="tabpanel"
               id="archive-panel-diary"
               aria-labelledby="archive-tab-diary"
-              aria-label="日记档案"
+              aria-label="手记档案"
               data-testid="archive-diaries-section"
             >
               <div className="archive-diary-list-head">
-                <h3>日记</h3>
-                <p className="archive-diary-whisper">她以为只有自己能看到的随手记。</p>
+                <h3>手记</h3>
+                <p className="archive-diary-whisper">她在对话之后留在记忆档案里的手记，知道你也看得到。</p>
               </div>
-              {state.diaries.status === 'loading' ? <p>正在读取日记…</p> : null}
+              {state.diaries.status === 'loading' ? <p>正在读取手记…</p> : null}
               {state.diaries.status === 'failed' ? (
-                <p role="alert">日记列表暂时不可用。</p>
+                <p role="alert">手记列表暂时不可用。</p>
               ) : null}
               <ul>
                 {state.diaries.rows.map((row) => {
@@ -638,7 +638,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                           module.dispatch({ type: 'select', kind: 'diary', recordId: row.diaryId })
                         }
                       >
-                        <span className="archive-row-kind is-diary">日记</span>
+                        <span className="archive-row-kind is-diary">手记</span>
                         <span className="archive-row-text">{row.bodyZh || row.bodyJa}</span>
                         {meta ? <span className="archive-row-time">{meta}</span> : null}
                       </button>
@@ -648,7 +648,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
               </ul>
               {state.diaries.status === 'ready' && !state.diaries.rows.length ? (
                 <p className="archive-diaries-empty" data-testid="archive-diaries-empty">
-                  她还没有写下日记。同一段对话聊够几轮，或停下来过一会儿后，她会在后台记下一小段。
+                  她还没有写下手记。同一段对话聊够几轮，或停下来过一会儿后，她会在后台记下一小段放在这里。
                 </p>
               ) : null}
               <p className="archive-diary-total" data-testid="archive-diaries-total">
@@ -675,22 +675,22 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
             {!state.selection && state.details.status === 'idle' ? (
               state.activeKind === 'diary' ? (
                 <div className="archive-detail-empty is-diary">
-                  <span className="archive-empty-caption" aria-hidden="true">私密手记 / 日记</span>
+                  <span className="archive-empty-caption" aria-hidden="true">记忆档案 / 手记</span>
                   <p>
                     {state.diaries.status === 'loading'
-                      ? '正在翻找日记'
+                      ? '正在读取手记'
                       : state.diaries.status === 'failed'
-                        ? '日记暂时不可用'
+                        ? '手记暂时不可用'
                         : state.diaries.rows.length === 0
-                          ? '这里还没有她的日记'
-                          : '翻开一条她的日记'}
+                          ? '这里还没有她的手记'
+                          : '翻开一条她的手记'}
                   </p>
                   <span>
                     {state.diaries.status === 'failed'
                       ? '目录读取失败，请稍后重试。'
                       : state.diaries.rows.length === 0
-                        ? '同一段对话聊够几轮，或停下来过一会儿后，她会在后台悄悄写下一小段。'
-                        : '她在对话之后写给自己的随手记，只有这里能看到。'}
+                        ? '同一段对话聊够几轮，或停下来过一会儿后，她会在后台写下一小段留在这里。'
+                        : '她在对话之后写下、留给你们共看的手记；你可以阅读或删除，不能修改。'}
                   </span>
                 </div>
               ) : (
@@ -711,7 +711,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   transition={{ duration: reducedMotion ? 0 : 0.3 }}
                 >
                   <p className="archive-detail-kind is-diary">
-                    她的日记{effectiveScope ? ` · ${scopeLabel(effectiveScope)}` : ''}
+                    她的手记{effectiveScope ? ` · ${scopeLabel(effectiveScope)}` : ''}
                   </p>
                   <DiaryReading
                     row={selectedDiaryRow}
@@ -728,9 +728,9 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   </div>
                 </motion.div>
               ) : state.diaries.status === 'loading' ? (
-                <p>正在读取日记…</p>
+                <p>正在读取手记…</p>
               ) : (
-                <p role="status">该日记在此范围内不再可用</p>
+                <p role="status">该手记在此范围内不再可用</p>
               )
             ) : null}
             {state.selection?.kind !== 'diary' && state.details.status === 'loading' ? <p>正在读取记录…</p> : null}
@@ -880,7 +880,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 {state.deleteFlow.status === 'confirming' ? (
                   <>
                     <p>
-                      确认删除这条{state.deleteFlow.kind === 'fact' ? '认知' : state.deleteFlow.kind === 'experience' ? '片段' : '日记'}？
+                      确认删除这条{state.deleteFlow.kind === 'fact' ? '认知' : state.deleteFlow.kind === 'experience' ? '片段' : '手记'}？
                     </p>
                     <p>「{state.deleteFlow.summary}」</p>
                     <p>范围：{state.deleteFlow.scopeLabel}</p>

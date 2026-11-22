@@ -3062,7 +3062,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onConfirm={() => { void confirmDeleteConversation(); }}
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         >
-          <p>「{deleteDialog.shown.title}」的聊天记录以及这段对话对应的日记都将被永久删除。</p>
+          <p>「{deleteDialog.shown.title}」的聊天记录以及这段对话对应的手记都将被永久删除。</p>
           <label className="ws2-dialog-check">
             <input
               type="checkbox"
@@ -3076,7 +3076,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </span>
           </label>
           <p className="ws2-dialog-hint" data-testid="delete-diary-note">
-            无论是否勾选，这段对话对应的日记都会随会话一并删除，无法恢复。
+            无论是否勾选，这段对话对应的手记都会随会话一并删除，无法恢复。
           </p>
         </ConfirmDialog>
       )}

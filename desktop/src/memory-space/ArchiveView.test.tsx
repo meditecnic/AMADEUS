@@ -566,19 +566,23 @@ describe('ArchiveView diaries and topic management', () => {
     render(<ArchiveView module={module} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('archive-tab-diary')).toHaveTextContent('日记（1）');
+      expect(screen.getByTestId('archive-tab-diary')).toHaveTextContent('手记（1）');
     });
     fireEvent.click(screen.getByTestId('archive-tab-diary'));
     await waitFor(() => {
       expect(screen.getByTestId('archive-diaries-section')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('archive-diaries-section').textContent).toContain('来自对话「实验记录」');
+    const diariesText = screen.getByTestId('archive-diaries-section').textContent ?? '';
+    expect(diariesText).toContain('来自对话「实验记录」');
+    expect(diariesText).not.toMatch(/只有自己|私密|悄悄/);
     fireEvent.click(screen.getByText('在方格纸上手写实验记录倒不坏。'));
 
     expect(screen.getByTestId('archive-diary-ja')).toHaveTextContent('方眼紙に実験記録を手書きするのは悪くない。');
     expect(screen.getByTestId('archive-diary-zh')).toHaveTextContent('在方格纸上手写实验记录倒不坏。');
     expect(screen.getByTestId('archive-diary-meta')).toHaveTextContent('来自对话「实验记录」');
-    expect(screen.getByTestId('archive-view').textContent).not.toContain('SECRET_PHRASE_NEVER_RENDER');
+    const archiveText = screen.getByTestId('archive-view').textContent ?? '';
+    expect(archiveText).not.toContain('SECRET_PHRASE_NEVER_RENDER');
+    expect(archiveText).not.toMatch(/只有自己|私密|悄悄/);
     // Diaries cannot be edited, pinned, or assigned a topic.
     expect(screen.queryByTestId('archive-edit-fact')).toBeNull();
     expect(screen.queryByTestId('archive-toggle-pin')).toBeNull();
@@ -587,7 +591,7 @@ describe('ArchiveView diaries and topic management', () => {
     // Two-step deletion confirmation explains permanent erasure and no rewrite.
     fireEvent.click(screen.getByTestId('archive-delete-record'));
     const confirm = screen.getByTestId('archive-delete-confirm');
-    expect(confirm.textContent).toContain('确认删除这条日记？');
+    expect(confirm.textContent).toContain('确认删除这条手记？');
     expect(confirm.textContent).toContain('正文会永久删除');
     expect(confirm.textContent).toContain('不会为这段对话重新写一篇');
     fireEvent.click(screen.getByTestId('archive-delete-confirm-button'));
@@ -595,7 +599,7 @@ describe('ArchiveView diaries and topic management', () => {
     await waitFor(() => {
       expect(screen.getByTestId('archive-diaries-empty')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('archive-tab-diary')).toHaveTextContent('日记（0）');
+    expect(screen.getByTestId('archive-tab-diary')).toHaveTextContent('手记（0）');
     expect(screen.getByTestId('archive-diaries-empty').textContent).toContain('聊够几轮');
     module.dispose();
   });

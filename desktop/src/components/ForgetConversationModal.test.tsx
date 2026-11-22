@@ -17,7 +17,7 @@ describe('ForgetConversationModal', () => {
     );
 
     expect(screen.getByTestId('forget-diary-note')).toHaveTextContent(
-      '她已写下的日记会保留；若勾选上方选项，这段对话的日记也会一并删除。',
+      '她已写下的手记会保留；若勾选上方选项，这段对话的手记也会一并删除。',
     );
     fireEvent.click(screen.getByRole('button', { name: '清空会话内容' }));
     expect(onConfirm).toHaveBeenLastCalledWith(false);
@@ -33,7 +33,7 @@ describe('ForgetConversationModal', () => {
     expect(screen.getByText('你手动确认、修改或置顶的记忆，以及其他对话也提过的事会保留。')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /^同时忘掉只在这段对话里提过的事/ }));
     expect(screen.getByTestId('forget-diary-note')).toHaveTextContent(
-      '这段对话对应的日记也会一并删除，无法恢复。',
+      '这段对话对应的手记也会一并删除，无法恢复。',
     );
     fireEvent.click(screen.getByRole('button', { name: '清空会话内容' }));
     expect(onConfirm).toHaveBeenLastCalledWith(true);
