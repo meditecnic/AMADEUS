@@ -1583,6 +1583,9 @@ async def _bind_turn_conversation(session: SessionState) -> None:
         session.conversation_mode = "history"
         # Turn-start snapshot from conversation record (Q21 immutable); never infer.
         session.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
+        session.content_epoch = await models.get_conversation_content_epoch(
+            session.session_id, session.worldline, session.conversation_id,
+        )
     else:
         # Always re-sync mode from durable conversation row so switch/rollback
         # cannot leave a stale self/okabe label on the wrong session (P3).
@@ -1665,9 +1668,7 @@ async def processor_loop(
         session.active_turn_id = turn_id
         await _bind_turn_conversation(session)
         conversation_id = session.conversation_id
-        content_epoch = await models.get_conversation_content_epoch(
-            session.session_id, turn_worldline, conversation_id,
-        )
+        content_epoch = session.content_epoch
         from app.services.model_usage import set_chat_context
 
         set_chat_context(turn_worldline, conversation_id)
