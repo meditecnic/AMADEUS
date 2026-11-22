@@ -1583,9 +1583,6 @@ async def _bind_turn_conversation(session: SessionState) -> None:
         session.conversation_mode = "history"
         # Turn-start snapshot from conversation record (Q21 immutable); never infer.
         session.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
-        session.content_epoch = await models.get_conversation_content_epoch(
-            session.session_id, session.worldline, session.conversation_id,
-        )
     else:
         # Always re-sync mode from durable conversation row so switch/rollback
         # cannot leave a stale self/okabe label on the wrong session (P3).
@@ -1668,13 +1665,11 @@ async def processor_loop(
         session.active_turn_id = turn_id
         await _bind_turn_conversation(session)
         conversation_id = session.conversation_id
-        content_epoch = session.content_epoch
         from app.services.model_usage import set_chat_context
 
         set_chat_context(turn_worldline, conversation_id)
         turn_api_key = session.api_key
         turn_identity_mode = getattr(session, "identity_mode", None)
-        active_history = session.history
         try:
             registered_provider = provider_registry.snapshot(
                 session.provider_id,
@@ -1710,6 +1705,16 @@ async def processor_loop(
             ),
         )
         turn_provider.require(ProviderTask.CHAT)
+        content_epoch = await models.get_conversation_content_epoch(
+            session.session_id, turn_worldline, conversation_id,
+        )
+        if content_epoch != session.content_epoch:
+            await session.reload_history()
+            if pending_user is not None:
+                session.append_message(pending_user)
+                pending_user = session._history[-1]
+            session.content_epoch = content_epoch
+        active_history = session.history
         if session.protocol_version >= 2:
             async def emit_segment_event(event: dict):
                 payload = dict(event)
