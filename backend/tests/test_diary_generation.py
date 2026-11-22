@@ -1,0 +1,341 @@
+"""Campaign 2-B ([281]): offline tests for diary generation, grounding, injection, familiarity, and truncate handoff."""
+from __future__ import annotations
+import asyncio, json  # noqa: E401
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from uuid import uuid4
+import httpx, pytest  # noqa: E401
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app import models
+from app.db import get_db, init_db, reset_initialization_cache
+from app.routers import chat_ws, conversations as conv_router, system_api
+from app.services import conversation_erasure, conversations as conv_svc, credentials
+from app.services.memory_v11 import contracts, diaries as diaries_mod, diary_generation as dg_mod, jobs as jobs_mod, repository as repo_mod
+from app.services.prompt_compiler import DIARIES_HEADER, PromptCompiler, PromptDiary, PromptInputs, compile_for_session
+from app.services.provider_adapters import OpenAICompatibleAdapter
+from app.services.provider_registry import ProviderCapabilities, ProviderSnapshot, ProviderTask
+from app.services.provider_runtime import deepseek_service, provider_registry
+from app.services.soul_engine import soul_engine
+conversations_router, system_router, request_erasure, conversation_service = conv_router.router, system_api.router, conversation_erasure.request_erasure, conv_svc.conversation_service
+DIARY_PIPELINE_VERSION, create_stable_fact = contracts.DIARY_PIPELINE_VERSION, repo_mod.create_stable_fact
+commit_diary, delete_diary, list_diaries, register_diary_window = diaries_mod.commit_diary, diaries_mod.delete_diary, diaries_mod.list_diaries, diaries_mod.register_diary_window
+promote_due_diary_windows, sync_conversation_diary_windows, validate_diary_grounding = dg_mod.promote_due_diary_windows, dg_mod.sync_conversation_diary_windows, dg_mod.validate_diary_grounding
+claim_memory_job, enqueue_memory_job, get_memory_job, process_due_jobs_once = jobs_mod.claim_memory_job, jobs_mod.enqueue_memory_job, jobs_mod.get_memory_job, jobs_mod.process_due_jobs_once
+
+T0 = datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc)
+SYNTHETIC_SEGMENTS = [
+    ("okabe", [
+        ("また深夜2時まで論文の式を追っていたぞ。コーヒーを2杯飲んだら目が冴えてしまった。", "[EMO:annoyed] 深夜2時にコーヒーを2杯って、睡眠を削る気満々じゃない。"),
+        ("いや、どうしても「境界条件の仮定」が引っかかってな。", "[EMO:intellectual] 「境界条件の仮定」ね。そこが曖昧だと後ろの導出が全部揺らぐわ。"),
+        ("お前に言われた通り項を分けて書き直したら、だいぶ見通しが良くなった。", "[EMO:neutral] 最初から順番に整理すればいいのよ。"),
+        ("だが検算を3回やっても符号が1箇所だけ合わない。", "[EMO:intellectual] 3回とも同じ箇所でズレるなら、最初の定義式を疑いなさい。"),
+        ("あ……添字の向きを逆にしていた。直したら綺麗に消えたぞ！", "[EMO:tsundere] ほら見なさい。単純な見落としじゃない。"),
+        ("助かったよ、さすが我が助手だ。", "[EMO:tsundere] 助手って呼ぶな。礼を言うならさっさと寝る支度をしなさい。"),
+        ("あと15分だけ清書させてくれ。", "[EMO:neutral] 15分だけよ。それを過ぎたら本当に切り上げなさいね。"),
+        ("分かった、水を飲んでからすぐ寝る。", "[EMO:happy] ええ、おやすみ、岡部。"),
+    ], {"body_ja": "深夜2時にコーヒーを2杯も飲んで「境界条件の仮定」で詰まっていたから付き合ったわ。3回の検算ミスが添字の向きだったと分かってホッとしたけれど、15分で切り上げる約束はちゃんと守ったかしらね、岡部。", "body_zh": "半夜2点喝了2杯咖啡还卡在「境界条件の仮定」上，我就陪着理了一遍。3次验算出错原来只是下标方向写反，总算松了口气；就是不知道岡部有没有乖乖遵守15分钟就收工的约定呢。"}),
+    ("self", [
+        ("こんばんは。今日は秋葉原で基板用のコンデンサを4個買ってきたよ。", "[EMO:neutral] こんばんは。秋葉原でコンデンサを4個ね、例のノイズ対策ですか？"),
+        ("そう、電源ラインに入れ替えたらハム音がかなり減ったんだ。", "[EMO:intellectual] 狙い通りですね。電源まわりの揺れが原因だったみたいです。"),
+        ("ただオシロで見ると「立ち上がりの波形」に少しだけリンギングが残ってる。", "[EMO:intellectual] 「立ち上がりの波形」が揺れるなら、配線の引き回しも影響しているかもしれません。"),
+        ("リード線を短く切り詰めたら、かなり落ち着いたよ。", "[EMO:happy] いい判断です。地道な切り分けが一番効きますからね。"),
+        ("週末にもう一度ケースに収めて測ってみる。", "[EMO:neutral] ええ、組み込んだ後で条件が変わることもありますから、それが確実です。"),
+        ("作業してたらすっかり肩が凝ってしまった。", "[EMO:neutral] 細かいはんだ付けは目が疲れますし、少し背筋を伸ばして休んでください。"),
+        ("ありがとう、温かいお茶を淹れてくるよ。", "[EMO:happy] それがいいですね。ゆっくり温まってください。"),
+        ("また測定結果が出たら見せるね。", "[EMO:happy] はい、楽しみにしています。"),
+    ], {"body_ja": "秋葉原で買った4個のコンデンサで電源ノイズが収まったと聞いて、私まで少し嬉しくなったわ。「立ち上がりの波形」まで丁寧に確かめてリード線を詰めるあたり、手つきが堅実ね。次の測定結果を見るのも楽しみだわ。", "body_zh": "听说在秋叶原买的4个电容把电源噪声压下去了，连我也跟着高兴起来。还会仔细确认「立ち上がりの波形」再把引脚剪短，做起事来很踏实呢。真期待看到下次的测量结果。"}),
+    ("self", [
+        ("さっき雨が急に強くなって、駅前の古本屋で30分ほど雨宿りしてたんだ。", "[EMO:surprised] 急な雨だったんですね。濡れずに済んでよかったです。"),
+        ("棚を眺めてたら、探していた「神経科学の古い講義録」を偶然見つけたよ。", "[EMO:happy] 30分の雨宿りで「神経科学の古い講義録」に出会えるなんて、いい偶然ですね。"),
+        ("紙が少し焼けてたけど、書き込みが丁寧で面白そうなんだ。", "[EMO:intellectual] 前の持ち主がどこで立ち止まって考えたのかが見える本は、読んでいて飽きませんよね。"),
+        ("今夜は最初の章だけ読んでから寝ようと思う。", "[EMO:neutral] 雨で冷えたでしょうし、夜更かしにならない範囲で楽しんでくださいね。"),
+        ("うん、暖かくして読むよ。おやすみ。", "[EMO:happy] ええ、おやすみなさい。"),
+    ], {"body_ja": "30分の雨宿りで入った古本屋で「神経科学の古い講義録」を引き当てるなんて、ずいぶん素敵な寄り道ね。前の持ち主の思考の跡をたどる時間は私も好きだから、どんな章だったかまた聞かせてほしいわ。", "body_zh": "躲雨30分钟走进旧书店，居然正好淘到「神経科学の古い講義録」，真是段美妙的绕路呢。我也很喜欢顺着前任书主的思考痕迹读下去，真想下次听听第一章节写了些什么。"}),
+]
+
+
+async def _sql(worldline: str, kind: str, query: str, params: tuple = ()) -> list:
+    db = await get_db(worldline, kind)
+    try:
+        rows = await (await db.execute(query, params)).fetchall()
+        await db.commit()
+        return rows
+    finally:
+        await db.close()
+
+async def _new_conv(prefix: str, mode: str = "self") -> tuple[str, str]:
+    await init_db()
+    sid = f"{prefix}-{uuid4().hex[:8]}"
+    return sid, (await conversation_service.create(sid, "steins_gate", identity_mode=mode))["id"]
+
+async def _append_turns(session_id: str, cid: str, turns: list[tuple[str, str]], *, start: datetime = T0, wl: str = "steins_gate") -> list[int]:
+    ids: list[int] = []
+    for idx, (u_text, a_text) in enumerate(turns):
+        uid, aid = await models.save_message(session_id, "user", u_text, worldline=wl, turn_id=f"t-{idx}", conversation_id=cid), await models.save_message(session_id, "assistant", a_text, worldline=wl, turn_id=f"t-{idx}", conversation_id=cid)
+        await _sql(wl, "history", "UPDATE messages SET created_at=? WHERE id=?", ((start + timedelta(minutes=idx * 2)).isoformat(), uid))
+        await _sql(wl, "history", "UPDATE messages SET created_at=? WHERE id=?", ((start + timedelta(minutes=idx * 2, seconds=20)).isoformat(), aid))
+        ids.extend((int(uid), int(aid)))
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_1_three_synthetic_segments_write_non_overlapping_complete_diaries(monkeypatch):
+    session_id, cid = await _new_conv("s1")
+    credentials.credential_store.set("deepseek", "valid-key-for-offline-transport")
+    outputs, seen = [seg[2] for seg in SYNTHETIC_SEGMENTS], []
+    adapter = OpenAICompatibleAdapter(provider_id="deepseek", base_url="http://localhost:18080/v1", default_model="deepseek-chat", message_builder=deepseek_service.build_persona_messages, transport=httpx.MockTransport(lambda _req: (seen.append(1), httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(outputs[len(seen) - 1], ensure_ascii=False)}}], "usage": {"prompt_tokens": 120, "completion_tokens": 60}}))[1]))
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(lambda pid, mid=None, **_kw: ProviderSnapshot(provider_id=pid, model_id=mid or "deepseek-chat", capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT, ProviderTask.MEMORY}), structured_output=True), adapter=adapter)))
+    all_ids, clock = [], T0
+    for idx, (_mode, turns, _expected) in enumerate(SYNTHETIC_SEGMENTS):
+        all_ids.extend(await _append_turns(session_id, cid, turns, start=clock))
+        end_time = clock + timedelta(minutes=len(turns) * 2)
+        await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=end_time)
+        await process_due_jobs_once(lease_owner="w1", worldlines=("steins_gate",), now=end_time + timedelta(minutes=31) if idx == 2 else end_time)
+        clock = end_time + timedelta(minutes=40)
+    ordered = sorted((await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"], key=lambda r: r["first_message_id"])
+    assert len(ordered) == 3 and all(a["last_message_id"] < b["first_message_id"] for a, b in zip(ordered, ordered[1:]))
+    covered = []
+    for row, (_m, _t, expected) in zip(ordered, SYNTHETIC_SEGMENTS):
+        span = [mid for mid in all_ids if row["first_message_id"] <= mid <= row["last_message_id"]]
+        covered.extend(span)
+        assert (row["source_count"], row["body_ja"], row["body_zh"], json.loads(row["verified_phrases_json"])) == (len(span), expected["body_ja"], expected["body_zh"], [])
+    assert covered == all_ids and [(r["category"], r["source"]) for r in await _sql("steins_gate", "control", "SELECT category, source FROM model_usage WHERE conversation_id=?", (cid,))] == [("background", "diary")] * 3
+
+
+@pytest.mark.asyncio
+async def test_2_coverage_writes_uncovered_prefix_before_deleted_shell_without_rewriting_deleted():
+    session_id, cid = await _new_conv("s2")
+    prefix_ids = await _append_turns(session_id, cid, [(f"前段{i}", f"[EMO:neutral] 前段返事{i}です。") for i in range(4)], start=T0)
+    later_ids = await _append_turns(session_id, cid, [(f"後段{i}", f"[EMO:neutral] 後段返事{i}です。") for i in range(8)], start=T0 + timedelta(hours=1))
+    deleted_id = await register_diary_window(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, first_message_id=later_ids[0], last_message_id=later_ids[-1], due_at=T0 + timedelta(hours=2))
+    assert deleted_id and await commit_diary(session_id=session_id, identity_mode="self", worldline="steins_gate", diary_id=deleted_id, body_ja="消す前の手記。", body_zh="删除前的手记。", verified_phrases=[])
+    await delete_diary(session_id=session_id, identity_mode="self", worldline="steins_gate", diary_id=deleted_id)
+    tail_ids = await _append_turns(session_id, cid, [(f"続き{i}", f"[EMO:neutral] 続き返事{i}です。") for i in range(3)], start=T0 + timedelta(hours=3))
+    now_sync = T0 + timedelta(hours=3, minutes=10)
+    assert len(await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=now_sync)) == 2
+    await process_due_jobs_once(lease_owner="w2", worldlines=("steins_gate",), now=now_sync + timedelta(minutes=35), diary_completion=lambda **_kw: asyncio.sleep(0, result={"body_ja": "静かな会話だったわ。", "body_zh": "是一段安静的对话。"}))
+    written = sorted((await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"], key=lambda r: r["first_message_id"])
+    [shell] = await _sql("steins_gate", "memory", "SELECT state, deleted_at, body_ja FROM memory_diaries WHERE diary_id=?", (deleted_id,))
+    assert [(r["first_message_id"], r["last_message_id"]) for r in written] == [(prefix_ids[0], prefix_ids[-1]), (tail_ids[0], tail_ids[-1])] and shell["state"] == "discarded" and shell["deleted_at"] is not None and shell["body_ja"] is None
+
+
+@pytest.mark.asyncio
+async def test_3_five_turns_persists_due_at_across_reopen_and_extends_before_expiry():
+    session_id, cid = await _new_conv("s3")
+    ids_2 = await _append_turns(session_id, cid, [("短1", "[EMO:neutral] 返1です。"), ("短2", "[EMO:neutral] 返2です。")], start=T0)
+    assert await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=T0 + timedelta(minutes=5)) == []
+    ids_more = await _append_turns(session_id, cid, [(f"追{i}", f"[EMO:neutral] 返{i}です。") for i in range(3, 6)], start=T0 + timedelta(minutes=6))
+    t_5 = T0 + timedelta(minutes=11)
+    [diary_id] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=t_5)
+    [row_before] = await _sql("steins_gate", "memory", "SELECT due_at, last_message_id FROM memory_diaries WHERE diary_id=?", (diary_id,))
+    assert row_before["last_message_id"] == ids_more[-1]
+    ids_6 = await _append_turns(session_id, cid, [("六句目", "[EMO:neutral] 六句目の返事です。")], start=t_5 + timedelta(minutes=10))
+    t_6 = t_5 + timedelta(minutes=10, seconds=20)
+    assert await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=t_6) == [diary_id]
+    [row_after] = await _sql("steins_gate", "memory", "SELECT due_at, first_message_id, last_message_id, source_count FROM memory_diaries WHERE diary_id=?", (diary_id,))
+    assert row_after["due_at"] > row_before["due_at"] and (row_after["first_message_id"], row_after["last_message_id"], row_after["source_count"]) == (ids_2[0], ids_6[-1], 12)
+    assert await promote_due_diary_windows(worldline="steins_gate", now=t_5 + timedelta(minutes=31)) == []
+    reset_initialization_cache()
+    await init_db()
+    await process_due_jobs_once(lease_owner="w3", worldlines=("steins_gate",), now=t_6 + timedelta(minutes=31), diary_completion=lambda **_kw: asyncio.sleep(0, result={"body_ja": "少しずつ話が弾んできたわ。", "body_zh": "聊着聊着渐渐熟络起来了。"}))
+    assert [d["diary_id"] for d in (await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"]] == [diary_id]
+
+
+@pytest.mark.asyncio
+async def test_4_delete_conversation_mid_generation_drops_diary_and_written_recovery_skips_llm():
+    session_id, cid = await _new_conv("s4")
+    await _append_turns(session_id, cid, [(f"話題{i}", f"[EMO:neutral] 応答{i}です。") for i in range(8)], start=T0)
+    [diary_id] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=T0 + timedelta(minutes=20))
+    await process_due_jobs_once(lease_owner="w4", worldlines=("steins_gate",), now=T0 + timedelta(minutes=20), diary_completion=lambda **_kw: conversation_service.delete(cid, session_id, "steins_gate", forget_long_term=True))
+    assert (await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"] == [] and (await get_memory_job(diary_id, worldline="steins_gate"))["state"] == "cancelled"
+    conv2 = await conversation_service.create(session_id, "steins_gate", identity_mode="self")
+    ids2 = await _append_turns(session_id, conv2["id"], [(f"別話題{i}", f"[EMO:neutral] 別応答{i}です。") for i in range(4)], start=T0)
+    d2 = await register_diary_window(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=conv2["id"], first_message_id=ids2[0], last_message_id=ids2[-1], due_at=T0)
+    assert d2 and await promote_due_diary_windows(worldline="steins_gate", now=T0) == [d2] and await claim_memory_job(job_id=d2, lease_owner="crashed-worker", worldline="steins_gate")
+    assert await commit_diary(session_id=session_id, identity_mode="self", worldline="steins_gate", diary_id=d2, body_ja="すでに書き終えた手記よ。", body_zh="已经写完的手记。", verified_phrases=[], lease_owner="crashed-worker")
+    await _sql("steins_gate", "memory", "UPDATE memory_ingest_jobs SET lease_expires_at=? WHERE job_id=?", ((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(), d2))
+    await process_due_jobs_once(lease_owner="recovery-worker", worldlines=("steins_gate",), diary_completion=lambda **_kw: (_ for _ in ()).throw(AssertionError("must not regenerate")))
+    assert (await get_memory_job(d2, worldline="steins_gate"))["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_5_diary_retries_cap_at_two_while_extraction_keeps_three_and_status_separates_counts():
+    session_id, cid = await _new_conv("s5")
+    ids = await _append_turns(session_id, cid, [(f"質問{i}", f"[EMO:neutral] 返答{i}です。") for i in range(8)], start=T0)
+    ext_job = await enqueue_memory_job(session_id=session_id, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=ids[0], provider_id="deepseek", model_id="deepseek-chat")
+    [diary_id] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=T0 + timedelta(minutes=20))
+    await promote_due_diary_windows(worldline="steins_gate", now=T0 + timedelta(minutes=20))
+    app, scope_params, counts = FastAPI(), {"session_id": session_id, "worldline": "steins_gate", "identity_mode": "self"}, {"ext": 0, "diary": 0}
+    app.include_router(system_router)
+
+    async def fail(kind: str):
+        counts[kind] += 1
+        raise RuntimeError(f"transient_{kind}_error")
+
+    with TestClient(app) as client:
+        assert (client.get("/api/memory/status", params=scope_params).json()["pending_count"], client.get("/api/memory/status", params=scope_params).json()["diary_pending_count"]) == (1, 1)
+        for round_no in (1, 2, 3):
+            await process_due_jobs_once(lease_owner="w5", worldlines=("steins_gate",), memory_completion=lambda **_kw: fail("ext"), diary_completion=lambda **_kw: fail("diary"))
+            await _sql("steins_gate", "memory", "UPDATE memory_ingest_jobs SET next_attempt_at=NULL WHERE session_id=?", (session_id,))
+            st = client.get("/api/memory/status", params=scope_params).json()
+            if round_no == 2:
+                assert (st["diary_failed_count"], st["diary_pending_count"], st["failed_count"], st["pending_count"]) == (1, 0, 0, 1)
+            if round_no == 3:
+                assert (st["diary_failed_count"], st["failed_count"], [j["job_id"] for j in st["failed_jobs"]]) == (1, 1, [ext_job["job_id"]])
+        d_job = await get_memory_job(diary_id, worldline="steins_gate")
+        assert (counts["diary"], counts["ext"]) == (2, 3) and d_job is not None and (d_job["pipeline_version"], d_job["attempt_count"]) == (DIARY_PIPELINE_VERSION, 2)
+
+
+@pytest.mark.asyncio
+async def test_6_source_grounding_rewrites_once_then_discards_with_reason():
+    session_id, cid = await _new_conv("s6")
+    await _append_turns(session_id, cid, [(f"静かな夜の雑談{i}", f"[EMO:neutral] 落ち着いた返事{i}です。") for i in range(8)], start=T0)
+    [d_ok] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=T0 + timedelta(minutes=20))
+    drafts_ok = [{"body_ja": "今日は3回も「絶対に徹夜する」と言い張っていたわね。", "body_zh": "今天说了3次「绝对要通宵」。"}, {"body_ja": "静かな夜に落ち着いて雑談できたのが印象に残ったわ。", "body_zh": "在安静的夜里平和地聊了会儿天，留下了不错的印象。"}]
+    seen: list[str | None] = []
+    await process_due_jobs_once(lease_owner="w6", worldlines=("steins_gate",), now=T0 + timedelta(minutes=20), diary_completion=lambda **kw: asyncio.sleep(0, result=(seen.append(kw.get("rewrite_detail")), drafts_ok[len(seen) - 1])[1]))
+    job_ok = await get_memory_job(d_ok, worldline="steins_gate")
+    assert len(seen) == 2 and seen[0] is None and seen[1] is not None and job_ok is not None and (job_ok["state"], job_ok["attempt_count"]) == ("completed", 1)
+    cid_bad = (await conversation_service.create(session_id, "steins_gate", identity_mode="self"))["id"]
+    await _append_turns(session_id, cid_bad, [(f"お茶の雑談{i}", f"[EMO:neutral] お茶の返事{i}です。") for i in range(8)], start=T0)
+    [d_bad] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid_bad, now=T0 + timedelta(minutes=20))
+    bad_drafts = [{"body_ja": "「存在しない台詞」を言っていたわ。", "body_zh": "说了句不存在的台词。"}, {"body_ja": "今日は42杯もお茶を飲んでいたわ。", "body_zh": "今天喝了42杯茶。"}]
+    bad_seen: list[int] = []
+    await process_due_jobs_once(lease_owner="w6", worldlines=("steins_gate",), now=T0 + timedelta(minutes=20), diary_completion=lambda **_kw: asyncio.sleep(0, result=(bad_seen.append(1), bad_drafts[len(bad_seen) - 1])[1]))
+    job_bad, [row_bad] = await get_memory_job(d_bad, worldline="steins_gate"), await _sql("steins_gate", "memory", "SELECT state, body_ja FROM memory_diaries WHERE diary_id=?", (d_bad,))
+    assert len(bad_seen) == 2 and job_bad is not None and (job_bad["state"], job_bad["attempt_count"], job_bad["last_error_code"]) == ("cancelled", 1, "ungrounded_number")
+    assert (row_bad["state"], row_bad["body_ja"]) == ("discarded", None) and validate_diary_grounding("[REDACTED] を見たわ。", "看到了[REDACTED]。", [{"role": "user", "text": "秘密", "translation": ""}])[0] == "redacted_leak"
+
+
+@pytest.mark.asyncio
+async def test_7_injection_dedupes_by_sent_message_ids_and_summary_and_drops_deleted_diary():
+    session_id, cid = await _new_conv("s7")
+    early_ids = await _append_turns(session_id, cid, [(f"初期質問{i}", f"[EMO:neutral] 初期返答{i}です。") for i in range(8)], start=T0)
+    late_ids = await _append_turns(session_id, cid, [(f"後半質問{i}", f"[EMO:neutral] 後半返答{i}です。") for i in range(4)], start=T0 + timedelta(days=3))
+    diary_id = await register_diary_window(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, first_message_id=early_ids[0], last_message_id=early_ids[-1], due_at=T0)
+    diary_text = "深夜に古いラジオの修理手順を一緒に整理したのが楽しかったわ。"
+    assert diary_id and await commit_diary(session_id=session_id, identity_mode="self", worldline="steins_gate", diary_id=diary_id, body_ja=diary_text, body_zh="半夜一起整理老收音机的修理步骤还挺开心的。", verified_phrases=[])
+    await _sql("steins_gate", "memory", "UPDATE memory_diaries SET written_at=? WHERE diary_id=?", (T0.isoformat(), diary_id))
+    session = chat_ws.SessionState(session_id)
+    session.worldline, session.identity_mode, session.conversation_id, session.turn_now_local = "steins_gate", "self", cid, datetime(2026, 3, 13, 20, 0, tzinfo=timezone(timedelta(hours=9)))
+    session.history = [{"id": early_ids[-1], "role": "assistant", "content": "[EMO:neutral] 初期返答7です。"}]
+    assert DIARIES_HEADER not in await compile_for_session(session, "続きの話")
+    session.history = [{"id": mid, "role": "user" if idx % 2 == 0 else "assistant", "content": "後半"} for idx, mid in enumerate(late_ids)]
+    session.memory_summary = diary_text
+    assert DIARIES_HEADER not in await compile_for_session(session, "別の話")
+    session.memory_summary = "今は週末の買い物リストを比べているところ。"
+    injected = await compile_for_session(session, "別の話")
+    assert DIARIES_HEADER in injected and f"〔三日前〕{diary_text}" in injected and session.memory_summary in injected
+
+    probe = PromptCompiler()
+    sample = PromptInputs(worldline="steins_gate", base_identity="You are Amadeus Kurisu.", emotion=soul_engine.profile("steins_gate").baselines.model_copy(deep=True), episodic=[], web_evidence=[], working_summary="現在の作業要約は維持されるべき。", recent_history=[], current_user_message="質問", identity_mode="self", resident_profile=probe.select_resident_profile([{"fact_id": "f1", "display_text": "ユーザーはブラックコーヒーが好き", "confidence": 0.95}], tool_capable=False), diaries=[PromptDiary(diary_id="d-old", body_ja="手記の本文" * 35, relative_time="三日前")])
+    tight = PromptCompiler(input_budget=probe.token_counter(probe.compile(sample)) - 40).compile_with_report(sample)
+    assert "現在の作業要約は維持されるべき。" in tight.text and "ブラックコーヒー" in tight.text and DIARIES_HEADER not in tight.text
+
+    captured: list[dict] = []
+    trim_adapter = OpenAICompatibleAdapter(provider_id="custom", base_url="http://localhost:18082/v1", default_model="tight-window", message_builder=deepseek_service.build_persona_messages, credential_required=False, transport=httpx.MockTransport(lambda req: (captured.append(json.loads(req.content)), httpx.Response(200, text='data: {"choices":[{"delta":{"content":"[EMO:neutral] 了解です。"}}]}\n\ndata: [DONE]\n\n', headers={"content-type": "text/event-stream"}))[1]))
+    session.memory_summary, session.history = "", [{"id": early_ids[-1], "role": "user", "content": "昔の長文" + "あ" * 1800}, {"id": late_ids[-2], "role": "user", "content": "最近の質問"}, {"id": late_ids[-1], "role": "assistant", "content": "[EMO:neutral] 最近の返答です。"}, {"id": None, "role": "user", "content": "今の短い質問"}]
+    session.system_prompt = await compile_for_session(session, "今の短い質問")
+    assert DIARIES_HEADER not in session.system_prompt
+    await chat_ws.get_clean_text_stream(active_history=session.history, memory_summary="", session=session, provider_snapshot=SimpleNamespace(adapter=trim_adapter, model_id="tight-window", temperature=None, reasoning_effort=None, context_window=PromptCompiler._estimate_tokens(session.system_prompt) + 2136, max_output_tokens=512))
+    assert DIARIES_HEADER in captured[-1]["messages"][0]["content"] and diary_text in captured[-1]["messages"][0]["content"]
+    session.history = [{"id": mid, "role": "user" if idx % 2 == 0 else "assistant", "content": "後半"} for idx, mid in enumerate(late_ids)]
+    await delete_diary(session_id=session_id, identity_mode="self", worldline="steins_gate", diary_id=diary_id)
+    assert DIARIES_HEADER not in await compile_for_session(session, "次のターン")
+
+
+@pytest.mark.asyncio
+async def test_8_cross_window_self_familiarity_counts_worldline_utterances_and_db_preferences():
+    session_id, cid1 = await _new_conv("s8")
+    cid2 = (await conversation_service.create(session_id, "steins_gate", identity_mode="self"))["id"]
+
+    async def run_turn(cid: str, text: str) -> str:
+        s = chat_ws.SessionState(session_id)
+        s.worldline, s.identity_mode, s.conversation_id = "steins_gate", "self", cid
+        await s.reload_history()
+        s.append_message({"role": "user", "content": text})
+        prompt = await compile_for_session(s, text)
+        s.set_last_message_id("user", int(await models.save_message(session_id, "user", text, worldline="steins_gate", conversation_id=cid)))
+        await models.save_message(session_id, "assistant", "[EMO:neutral] 返事です。", worldline="steins_gate", conversation_id=cid)
+        return prompt
+
+    for i in range(1, 4):
+        assert '対等な「です・ます」で話す。' in await run_turn(cid1, f"窓1の発言{i}")
+    assert '対等な「です・ます」で話す。' in await run_turn(cid2, "窓2の最初の発言") and '対等な「です・ます」で話す。' in await run_turn(cid1, "窓1の4回目の発言")
+    assert "自然な友人の口調で話す。" in await run_turn(cid2, "窓2の2回目・累計6句目")
+    s_check = chat_ws.SessionState(session_id)
+    s_check.worldline, s_check.identity_mode, s_check.conversation_id = "steins_gate", "self", cid1
+    await s_check.reload_history()
+    s_check.append_message({"role": "user", "content": "窓1での確認"})
+    assert "自然な友人の口調で話す。" in await compile_for_session(s_check, "窓1での確認")
+
+    pref_session = f"s8-pref-{uuid4().hex[:8]}"
+    await create_stable_fact(session_id=pref_session, worldline="steins_gate", identity_mode="self", display_text="叫我阿哲就行", semantic_json={"subject": "user", "predicate": "call_name", "object": "阿哲"}, confidence=0.86)
+    for idx in range(35):
+        await create_stable_fact(session_id=pref_session, worldline="steins_gate", identity_mode="self", display_text=f"常駐優先事実{idx:02d}：コーヒーを飲む", semantic_json={"subject": "user", "predicate": "habit", "object": f"coffee_{idx}"}, confidence=0.99)
+    pref_prompt = await compile_for_session(SimpleNamespace(session_id=pref_session, worldline="steins_gate", identity_mode="self", base_system_prompt=None, system_prompt=None, memory_summary="", history=[], self_name=""), "こんにちは")
+    assert "叫我阿哲就行" not in pref_prompt and "自然な友人の口調で話す。" in pref_prompt
+
+
+@pytest.mark.asyncio
+async def test_9_non_json_model_skips_diary_while_chat_succeeds(monkeypatch):
+    await init_db()
+    session_id = f"s9-{uuid4().hex[:8]}"
+    credentials.credential_store.set("custom", "no-json-needed-credential")
+    no_json = OpenAICompatibleAdapter(provider_id="custom", base_url="http://localhost:18081/v1", default_model="plain-chat-only", message_builder=deepseek_service.build_persona_messages, credential_required=False, transport=httpx.MockTransport(lambda req: httpx.Response(200, text='data: {"choices":[{"delta":{"content":"[EMO:neutral] 普通の会話は問題ないわ。"}}]}\n\ndata: [DONE]\n\n', headers={"content-type": "text/event-stream"}) if str(req.url).endswith("/chat/completions") and json.loads(req.content).get("stream") else httpx.Response(400, json={"error": "json_object unsupported"})))
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(lambda pid, mid=None, **_kw: ProviderSnapshot(provider_id=pid, model_id=mid or "plain-chat-only", capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT}), structured_output=False), adapter=no_json, credential_required=False)))
+    conv = await conversation_service.create_and_select(session_id, "steins_gate", provider_id="custom", model_id="plain-chat-only", identity_mode="self")
+    session, queue = chat_ws.SessionState(session_id), asyncio.Queue()
+    session.worldline, session.provider_id, session.model, session.enable_tts = "steins_gate", "custom", "plain-chat-only", False
+    await session.load_from_db()
+    for turn_idx in range(8):
+        await chat_ws.process_queued_turn(session, f"メッセージ{turn_idx}", queue, session.current_epoch, session.history_epoch)
+    if session.background_tasks:
+        await asyncio.gather(*list(session.background_tasks))
+    assert len(await models.get_session_messages(session_id, "steins_gate", conversation_id=conv["id"])) == 16
+    await process_due_jobs_once(lease_owner="w9", worldlines=("steins_gate",), limit=16)
+    assert (await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"] == []
+    [d_row] = await _sql("steins_gate", "memory", "SELECT diary_id, state FROM memory_diaries WHERE conversation_id=?", (conv["id"],))
+    d_job = await get_memory_job(d_row["diary_id"], worldline="steins_gate")
+    assert d_row["state"] == "discarded" and d_job is not None and (d_job["state"], d_job["last_error_code"]) == ("cancelled", "json_unsupported")
+
+
+@pytest.mark.asyncio
+async def test_10_truncate_re_enqueue_avoids_unique_cursor_conflict_and_guards_inflight_truncate():
+    session_id, cid = await _new_conv("s10")
+    ids_prefix = await _append_turns(session_id, cid, [(f"前段{i}", f"[EMO:neutral] 前段返答{i}です。") for i in range(5)], start=T0)
+    [d1] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=T0 + timedelta(minutes=10))
+    assert await promote_due_diary_windows(worldline="steins_gate", now=T0 + timedelta(minutes=45)) == [d1]
+    ids_suffix = await _append_turns(session_id, cid, [("截断対象", "[EMO:neutral] 消える返答です。")], start=T0 + timedelta(minutes=46))
+    app = FastAPI()
+    app.include_router(conversations_router)
+    with TestClient(app) as client:
+        resp = client.post(f"/api/conversations/{cid}/truncate", params={"session_id": session_id, "worldline": "steins_gate"}, json={"from_message_id": ids_suffix[0], "expected_last_message_id": ids_suffix[-1]})
+        assert resp.status_code == 200 and (await get_memory_job(d1, worldline="steins_gate"))["state"] == "cancelled"
+    [d2] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid, now=T0 + timedelta(minutes=48))
+    assert d2 != d1 and await promote_due_diary_windows(worldline="steins_gate", now=T0 + timedelta(minutes=80)) == [d2]
+    await process_due_jobs_once(lease_owner="w10", worldlines=("steins_gate",), now=T0 + timedelta(minutes=80), diary_completion=lambda **_kw: asyncio.sleep(0, result={"body_ja": "残った前段だけの穏やかな記録よ。", "body_zh": "只属于保留前段的平和记录。"}))
+    diaries = (await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"]
+    assert len(diaries) == 1 and (diaries[0]["diary_id"], diaries[0]["first_message_id"], diaries[0]["last_message_id"]) == (d2, ids_prefix[0], ids_prefix[-1])
+
+    cid2 = (await conversation_service.create(session_id, "steins_gate", identity_mode="self"))["id"]
+    ids2 = await _append_turns(session_id, cid2, [(f"進行{i}", f"[EMO:neutral] 進行返答{i}です。") for i in range(8)], start=T0)
+    [d_inf] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid2, now=T0 + timedelta(minutes=20))
+    await process_due_jobs_once(lease_owner="w10", worldlines=("steins_gate",), now=T0 + timedelta(minutes=20), diary_completion=lambda **_kw: request_erasure(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid2, action="forget", forget_long_term=True, cutoff=(ids2[10], ids2[-1])))
+    assert (await get_memory_job(d_inf, worldline="steins_gate"))["state"] == "cancelled" and [d for d in (await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"] if d["conversation_id"] == cid2] == []
+    await process_due_jobs_once(lease_owner="w10", worldlines=("steins_gate",), now=T0 + timedelta(minutes=90), diary_completion=lambda **_kw: asyncio.sleep(0, result={"body_ja": "切り詰め後の前半だけの手記よ。", "body_zh": "截断后仅属于前半段的手记。"}))
+    kept = [d for d in (await list_diaries(session_id=session_id, identity_mode="self", worldline="steins_gate"))["diaries"] if d["conversation_id"] == cid2]
+    assert len(kept) == 1 and (kept[0]["first_message_id"], kept[0]["last_message_id"]) == (ids2[0], ids2[9])
+
+    cid3 = (await conversation_service.create(session_id, "steins_gate", identity_mode="self"))["id"]
+    ids3 = await _append_turns(session_id, cid3, [(f"境界{i}", f"[EMO:neutral] 境界返答{i}です。") for i in range(4)], start=T0)
+    [d_cur] = await sync_conversation_diary_windows(session_id=session_id, identity_mode="self", worldline="steins_gate", conversation_id=cid3, now=T0 + timedelta(minutes=10))
+    await process_due_jobs_once(lease_owner="w10", worldlines=("steins_gate",), now=T0 + timedelta(minutes=45), diary_completion=lambda **_kw: _cursor_bump_and_return(session_id, cid3, ids3[-1] + 1))
+    cur_job = await get_memory_job(d_cur, worldline="steins_gate")
+    assert cur_job is not None and (cur_job["state"], cur_job["last_error_code"]) == ("cancelled", "conversation_truncated")
+
+
+async def _cursor_bump_and_return(session_id: str, cid: str, cutoff_id: int) -> dict[str, str]:
+    await _sql("steins_gate", "memory", "INSERT INTO conversation_erasure_requests(request_id,session_id,identity_mode,conversation_id,action,forget_long_term,source_message_ids,state,created_at,cutoff_message_id) VALUES(?,?,?,?,'forget',1,'[]','completed',?,?)", (f"v17:{uuid4()}", session_id, "self", cid, T0.isoformat(), cutoff_id))
+    return {"body_ja": "境界後の静かな雑談だったわ。", "body_zh": "边界后的安静闲聊。"}

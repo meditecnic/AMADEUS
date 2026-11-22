@@ -8,7 +8,7 @@ import logging
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Callable, Iterable, Sequence
@@ -112,6 +112,9 @@ SUPPLEMENT_MIN_SHARED_BIGRAMS = 2
 SUPPLEMENT_TIMEOUT_SECONDS = 5.0
 FACTS_HEADERS = {"okabe": "【あんたについて覚えていること】", "self": "【あなたについて覚えていること】"}
 EPISODES_HEADER = "【最近のやりとりと気になっていること】"
+DIARIES_HEADER = "【最近の手記】"
+DIARIES_GUIDANCE = "二人の記憶アーカイブに残した私の手記。残っている印象だけを自然な受け答えになじませ、自分から「日記」や「手記」と持ち出したり、文面をそのまま繰り返したりしない。"
+DIARY_MAX_ITEMS = 3
 SUMMARY_HEADER = "【これまでの流れ】"
 SEARCH_NOT_RUN = "【今回のネット検索：未実施】"
 REPLY_FORMAT = "先頭に [EMO:…] を1つだけ置き、本文は自然な日本語のみ"
@@ -310,12 +313,20 @@ class _PromptExperience(RetrievedMemory):
 
 
 @dataclass(frozen=True, slots=True)
+class PromptDiary:
+    diary_id: str
+    body_ja: str
+    relative_time: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledPrompt:
     text: str
     resident_fact_ids: tuple[str, ...] = ()
     supplement_fact_ids: tuple[str, ...] = ()
     resident_complete: bool = True
     experience_ids: tuple[str, ...] = ()
+    diary_ids: tuple[str, ...] = ()
     supplement_text: str = ""
 
     @property
@@ -346,6 +357,7 @@ class PromptInputs:
     # supplement. None renders exactly like an empty profile (no CORE FACTS).
     resident_profile: ResidentProfile | None = None
     memory_supplement: MemorySupplement | None = None
+    diaries: list[PromptDiary] = field(default_factory=list)
 
 
 class PromptCompiler:
@@ -355,6 +367,7 @@ class PromptCompiler:
         "examples": 5800,
         "core": 1200,
         "episodic": 1600,
+        "diaries": 900,
         "history": 7600,
     }
 
@@ -362,7 +375,7 @@ class PromptCompiler:
         self.token_counter = token_counter or self._estimate_tokens
         self.input_budget = input_budget
 
-    SECTION_ORDER = ("identity", "persona", "core", "episodic", "history", "principles", "examples")
+    SECTION_ORDER = ("identity", "persona", "core", "episodic", "diaries", "history", "principles", "examples")
 
     def compile(self, inputs: PromptInputs) -> str:
         return self.compile_with_report(inputs).text
@@ -382,6 +395,7 @@ class PromptCompiler:
                 if inputs.familiarity == "initial" else "自然な友人の口調で話す。"
             )
         episodic_items = list(inputs.episodic)
+        diary_items = list(inputs.diaries[:DIARY_MAX_ITEMS])
         resident = inputs.resident_profile
         if resident is None:
             resident = ResidentProfile(facts=[], candidate_count=0)
@@ -417,9 +431,8 @@ class PromptCompiler:
                 inputs.worldline, identity_mode=mode, year=inputs.local_year,
             ) + "\n\n" + address,
             "core": render_core(),
-            "episodic": self._render_whole_items(
-                episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"],
-            ),
+            "episodic": self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
+            "diaries": self._render_whole_items(diary_items, self._format_diaries, self.BUDGETS["diaries"]),
             "history": (
                 f"{SUMMARY_HEADER}\nここは会話をつなぐ一時的なメモ。相手について覚えている事実や出来事を書き換えない。"
                 f"\n{self._fit(inputs.working_summary, self.BUDGETS['history'])}"
@@ -442,10 +455,15 @@ class PromptCompiler:
                 sections[name] for name in self.SECTION_ORDER if sections[name]
             )) + (self.token_counter(supplement_text) if supplement_text else 0) > self.input_budget
 
-        # Keep the prefix independent of the request-only supplement.
+        # Yield order: supplement -> diaries -> working summary -> episodic -> resident facts.
         while over_budget() and supplement_items:
             supplement_items = supplement_items[:-1]
             supplement_text = self._render_supplement(supplement_result, supplement_items)
+        while over_budget() and diary_items:
+            diary_items = diary_items[:-1]
+            sections["diaries"] = self._render_whole_items(diary_items, self._format_diaries, self.BUDGETS["diaries"])
+        if over_budget():
+            sections["diaries"] = ""
         if over_budget():
             sections["history"] = ""
 
@@ -480,11 +498,15 @@ class PromptCompiler:
             or self.token_counter(self._format_episodic_memory(episodic_items)) > self.BUDGETS["episodic"]
         ):
             episodic_items = episodic_items[:-1]
+        while diary_items and (not sections["diaries"].strip() or self.token_counter(self._format_diaries(diary_items)) > self.BUDGETS["diaries"]):
+            diary_items = diary_items[:-1]
         experience_ids = tuple(item.experience_id for item in episodic_items
                                if isinstance(item, _PromptExperience))
+        diary_ids = tuple(item.diary_id for item in diary_items)
         return CompiledPrompt(
             text=text,
             experience_ids=experience_ids,
+            diary_ids=diary_ids,
             supplement_text=supplement_text,
             resident_fact_ids=resident_ids,
             supplement_fact_ids=supplement_ids,
@@ -602,6 +624,13 @@ class PromptCompiler:
             return ""
         lines = "\n".join(f"- {item.content}" for item in items)
         return f"{EPISODES_HEADER}\n{persona_bible.guidance['episodes']}\n{lines}"
+
+    @staticmethod
+    def _format_diaries(items: Sequence[PromptDiary]) -> str:
+        if not items:
+            return ""
+        lines = "\n".join(f"- 〔{i.relative_time}〕{i.body_ja}" if i.relative_time else f"- {i.body_ja}" for i in items)
+        return f"{DIARIES_HEADER}\n{DIARIES_GUIDANCE}\n{lines}"
 
     def _fit(self, text: str, budget: int, keep_tail: bool = True) -> str:
         if self.token_counter(text) <= budget:
@@ -782,39 +811,147 @@ async def _select_v11_memory_supplement(
     return MemorySupplement(result=result)
 
 
+_JA_DIGITS = ("〇", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
+_SUMMARY_PUNCT_RE = re.compile(r"[\s\u3000-\u303f\uff00-\uffef.,!?;:\"'()\[\]{}…—\-]+")
+
+
+def _ja_num(n: int) -> str:
+    if 0 <= n <= 10:
+        return _JA_DIGITS[n]
+    if 11 <= n <= 99:
+        t, o = divmod(n, 10)
+        return f"{'' if t == 1 else _JA_DIGITS[t]}十{_JA_DIGITS[o] if o else ''}"
+    return str(n)
+
+
+def format_diary_relative_time(written_at: Any, now_local: datetime | None = None) -> str:
+    raw = str(written_at or "").strip()
+    try:
+        written = datetime.fromisoformat(raw.replace("Z", "+00:00")) if raw else None
+    except ValueError:
+        written = None
+    if written is None:
+        return ""
+    written = written.replace(tzinfo=timezone.utc) if written.tzinfo is None else written
+    now = (now_local or datetime.now().astimezone())
+    now = now.astimezone() if now.tzinfo is None else now
+    written_local = written.astimezone(now.tzinfo)
+    days = (now.date() - written_local.date()).days
+    if days <= 0:
+        return "さっき" if 0 <= (now - written_local).total_seconds() < 3600 else "今日"
+    if days == 1:
+        return "昨日"
+    if 2 <= days <= 13 and days != 7:
+        return f"{_ja_num(days)}日前"
+    if days < 30:
+        return f"{_ja_num(max(1, days // 7))}週間前"
+    if days < 365:
+        return "一ヶ月前" if days < 60 else f"{_ja_num(max(2, days // 30))}ヶ月前"
+    return "一年前" if days < 730 else f"{_ja_num(days // 365)}年前"
+
+
+def _duplicates_working_summary(body_ja: str, working_summary: str) -> bool:
+    b = _SUMMARY_PUNCT_RE.sub("", unicodedata.normalize("NFKC", body_ja or ""))
+    s = _SUMMARY_PUNCT_RE.sub("", unicodedata.normalize("NFKC", working_summary or ""))
+    if not b or not s:
+        return False
+    if b in s:
+        return True
+    b_bi = {b[i:i + 2] for i in range(len(b) - 1)} if len(b) >= 8 and len(s) >= 8 else set()
+    return len(b_bi) >= 6 and (len(b_bi & {s[i:i + 2] for i in range(len(s) - 1)}) / len(b_bi)) >= 0.55
+
+
+def _is_pos_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v > 0
+
+
+def _extract_persisted_ids(history: Sequence[Any]) -> set[int]:
+    return {int(r["id"]) for r in (history or ()) if isinstance(r, dict) and _is_pos_int(r.get("id"))}
+
+
+async def _select_v11_prompt_diaries(
+    *, session_id: str, worldline: str, identity_mode: str, sent_message_ids: Iterable[int],
+    working_summary: str = "", now_local: datetime | None = None, conversation_id: str | None = None,
+) -> list[PromptDiary]:
+    from app.db import get_db
+    from app.services.memory_v11.diaries import list_diaries
+
+    try:
+        rows = list((await list_diaries(session_id=session_id, identity_mode=identity_mode, worldline=worldline)).get("diaries") or [])
+        clean_ids = sorted({int(mid) for mid in sent_message_ids if _is_pos_int(mid)}) if rows else []
+        id_to_conv: dict[int, str | None] = {}
+        if clean_ids:
+            hdb = await get_db(worldline, "history")
+            try:
+                cur = await hdb.execute(f"SELECT id, conversation_id FROM messages WHERE session_id=? AND id IN ({','.join('?' * len(clean_ids))})", (session_id, *clean_ids))
+                id_to_conv = {int(r["id"]): str(r["conversation_id"]) for r in await cur.fetchall()}
+            finally:
+                await hdb.close()
+            for mid in clean_ids:
+                id_to_conv.setdefault(mid, conversation_id)
+        selected: list[PromptDiary] = []
+        for r in rows:
+            body_ja = str(r.get("body_ja") or "").strip()
+            if not body_ja or _duplicates_working_summary(body_ja, working_summary):
+                continue
+            d_conv, f_id, l_id = str(r["conversation_id"]), int(r["first_message_id"]), int(r["last_message_id"])
+            if not any((cid is None or cid == d_conv) and f_id <= mid <= l_id for mid, cid in id_to_conv.items()):
+                selected.append(PromptDiary(str(r["diary_id"]), body_ja, format_diary_relative_time(r.get("written_at"), now_local)))
+                if len(selected) >= DIARY_MAX_ITEMS:
+                    break
+        return selected
+    except Exception as exc:
+        logger.warning("v11 prompt: diary selection failed (%s); omitting diaries", type(exc).__name__)
+        return []
+
+
 _RELAXED_SPEECH = re.compile(
-    r"敬語(?:は不要|不要|なし|を使わない|をやめ)|気楽に話|タメ口(?:で話|でいい|が(?:好き|いい|好み)|を(?:希望|好む))|常体(?:で話|を好)"
-    r"|不用(?:敬语|敬語|客气)|别用(?:敬语|敬語)|不要用(?:敬语|敬語)"
-    r"|(?:说话|聊天|口吻|语气).{0,8}(?:放松|随意|随便|自然一点)"
+    r"敬語(?:は不要|不要|なし|を使わない|をやめ|じゃなくていい)|気楽に(?:話|タメ口)|タメ口(?:で話|でいい|が(?:好き|いい|好み)|を(?:希望|好む)|にして)|常体(?:で話|を好)|平語|平语"
+    r"|(?:不用|别|不要|不必).{0,6}(?:敬语|敬語|客气|端着)|(?:说话|聊天|口吻|语气).{0,8}(?:放松|随意|随便|自然一点|像朋友)"
+    r"|(?:叫我|称呼我(?:为)?|喊我)\s*[^\s，。！？,!?]+|(?:希望|要求|让|请).{0,8}(?:叫|称呼|喊)(?:用户|他|她|我)|(?:と|って)呼(?:んで|ぶよう|ばれる)|呼び捨て"
 )
 
 
-async def _self_familiarity(session, facts: Sequence[dict[str, Any]]) -> str:
-    if sum(row.get("role") == "user" for row in session.history) >= 6:
-        return "familiar"
-    if any(_RELAXED_SPEECH.search(str(row.get("display_text", ""))) for row in facts):
+async def _self_familiarity(session, facts: Sequence[dict[str, Any]], user_message: str = "") -> str:
+    if any(_RELAXED_SPEECH.search(str(r.get("display_text", ""))) or _RELAXED_SPEECH.search(str(r.get("fact_text", ""))) for r in facts):
         return "familiar"
     from app.db import get_db
 
-    db = await get_db(session.worldline, "history")
     try:
-        cursor = await db.execute(
-            """SELECT 1 FROM messages AS m
-               JOIN conversations AS c ON c.id = m.conversation_id
-               WHERE m.session_id = ? AND c.identity_mode = 'self' AND m.role = 'assistant'
-               AND (c.id != ? OR (
-                   SELECT COUNT(*) FROM messages AS u
-                   WHERE u.conversation_id = c.id AND u.role = 'user'
-               ) >= 6)
-               LIMIT 1""",
-            (session.session_id, getattr(session, "conversation_id", None) or ""),
-        )
-        return "familiar" if await cursor.fetchone() else "initial"
-    finally:
-        await db.close()
+        mdb = await get_db(session.worldline, "memory")
+        try:
+            rows = await (await mdb.execute(
+                """SELECT v.display_text, v.semantic_json FROM stable_facts f
+                     JOIN stable_fact_versions v ON v.fact_id=f.fact_id AND v.version_no=f.active_version AND v.invalid_at IS NULL
+                    WHERE f.session_id=? AND f.identity_mode='self' AND f.state='active'
+                      AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.fact_id=f.fact_id AND t.session_id=f.session_id AND t.identity_mode=f.identity_mode)""",
+                (session.session_id,),
+            )).fetchall()
+            if any(_RELAXED_SPEECH.search(str(r["display_text"] or "")) or _RELAXED_SPEECH.search(str(r["semantic_json"] or "")) for r in rows):
+                return "familiar"
+        finally:
+            await mdb.close()
+    except Exception as exc:
+        logger.warning("v11 prompt: familiarity fact check failed (%s)", type(exc).__name__)
+    h_rows = list(getattr(session, "history", None) or [])
+    unsaved = sum(1 for r in h_rows if isinstance(r, dict) and r.get("role") == "user" and not _is_pos_int(r.get("id")))
+    extra = int(bool(str(user_message or "").strip()) and (not h_rows or not isinstance(h_rows[-1], dict) or h_rows[-1].get("role") != "user"))
+    db_users = 0
+    try:
+        db = await get_db(session.worldline, "history")
+        try:
+            row = await (await db.execute("SELECT COUNT(*) AS n FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.session_id=m.session_id WHERE m.session_id=? AND c.identity_mode='self' AND m.role='user'", (session.session_id,))).fetchone()
+            db_users = int(row["n"] or 0) if row is not None else 0
+        finally:
+            await db.close()
+    except Exception as exc:
+        logger.warning("v11 prompt: familiarity history count failed (%s)", type(exc).__name__)
+    return "familiar" if (db_users + unsaved + extra) >= 6 else "initial"
 
 
-async def compile_for_session(session, user_message: str, provider: Any = None) -> str:
+async def compile_for_session(
+    session, user_message: str, provider: Any = None, *, sent_message_ids: Iterable[int] | None = None,
+) -> str:
     """Build a turn prompt without loading the heavyweight embedding model.
 
     ``provider`` is the turn's provider snapshot; v11 uses it only to pick
@@ -867,6 +1004,9 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
             user_message=user_message,
             exclude_fact_ids=[str(row["fact_id"]) for row in resident.facts],
         )
+    turn_now = getattr(session, "turn_now_local", None)
+    sent_ids = set(sent_message_ids) if sent_message_ids is not None else _extract_persisted_ids(getattr(session, "history", None) or ())
+    diaries = await _select_v11_prompt_diaries(session_id=str(session.session_id), worldline=normalize_worldline(session.worldline), identity_mode=mode, sent_message_ids=sent_ids, working_summary=str(getattr(session, "memory_summary", "") or ""), now_local=turn_now, conversation_id=getattr(session, "conversation_id", None))
     compiled = prompt_compiler.compile_with_report(PromptInputs(
         worldline=session.worldline,
         base_identity=base_identity or "You are Amadeus Kurisu.",
@@ -879,12 +1019,11 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         identity_mode=mode,
         self_name=_session_self_name(session),
         conversation_key=str(getattr(session, "conversation_id", None) or session.session_id),
-        familiarity=(
-            await _self_familiarity(session, resident.facts) if mode == "self" else "initial"
-        ),
-        local_year=(getattr(session, "turn_now_local", None) or datetime.now()).year,
+        familiarity=await _self_familiarity(session, resident.facts, user_message=user_message) if mode == "self" else "initial",
+        local_year=(turn_now or datetime.now()).year,
         resident_profile=resident,
         memory_supplement=supplement,
+        diaries=diaries,
     ))
     session.turn_compiled_prompt = compiled
     set_turn_injected_fact_ids(session, compiled.injected_fact_ids)

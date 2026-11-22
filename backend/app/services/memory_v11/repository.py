@@ -473,41 +473,45 @@ async def job_status_summary(
     worldline: str,
     identity_mode: str,
 ) -> dict[str, Any]:
-    """Aggregate ingest job counts for one full scope (no message bodies)."""
+    """Aggregate ingest job counts for one full scope, separating diary jobs."""
+    from app.services.memory_v11.contracts import DIARY_PIPELINE_VERSION
+
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
     session = _require_session_id(session_id)
     db = await get_db(wl, "memory")
     try:
         cur = await db.execute(
-            """SELECT state, COUNT(*) AS n
+            """SELECT pipeline_version=? AS is_diary, state, COUNT(*) AS n
                  FROM memory_ingest_jobs
                 WHERE session_id=? AND identity_mode=?
-                GROUP BY state""",
-            (session, mode),
+                GROUP BY is_diary, state""",
+            (DIARY_PIPELINE_VERSION, session, mode),
         )
-        counts = {str(row["state"]): int(row["n"]) for row in await cur.fetchall()}
+        counts, diary_counts = {}, {}
+        for row in await cur.fetchall():
+            (diary_counts if int(row["is_diary"] or 0) else counts)[str(row["state"])] = int(row["n"])
+
         cur = await db.execute(
-            """SELECT MAX(completed_at) AS latest
-                 FROM memory_ingest_jobs
-                WHERE session_id=? AND identity_mode=? AND state='completed'""",
-            (session, mode),
+            """SELECT pipeline_version=? AS is_diary, MAX(completed_at) AS latest
+                 FROM memory_ingest_jobs WHERE session_id=? AND identity_mode=? AND state='completed'
+                GROUP BY is_diary""",
+            (DIARY_PIPELINE_VERSION, session, mode),
         )
-        latest_row = await cur.fetchone()
-        latest = latest_row["latest"] if latest_row is not None else None
+        latest_map = {bool(int(r["is_diary"] or 0)): r["latest"] for r in await cur.fetchall()}
+        latest, diary_latest = latest_map.get(False), latest_map.get(True)
+
         # S4-ARCHIVE Gate 2 §16 C3: bounded failed-jobs surface — max 8,
         # updated_at DESC / job_id ASC, fields ONLY job_id, last_error_code,
-        # attempt_count, updated_at, retryable. ``state`` is never exposed
-        # (the list is definitionally failed jobs). ``retryable`` is read
-        # from the persisted per-job authority stamped by the ingest
-        # pipeline (jobs._transition_owned) — never a client inference.
+        # attempt_count, updated_at, retryable. ``state`` is never exposed.
         cur = await db.execute(
             """SELECT job_id, attempt_count, last_error_code, updated_at, retryable
                  FROM memory_ingest_jobs
                 WHERE session_id=? AND identity_mode=? AND state='failed'
+                  AND pipeline_version!=?
                 ORDER BY updated_at DESC, job_id ASC
                 LIMIT 8""",
-            (session, mode),
+            (session, mode, DIARY_PIPELINE_VERSION),
         )
         failed_jobs = [
             {
@@ -528,6 +532,10 @@ async def job_status_summary(
             "failed_count": int(counts.get("failed", 0)),
             "failed_jobs": failed_jobs,
             "latest_completed_at": latest,
+            "diary_pending_count": int(diary_counts.get("pending", 0)),
+            "diary_processing_count": int(diary_counts.get("processing", 0)),
+            "diary_failed_count": int(diary_counts.get("failed", 0)),
+            "diary_latest_completed_at": diary_latest,
         }
     finally:
         await db.close()

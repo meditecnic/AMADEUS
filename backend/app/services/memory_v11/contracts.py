@@ -7,10 +7,12 @@ from typing import Final
 
 
 PIPELINE_VERSION: Final[str] = "memory-v11-1"
+DIARY_PIPELINE_VERSION: Final[str] = "diary-v1"
 MAX_PINNED_FACTS_PER_SCOPE: Final[int] = 8
 # Conservative auto-activation threshold (shadow default).
 AUTO_STABLE_CONFIDENCE: Final[float] = 0.85
 MAX_AUTO_RETRIES: Final[int] = 3
+DIARY_MAX_ATTEMPTS: Final[int] = 2
 LEASE_SECONDS: Final[int] = 120
 
 # D18 bounded contextual reanalysis (S3D-4): recent same-conversation pool cap,

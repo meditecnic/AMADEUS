@@ -17,6 +17,8 @@ from typing import Any, Awaitable, Callable, Mapping
 from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.domain.emotion_tags import strip_emotion_tags
 from app.services.memory_v11.contracts import (
+    DIARY_MAX_ATTEMPTS,
+    DIARY_PIPELINE_VERSION,
     LEASE_SECONDS,
     MAX_AUTO_RETRIES,
     MemoryJobErrorCode,
@@ -475,6 +477,9 @@ async def mark_memory_job_failed(
         raise LeaseLostError(
             f"lease owner mismatch job_id={job_id} have={job.get('lease_owner')} want={lease_owner}"
         )
+    attempts = int(job["attempt_count"] or 0)
+    if job["pipeline_version"] == DIARY_PIPELINE_VERSION and attempts >= DIARY_MAX_ATTEMPTS:
+        attempts = MAX_AUTO_RETRIES
     return await _transition_owned(
         job_id=job_id,
         worldline=wl,
@@ -482,7 +487,7 @@ async def mark_memory_job_failed(
         state="failed_or_retry",
         error_code=error_code,
         permanent=permanent,
-        attempt_count=int(job["attempt_count"] or 0),
+        attempt_count=attempts,
     )
 
 async def retry_memory_job(
@@ -1002,6 +1007,7 @@ async def process_memory_job(
     *,
     job_id: str,
     memory_completion: MemoryCompletionFn | None = None,
+    diary_completion: Any = None,
     lease_owner: str = "worker",
     worldline: str | None = None,
 ) -> dict[str, Any]:
@@ -1036,6 +1042,11 @@ async def process_memory_job(
 
     if job.get("lease_owner") != lease_owner or job["state"] != "processing":
         return (await get_memory_job(job_id, worldline=wl)) or job
+
+    if job["pipeline_version"] == DIARY_PIPELINE_VERSION:
+        from app.services.memory_v11.diary_generation import process_diary_job
+
+        return await process_diary_job(job=job, worldline=wl, lease_owner=lease_owner, diary_completion=diary_completion)
 
     # A user deletion suppresses this entire source window across pipelines.
     # Check before ordinary receipt replay so the reason is recorded even for
@@ -1353,9 +1364,11 @@ async def process_memory_job(
         return current or job
 
 
-async def list_due_job_ids(*, worldline: str, limit: int = 8) -> list[str]:
+async def list_due_job_ids(
+    *, worldline: str, limit: int = 8, now: datetime | None = None
+) -> list[str]:
     wl = normalize_worldline(worldline)
-    now = _iso()
+    now_s = _iso(now)
     db = await get_db(wl, "memory")
     try:
         cur = await db.execute(
@@ -1370,7 +1383,7 @@ async def list_due_job_ids(*, worldline: str, limit: int = 8) -> list[str]:
                 )
                 ORDER BY created_at ASC
                 LIMIT ?""",
-            (now, now, limit),
+            (now_s, now_s, limit),
         )
         rows = await cur.fetchall()
         return [str(r["job_id"]) for r in rows]
@@ -1382,22 +1395,28 @@ async def process_due_jobs_once(
     *,
     lease_owner: str,
     memory_completion: MemoryCompletionFn | None = None,
+    diary_completion: Any = None,
     worldlines: tuple[str, ...] = ("steins_gate", "beta"),
     limit: int = 8,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Process up to `limit` due jobs per worldline (worker + integration tests).
 
     Omitting memory_completion uses default_memory_completion (real provider).
     """
+    from app.services.memory_v11.diary_generation import promote_due_diary_windows
+
     results: list[dict[str, Any]] = []
     for wl in worldlines:
-        for job_id in await list_due_job_ids(worldline=wl, limit=limit):
+        await promote_due_diary_windows(worldline=wl, now=now, limit=limit)
+        for job_id in await list_due_job_ids(worldline=wl, limit=limit, now=now):
             results.append(
                 await process_memory_job(
                     job_id=job_id,
                     lease_owner=lease_owner,
                     worldline=wl,
                     memory_completion=memory_completion,
+                    diary_completion=diary_completion,
                 )
             )
     return results
