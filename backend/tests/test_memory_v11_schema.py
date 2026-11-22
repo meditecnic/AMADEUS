@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -221,7 +222,7 @@ def _seed_v10_memory_db(path: Path, *, session_id: str = "seed-v10") -> set[str]
 
 @pytest.mark.asyncio
 async def test_s0_v11_tables_on_both_worldlines(isolated_store):
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     for worldline in ("steins_gate", "beta"):
         connection = _open_memory(worldline)
         try:
@@ -234,7 +235,7 @@ async def test_s0_v11_tables_on_both_worldlines(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s0_ingest_jobs_unique_five_columns_via_pragma(isolated_store):
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     connection = _open_memory("steins_gate")
     try:
         unique_sets = _unique_index_column_sets(connection, "memory_ingest_jobs")
@@ -254,7 +255,7 @@ async def test_s0_ingest_jobs_unique_five_columns_via_pragma(isolated_store):
 @pytest.mark.asyncio
 async def test_s0_stable_fact_versions_fk_and_check_ddl(isolated_store):
     """DDL-level FK/CHECK for stable facts and versions."""
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     connection = _open_memory("steins_gate")
     try:
         fks = _foreign_keys(connection, "stable_fact_versions")
@@ -286,7 +287,7 @@ async def test_s0_active_version_rejects_mismatch_and_dual_open(isolated_store):
 
     Empty-DB validate() alone does not prove the invariant.
     """
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     error_type = getattr(contracts, "MemoryValidationError", None) or getattr(
@@ -400,7 +401,7 @@ def _insert_topic(
 @pytest.mark.asyncio
 async def test_s1_topic_same_scope_attach_succeeds(isolated_store):
     """Same (session_id, identity_mode) topic may attach to a new stable fact."""
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
     try:
@@ -429,7 +430,7 @@ async def test_s1_topic_same_scope_attach_succeeds(isolated_store):
 @pytest.mark.asyncio
 async def test_s1_topic_cross_session_rejected_repo_and_sql_no_residue(isolated_store):
     """Cross-session topic attach fails at repository and direct SQL; zero fact/version rows."""
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
@@ -497,7 +498,7 @@ async def test_s1_topic_cross_session_rejected_repo_and_sql_no_residue(isolated_
 @pytest.mark.asyncio
 async def test_s1_topic_cross_identity_rejected_repo_and_sql_no_residue(isolated_store):
     """Cross-identity (self vs okabe) topic attach fails; no residual fact/version."""
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
@@ -559,7 +560,7 @@ async def test_s1_topic_cross_identity_rejected_repo_and_sql_no_residue(isolated
 @pytest.mark.asyncio
 async def test_s1_empty_session_id_rejected_zero_write(isolated_store):
     """Empty session_id fails closed with stable code and no fact/version rows."""
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
@@ -595,7 +596,7 @@ async def test_s1_empty_session_id_rejected_zero_write(isolated_store):
 @pytest.mark.asyncio
 async def test_s1_topic_alias_composite_fk_rejects_cross_scope(isolated_store):
     """memory_topic_aliases composite FK blocks alias rows for another session/identity."""
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     connection = _open_memory("steins_gate")
     try:
         _insert_topic(
@@ -634,7 +635,7 @@ async def test_s1_topic_alias_composite_fk_rejects_cross_scope(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s0_observation_sources_fk_and_identity_check(isolated_store):
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     connection = _open_memory("steins_gate")
     try:
         fks = _foreign_keys(connection, "memory_observation_sources")
@@ -655,7 +656,7 @@ async def test_s0_observation_sources_fk_and_identity_check(isolated_store):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("table", ["memory_tombstones", "memory_deleted_sources"])
 async def test_s0_tombstones_forbid_content_columns(isolated_store, table):
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     connection = _open_memory("steins_gate")
     try:
         cols = {
@@ -692,7 +693,7 @@ async def test_s0_v10_to_v11_migration_preserves_legacy_core_and_adds_tables(
         finally:
             conn.close()
 
-    assert db_module.SCHEMA_VERSION == 16, "current schema includes the v11 memory tables"
+    assert db_module.SCHEMA_VERSION == 17, "current schema includes the v11 memory tables"
     await init_db()
 
     for worldline in ("steins_gate", "beta"):
@@ -726,7 +727,7 @@ async def test_s0_migration_injected_failure_leaves_no_v11_debris(
     target = Path(db_module._resolve_path("steins_gate", "memory"))
     tables_before = _seed_v10_memory_db(target)
 
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
 
     migrate_fn_names = ("_migrate_v10_to_v11", "migrate_memory_v10_to_v11")
     original = None
@@ -780,7 +781,7 @@ async def test_s0_migration_rerun_is_idempotent(tmp_path, monkeypatch):
 
     target = Path(db_module._resolve_path("steins_gate", "memory"))
     _seed_v10_memory_db(target, session_id="idem-seed")
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
 
     await init_db()
     connection = _open_memory("steins_gate")
@@ -827,7 +828,7 @@ async def test_s0_dual_worldline_sequential_migration(tmp_path, monkeypatch):
         finally:
             conn.close()
 
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     await init_db()
 
     for worldline in ("steins_gate", "beta"):
@@ -1396,3 +1397,64 @@ async def test_v113_deleted_sources_additive_old_db_upgrade(isolated_store):
         assert connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == str(db_module.SCHEMA_VERSION)
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize("fail_second_alter", [False, True])
+def test_v17_adds_nullable_columns_atomically(isolated_store, monkeypatch, fail_second_alter):
+    path = db_module._resolve_path("steins_gate", "memory")
+    with closing(sqlite3.connect(path)) as connection:
+        for table, column in db_module.MEMORY_V17_COLUMNS.items():
+            connection.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        connection.execute("UPDATE schema_meta SET value='16' WHERE key='schema_version'")
+        connection.execute(
+            """INSERT INTO conversation_erasure_requests
+               VALUES('original','owner','self','conversation','forget',1,'[1]','completed','now')"""
+        )
+        connection.execute(
+            """INSERT INTO stable_facts(fact_id,session_id,identity_mode,state,active_version,created_at,updated_at)
+               VALUES('fact','owner','self','active',1,'now','now')"""
+        )
+        connection.execute(
+            """INSERT INTO stable_fact_versions(
+                   fact_id,version_no,display_text,semantic_json,semantic_fingerprint,confidence,change_kind,valid_from)
+               VALUES('fact',1,'kept text','{}','fingerprint',1,'create','now')"""
+        )
+        connection.commit()
+        before = {table: connection.execute(f"SELECT * FROM {table}").fetchall()
+                  for table in db_module.MEMORY_V17_COLUMNS}
+        schema_before = connection.execute("SELECT * FROM sqlite_schema ORDER BY name").fetchall()
+
+    if fail_second_alter:
+        migrate = db_module._migrate_v16_to_v17
+        alters = []
+
+        def interrupt(connection, kind):
+            def authorize(operation, _database, table, *_):
+                if operation == sqlite3.SQLITE_ALTER_TABLE:
+                    alters.append(table)
+                    if len(alters) == 2:
+                        return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+            migrate(connection, kind)
+
+        monkeypatch.setattr(db_module, "_migrate_v16_to_v17", interrupt)
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            db_module._initialize_sync(path, db_module.MEMORY_SCHEMA, "memory")
+        assert alters == list(db_module.MEMORY_V17_COLUMNS)
+    else:
+        assert db_module._initialize_sync(path, db_module.MEMORY_SCHEMA, "memory")
+
+    with closing(sqlite3.connect(path)) as connection:
+        assert db_module._read_schema_version(connection) == (16 if fail_second_alter else 17)
+        if fail_second_alter:
+            assert connection.execute("SELECT * FROM sqlite_schema ORDER BY name").fetchall() == schema_before
+        for table, column in db_module.MEMORY_V17_COLUMNS.items():
+            if fail_second_alter:
+                assert connection.execute(f"SELECT * FROM {table}").fetchall() == before[table]
+            else:
+                assert connection.execute(f"SELECT * FROM {table}").fetchall() == [
+                    (*row, None) for row in before[table]
+                ]
+                assert any(row[1] == column and row[3] == 0 for row in connection.execute(f"PRAGMA table_info({table})"))

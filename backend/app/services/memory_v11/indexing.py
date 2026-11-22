@@ -64,12 +64,12 @@ async def prepare_passage_embedding(
     text: str,
     *,
     embedder: PassageEmbedder | None = None,
+    local_only: bool = False,
 ) -> dict[str, Any]:
-    """Encode display_text via EmbeddingAdapter and validate for storage.
+    """Encode display_text and validate the vector before a write transaction.
 
-    Fail-closed: empty model, wrong dimensions, encode errors, or malformed
-    vectors raise MemoryValidationError so the caller never opens a write txn
-    that would commit a version without an index row.
+    A loaded model or cached snapshot is sufficient when local_only is set.
+    An unavailable model or invalid vector raises MemoryValidationError.
     """
     resolved = _resolve_embedder(embedder)
     model = str(getattr(resolved, "model_name", "") or "").strip()
@@ -90,8 +90,11 @@ async def prepare_passage_embedding(
             "empty_display_text",
             "cannot embed empty display_text",
         )
+    encode = resolved.encode_passage
+    if local_only:
+        encode = getattr(resolved, "encode_cached_passage", encode)
     try:
-        vector = await resolved.encode_passage(passage)
+        vector = await encode(passage)
     except MemoryValidationError:
         raise
     except Exception as exc:

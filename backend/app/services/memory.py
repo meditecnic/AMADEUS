@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 from typing import Literal
 
+from aiosqlite import Connection
 from pydantic import BaseModel
 
 from app import config
@@ -53,7 +54,7 @@ class EmbeddingAdapter:
         self._tokenizer = None
         self._load_lock = threading.Lock()
 
-    def _model_file(self, filename: str) -> str:
+    def _model_file(self, filename: str, *, local_files_only: bool) -> str:
         source = f"https://huggingface.co/{self.model_name}/resolve/{EMBEDDING_REVISION}/{filename}"
         if self.model_dir is not None:
             path = self.model_dir / filename
@@ -62,26 +63,38 @@ class EmbeddingAdapter:
             return str(path)
         from huggingface_hub import hf_hub_download
         try:
-            return hf_hub_download(self.model_name, filename, revision=EMBEDDING_REVISION)
+            return hf_hub_download(
+                self.model_name, filename, revision=EMBEDDING_REVISION, local_files_only=local_files_only,
+            )
         except Exception as exc:
             raise RuntimeError(f"Cannot load embedding file {filename}; download from {source}: {exc}") from exc
 
-    def _load(self):
+    def _load(self, *, local_files_only: bool = False):
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
                     import onnxruntime
                     from tokenizers import Tokenizer
 
-                    model_path = self._model_file("onnx/model.onnx")
-                    tokenizer = Tokenizer.from_file(self._model_file("tokenizer.json"))
-                    self._model_file("onnx/model.onnx_data")
+                    model_path = self._model_file("onnx/model.onnx", local_files_only=local_files_only)
+                    tokenizer = Tokenizer.from_file(
+                        self._model_file("tokenizer.json", local_files_only=local_files_only),
+                    )
+                    self._model_file("onnx/model.onnx_data", local_files_only=local_files_only)
                     self._tokenizer = tokenizer
                     self._model = onnxruntime.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         return self._model
 
     async def encode_passage(self, text: str) -> list[float]:
         return await asyncio.to_thread(self._encode, f"Document: {text}")
+
+    async def encode_cached_passage(self, text: str) -> list[float]:
+        """Encode using the loaded model or a local snapshot."""
+        def encode() -> list[float]:
+            self._load(local_files_only=True)
+            return self._encode(f"Document: {text}")
+
+        return await asyncio.to_thread(encode)
 
     async def encode_query(self, text: str) -> list[float]:
         return await asyncio.to_thread(self._encode, f"Query: {text}")
@@ -133,16 +146,17 @@ class MemoryService:
         source_message_ids: set[int],
         *,
         identity_mode: str | None = None,
+        _transaction: Connection | None = None,
     ) -> dict[str, int]:
         """Delete memories whose complete evidence set belongs to one conversation."""
         if not source_message_ids:
             return {"episodic_deleted": 0, "core_facts_deleted": 0}
-        wl = normalize_worldline(worldline)
-        db = await get_db(wl, "memory")
+        db = _transaction if _transaction is not None else await get_db(normalize_worldline(worldline), "memory")
         episodic_ids: list[int] = []
         core_ids: list[int] = []
         try:
-            await db.execute('BEGIN IMMEDIATE')
+            if _transaction is None:
+                await db.execute('BEGIN IMMEDIATE')
             for table, destination in (
                 ("episodic_memories", episodic_ids),
                 ("core_facts", core_ids),
@@ -191,9 +205,11 @@ class MemoryService:
                     f"DELETE FROM episodic_memories WHERE id IN ({placeholders})",
                     episodic_ids,
                 )
-            await db.commit()
+            if _transaction is None:
+                await db.commit()
         finally:
-            await db.close()
+            if _transaction is None:
+                await db.close()
         return {
             "episodic_deleted": len(episodic_ids),
             "core_facts_deleted": len(core_ids),

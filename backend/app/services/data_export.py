@@ -106,7 +106,7 @@ def _memory_json(conn):
     # Only open display versions and visible experience history, in both identity
     # modes. semantic_json, old versions, observations and source excerpts stay out.
     facts = conn.execute(f'''SELECT f.fact_id,f.session_id,f.identity_mode,f.topic_id,
-        f.is_pinned,f.created_at,f.updated_at,v.version_no,v.display_text,v.confidence
+        f.is_pinned,f.created_at,f.updated_at,v.version_no,v.display_text,v.confidence,v.restored_from_version
         FROM stable_facts f JOIN stable_fact_versions v
           ON v.fact_id=f.fact_id AND v.version_no=f.active_version AND v.invalid_at IS NULL
         WHERE f.state='active' AND f.deleted_at IS NULL

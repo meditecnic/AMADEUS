@@ -1,4 +1,5 @@
 """EMBEDDING math and lazy loading without downloading model weights."""
+import asyncio
 import builtins
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -162,19 +163,24 @@ def test_missing_snapshot_file_explains_source(fake_runtime, missing):
     assert f"https://huggingface.co/{adapter.model_name}/resolve/{EMBEDDING_REVISION}/{missing}" in str(exc.value)
 
 
-def test_default_downloads_use_pinned_revision(fake_runtime, monkeypatch):
+@pytest.mark.parametrize("cache_only", [False, True])
+def test_snapshot_loading_uses_pinned_revision(fake_runtime, monkeypatch, cache_only):
     adapter, _ = fake_runtime
     snapshot = adapter.model_dir
     adapter.model_dir = None
     calls = []
 
-    def download(repo_id, filename, revision):
-        calls.append((repo_id, filename, revision))
+    def download(repo_id, filename, revision, local_files_only):
+        calls.append((repo_id, filename, revision, local_files_only))
         return str(snapshot / filename)
 
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(hf_hub_download=download))
-    adapter._load()
-    assert calls == [(adapter.model_name, name, EMBEDDING_REVISION) for name in ("onnx/model.onnx", "tokenizer.json", "onnx/model.onnx_data")]
+    if cache_only:
+        asyncio.run(adapter.encode_cached_passage("first second"))
+    else:
+        adapter._load()
+    assert calls == [(adapter.model_name, name, EMBEDDING_REVISION, cache_only)
+                     for name in ("onnx/model.onnx", "tokenizer.json", "onnx/model.onnx_data")]
 
 
 @pytest.mark.parametrize("missing", [False, True])

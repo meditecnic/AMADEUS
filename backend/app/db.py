@@ -36,7 +36,7 @@ EMBEDDING_DIMENSION = 768
 # v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
 # v12: jina 768-dimension stable-fact version embeddings. Legacy tables unchanged.
 # v13: content-free model invocation accounting in the control store.
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -317,7 +317,8 @@ CREATE TABLE IF NOT EXISTS conversation_erasure_requests (
     forget_long_term INTEGER NOT NULL,
     source_message_ids TEXT NOT NULL,
     state TEXT NOT NULL CHECK(state IN ('pending','completed')),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    cutoff_message_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_erasure_scope
     ON conversation_erasure_requests(session_id, identity_mode, conversation_id);
@@ -422,6 +423,7 @@ CREATE TABLE IF NOT EXISTS stable_fact_versions (
     valid_from TEXT NOT NULL,
     invalid_at TEXT,
     created_by_job_id TEXT,
+    restored_from_version INTEGER,
     PRIMARY KEY(fact_id, version_no)
 );
 -- Exactly one open (invalid_at IS NULL) version per fact.
@@ -1424,6 +1426,27 @@ def _migrate_v15_to_v16(connection: sqlite3.Connection, kind: DatabaseKind) -> N
         raise
 
 
+MEMORY_V17_COLUMNS = {
+    "conversation_erasure_requests": "cutoff_message_id",
+    "stable_fact_versions": "restored_from_version",
+}
+
+
+def _migrate_v16_to_v17(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if kind == "memory":
+            for table, column in MEMORY_V17_COLUMNS.items():
+                columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                if columns and column not in columns:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER")
+        connection.execute("UPDATE schema_meta SET value='17' WHERE key='schema_version'")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> bool:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1510,6 +1533,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 15:
             _migrate_v15_to_v16(connection, kind)
             current = 16
+        if current == 16:
+            _migrate_v16_to_v17(connection, kind)
+            current = 17
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 

@@ -58,7 +58,9 @@ def _fact(db, fid, *, mode="self", session="chart-session", topic=None,
     )
     for version in range(1, versions + 1):
         db.execute(
-            """INSERT INTO stable_fact_versions VALUES(?,?,?,?,?,?,?,?,?,?,NULL)""",
+            """INSERT INTO stable_fact_versions(
+                   fact_id,version_no,display_text,semantic_json,semantic_fingerprint,confidence,
+                   change_kind,previous_version,valid_from,invalid_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (fid, version, text or f"认知 {fid} v{version}", "{}", fingerprint or fid,
              0.9, "create" if version == 1 else "user_edit",
              version - 1 if version > 1 else None,

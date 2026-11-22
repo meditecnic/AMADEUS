@@ -63,7 +63,10 @@ def shared(mid=1, *, wl=SG, owner="owner", key="likes_anime", value="喜欢动�
 
 def erasure(mid, *, wl=SG, forget=True, owner="owner", mode="self"):
     with connection(wl) as conn:
-        conn.execute("INSERT INTO conversation_erasure_requests VALUES(?,?,?,?, 'delete',?,?, 'completed',?)",
+        conn.execute("""INSERT INTO conversation_erasure_requests(
+                     request_id,session_id,identity_mode,conversation_id,action,
+                     forget_long_term,source_message_ids,state,created_at)
+                     VALUES(?,?,?,?, 'delete',?,?, 'completed',?)""",
                      (f"r-{mid}-{int(forget)}", owner, mode, f"c-{owner}-{mode}-{mid}", int(forget), json.dumps([mid]), NOW))
 
 
@@ -219,7 +222,13 @@ async def test_shared_alias_merges_evidence_and_preserves_shared_rows(store):
     for mid in (1, 2):
         await request_erasure(session_id="owner", identity_mode="self", worldline=SG,
                               conversation_id=f"c-owner-self-{mid}", action="delete", forget_long_term=True)
-        assert len(await repo.list_active_stable_facts(session_id="owner", worldline=SG, identity_mode="self")) == (1 if mid == 1 else 0)
+        assert await repo.list_active_stable_facts(session_id="owner", worldline=SG, identity_mode="self") == []
+        with connection() as conn:
+            retained = conn.execute(
+                """SELECT o.status FROM memory_observations o
+                   JOIN memory_observation_sources s USING(observation_id) WHERE s.source_message_id=2"""
+            ).fetchone()
+            assert retained[0] == ("candidate" if mid == 1 else "deleted")
 
 
 async def test_unexplained_outcome_rolls_back_all_worldlines(store, monkeypatch):

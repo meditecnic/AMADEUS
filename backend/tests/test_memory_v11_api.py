@@ -51,6 +51,9 @@ class _ApiDeterministicEmbedder(EmbeddingAdapter):
         self.encode_query_calls += 1
         return _unit_vector(f"query:{text}")
 
+    async def encode_cached_passage(self, text: str) -> list[float]:
+        return await self.encode_passage(text)
+
 
 # Exact path templates as registered today; must leave production after cutover.
 LEGACY_ROUTE_TEMPLATES = (
