@@ -48,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.db import SCHEMA_VERSION
+from app.db import MEMORY_V17_COLUMNS, SCHEMA_VERSION
 from app.services.memory_v11 import migration as mig
 
 BUILDER_VERSION: str = "memory-candidate-builder/1"
@@ -384,16 +384,15 @@ def _validate_schema_and_tables(
         )
 
 
-def _validate_receipt_columns(conn: sqlite3.Connection, db: str) -> None:
-    columns = {
-        str(row[1]) for row in conn.execute("PRAGMA table_info(memory_ingest_receipts)")
-    }
-    if not _MEMORY_RECEIPT_COLUMNS <= columns:
-        raise CandidateBuildError(
-            "schema_incompatible",
-            f"{db}: memory_ingest_receipts columns {sorted(columns)} lack "
-            f"{sorted(_MEMORY_RECEIPT_COLUMNS - columns)}",
-        )
+def _validate_memory_columns(conn: sqlite3.Connection, db: str) -> None:
+    required = {"memory_ingest_receipts": _MEMORY_RECEIPT_COLUMNS}
+    required.update({table: {column} for table, column in MEMORY_V17_COLUMNS.items()})
+    for table, expected in required.items():
+        columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if expected - columns:
+            raise CandidateBuildError(
+                "schema_incompatible", f"{db}: {table} columns {sorted(columns)} lack {sorted(expected - columns)}",
+            )
 
 
 def _validate_erasure_consistency(memory: sqlite3.Connection, history: sqlite3.Connection, db: str) -> dict[str, Any]:
@@ -483,7 +482,7 @@ def _validate_source(
             _validate_schema_and_tables(
                 memory, _MEMORY_KNOWN_TABLES, _MEMORY_REQUIRED_TABLES, f"{wl}:memory"
             )
-            _validate_receipt_columns(memory, f"{wl}:memory")
+            _validate_memory_columns(memory, f"{wl}:memory")
             report["erasure"][wl] = _validate_erasure_consistency(
                 memory, history, f"{wl}"
             )

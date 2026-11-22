@@ -102,7 +102,9 @@ async def test_commit_discards_stale_source_or_deleted_window(change):
     cid = window["conversation_id"]
     if change in {"pending", "completed"}:
         # An intent alone tests the memory-side guard while history is intact.
-        await sql("memory", """INSERT INTO conversation_erasure_requests VALUES(
+        await sql("memory", """INSERT INTO conversation_erasure_requests(
+                  request_id,session_id,identity_mode,conversation_id,action,
+                  forget_long_term,source_message_ids,state,created_at) VALUES(
                   'erasure','owner','self',?,'forget',0,?,?,'now')""",
                   (cid, json.dumps([window["first_message_id"]]), change))
     elif change == "epoch":
@@ -247,7 +249,7 @@ async def test_topics_keep_user_created_and_user_emptied_topics(memory_api):
 
 
 @pytest.mark.asyncio
-async def test_fresh_install_has_v16_in_all_databases():
+async def test_fresh_install_has_v17_in_all_databases():
     await init_db()
     for worldline, kind in [("steins_gate", "control"), *(
         (wl, db_kind) for wl in ("steins_gate", "beta") for db_kind in ("history", "memory")
@@ -255,7 +257,7 @@ async def test_fresh_install_has_v16_in_all_databases():
         db = await get_db(worldline, kind)
         try:
             row = await (await db.execute("SELECT value FROM schema_meta WHERE key='schema_version'")).fetchone()
-            assert row["value"] == "16"
+            assert row["value"] == "17"
         finally:
             await db.close()
 

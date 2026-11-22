@@ -141,6 +141,36 @@ def test_model_failure_rolls_back_everything_then_next_start_completes(legacy_db
     assert_upgraded(legacy_db, original_keys)
 
 
+@pytest.mark.parametrize("embedder_available", [False, True])
+def test_old_vector_index_cannot_skip_v17_columns(legacy_db, monkeypatch, embedder_available):
+    with connect(legacy_db) as db:
+        for table, column in storage.MEMORY_V17_COLUMNS.items():
+            db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+    if embedder_available:
+        texts = fake_embedder(monkeypatch)
+        with monkeypatch.context() as fault:
+            def interrupt(*_args):
+                raise RuntimeError("injected interruption after reindexing")
+
+            fault.setattr(storage, "_migrate_v12_to_v13", interrupt)
+            with pytest.raises(RuntimeError, match="injected interruption after reindexing"):
+                storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, "memory")
+        with connect(legacy_db) as db:
+            assert storage._read_schema_version(db) == 11
+        assert storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, "memory")
+        assert len(texts) == 3
+    else:
+        fake_embedder(monkeypatch, fail_at=1)
+        assert not storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, "memory")
+
+    with connect(legacy_db) as db:
+        assert storage._read_schema_version(db) == (17 if embedder_available else 11)
+        for table, column in storage.MEMORY_V17_COLUMNS.items():
+            columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+            assert column in columns
+
+
 @pytest.mark.parametrize('model,dimension', [('unknown', '384'), ('intfloat/multilingual-e5-small', '768'), (storage.EMBEDDING_MODEL, '123')])
 def test_unknown_embedding_metadata_still_raises(legacy_db, model, dimension):
     with connect(legacy_db) as db:

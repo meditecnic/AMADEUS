@@ -307,8 +307,10 @@ async def delete_fact(
             shared = await (
                 await db.execute(
                     """SELECT 1 FROM stable_fact_evidence
-                        WHERE observation_id=? AND fact_id != ? LIMIT 1""",
-                    (observation_id, fid),
+                          WHERE observation_id=? AND fact_id != ?
+                          UNION ALL SELECT 1 FROM experiences
+                          WHERE observation_id=? AND status!='deleted' LIMIT 1""",
+                    (observation_id, fid, observation_id),
                 )
             ).fetchone()
             if shared is None:
@@ -404,7 +406,7 @@ async def fact_details(
         version_rows = await (
             await db.execute(
                 """SELECT version_no, display_text, confidence, change_kind,
-                          previous_version, valid_from, invalid_at
+                          previous_version, valid_from, invalid_at, restored_from_version
                      FROM stable_fact_versions
                     WHERE fact_id=?
                     ORDER BY version_no ASC""",
@@ -424,6 +426,7 @@ async def fact_details(
                 ),
                 "valid_from": vr["valid_from"],
                 "invalid_at": vr["invalid_at"],
+                "restored_from_version": vr["restored_from_version"],
                 "is_active": int(vr["version_no"]) == active_version,
             }
             for vr in version_rows

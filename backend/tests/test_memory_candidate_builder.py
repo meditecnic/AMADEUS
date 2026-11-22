@@ -279,8 +279,8 @@ def _fill_memory_db(
         # Erasure metadata: completed request r1 with matching history commit.
         conn.execute(
             "INSERT INTO conversation_erasure_requests(request_id,session_id,identity_mode,"
-            "conversation_id,action,forget_long_term,source_message_ids,state,created_at)"
-            " VALUES('r1',?,?,?,'forget',1,'[102]','completed',?)",
+            "conversation_id,action,forget_long_term,source_message_ids,state,created_at,cutoff_message_id)"
+            " VALUES('r1',?,?,?,'forget',1,'[102]','completed',?,102)",
             (owner, identity, conv_id, NOW),
         )
         if erasure_kwargs.get("pending"):
