@@ -30,7 +30,7 @@ export const CONE_THEMES: Record<ConeWorldline, ConeTheme> = {
     structA: 1, dots: false, spring: { f: 1.55, z: 1 }, k: 1,
   },
   beta: {
-    paper: '#495551', ink: '#ede6dd', acc: '#e98a4f', her: '#c9a063', struct: '#e98a4f',
+    paper: '#495551', ink: '#ede6dd', acc: '#e98a4f', her: '#f28ca8', struct: '#e98a4f',
     structA: 1.25, dots: true, spring: { f: 1.2, z: 0.74 }, k: 1.3,
   },
 };

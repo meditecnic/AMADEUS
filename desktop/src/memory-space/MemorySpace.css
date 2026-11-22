@@ -21,7 +21,7 @@
 }
 .memory-space[data-worldline="beta"] {
   --m-paper: #0b0b0c; --m-ink: #ede6dd; --m-ink-rgb: 237, 230, 221;
-  --m-acc: #e98a4f; --m-acc-rgb: 233, 138, 79; --m-her: #c9a063;
+  --m-acc: #e98a4f; --m-acc-rgb: 233, 138, 79; --m-her: #f28ca8;
   --m-d1: 156ms; --m-d2: 260ms; --m-d3: 416ms; --m-ease: cubic-bezier(.5, 0, .15, 1.12);
 }
 .memory-space:focus { outline: none; }
