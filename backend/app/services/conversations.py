@@ -14,6 +14,8 @@ from app.db import (
     normalize_identity_mode,
     normalize_worldline,
 )
+from app.services.conversation_admission import conversation_admission
+from app.services.conversation_erasure import history_erasure_cursor
 
 
 logger = logging.getLogger(__name__)
@@ -295,25 +297,24 @@ class ConversationService:
         worldline: str,
         title: str,
         *,
-        expected_epoch: int | None = None,
+        expected_erasure: int,
     ) -> dict[str, object]:
         wl = normalize_worldline(worldline)
         clean = title.strip()
         if not clean:
             raise ValueError("title must not be empty")
-        await self.require_owned(conversation_id, session_id, wl)
-        db = await get_db(wl, "history")
-        try:
-            await db.execute(
-                """UPDATE conversations SET title=?,updated_at=?
-                     WHERE id=? AND session_id=? AND title_source='auto'
-                       AND (? IS NULL OR COALESCE((SELECT epoch FROM conversation_content_epochs
-                           WHERE conversation_id=conversations.id AND session_id=conversations.session_id),0)=?)""",
-                (clean, _utc_now(), conversation_id, session_id, expected_epoch, expected_epoch),
-            )
-            await db.commit()
-        finally:
-            await db.close()
+        async with conversation_admission(wl, session_id, conversation_id):
+            if await history_erasure_cursor(wl, session_id, conversation_id) == expected_erasure:
+                db = await get_db(wl, "history")
+                try:
+                    await db.execute(
+                        """UPDATE conversations SET title=?,updated_at=?
+                           WHERE id=? AND session_id=? AND title_source='auto'""",
+                        (clean, _utc_now(), conversation_id, session_id),
+                    )
+                    await db.commit()
+                finally:
+                    await db.close()
         return await self.require_owned(conversation_id, session_id, wl)
 
     async def generate_auto_title(
@@ -326,11 +327,13 @@ class ConversationService:
         assistant_text: str,
         api_key: str,
         provider_snapshot,
-        expected_epoch: int | None = None,
+        expected_erasure: int | None = None,
     ) -> dict[str, object]:
         record = await self.require_owned(conversation_id, session_id, worldline)
         if record["title_source"] == "manual":
             return record
+        if expected_erasure is None:
+            expected_erasure = await history_erasure_cursor(worldline, session_id, conversation_id)
         from app.services.provider_registry import ProviderTask
 
         provider_snapshot.require(ProviderTask.TITLE)
@@ -364,10 +367,10 @@ class ConversationService:
             session_id,
             worldline,
             title[:80],
-            expected_epoch=expected_epoch,
+            expected_erasure=expected_erasure,
         )
 
-    async def retitle_after_truncate(self, record, session_id: str, worldline: str, epoch: int) -> None:
+    async def retitle_after_truncate(self, record, session_id: str, worldline: str) -> None:
         if record["title_source"] != "auto":
             return
         from app.services.credentials import credential_store
@@ -397,7 +400,8 @@ class ConversationService:
         self.schedule_auto_title(
             cid, session_id, worldline, user_text=rows[0]["content"],
             assistant_text="\n".join(row["content"] for row in rows if row["role"] == "assistant"),
-            api_key=key or "", provider_snapshot=provider, expected_epoch=epoch,
+            api_key=key or "", provider_snapshot=provider,
+            expected_erasure=await history_erasure_cursor(worldline, session_id, cid),
         )
 
     def schedule_auto_title(self, *args, **kwargs) -> asyncio.Task:

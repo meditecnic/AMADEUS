@@ -19,6 +19,7 @@ from app.services.model_catalog import ModelUnavailableError, model_catalog
 from app.services.search import SearchEvidenceError, search_service
 from app.services.credentials import credential_store
 from app.services.conversation_admission import conversation_admission, session_admission
+from app.services.conversation_erasure import history_erasure_cursor
 from app.services.tts_queue import tts_manager
 from app import models
 from app.db import get_db, init_db
@@ -1521,17 +1522,19 @@ async def _persist_aborted_turn(
     turn_id: str,
     revision: int,
     history_epoch: int,
-    content_epoch: int,
+    expected_erasure: int,
 ) -> None:
     if session.erasure_pending:
         return
     content = f"[EMO:disappointed] {_ABORTED_TURN_JA}"
     try:
         async with conversation_admission(worldline, session.session_id, conversation_id):
+            if await history_erasure_cursor(worldline, session.session_id, conversation_id) != expected_erasure:
+                return
             message_id = await models.save_message(
                 session.session_id, "assistant", content, worldline=worldline,
                 turn_id=turn_id, revision=revision, conversation_id=conversation_id,
-                translation=_ABORTED_TURN_ZH, expected_epoch=content_epoch,
+                translation=_ABORTED_TURN_ZH,
             )
     except Exception as exc:
         # Broad on purpose: runs while the turn is being cancelled; a DB error
@@ -1620,7 +1623,7 @@ async def processor_loop(
     """
     session.is_busy = True
     conversation_id = None
-    content_epoch = session.content_epoch
+    expected_erasure = 0
     turn_worldline = session.worldline
     segment_pipeline = None
     diagnostic_observer = None
@@ -1714,6 +1717,7 @@ async def processor_loop(
                 session.append_message(pending_user)
                 pending_user = session._history[-1]
             session.content_epoch = content_epoch
+        expected_erasure = await history_erasure_cursor(turn_worldline, session.session_id, conversation_id)
         active_history = session.history
         if session.protocol_version >= 2:
             async def emit_segment_event(event: dict):
@@ -2258,12 +2262,23 @@ async def processor_loop(
         if session.history_epoch == start_history_epoch and session.conversation_id == conversation_id:
             if full_ja_text.strip():
                 async with conversation_admission(turn_worldline, session.session_id, conversation_id):
-                    assistant_message_id = await models.save_message(
-                        session.session_id, "assistant", history_content, worldline=turn_worldline,
-                        turn_id=turn_id, revision=session.revision, conversation_id=conversation_id,
-                        translation=history_translation or None, expected_epoch=content_epoch,
-                    )
+                    if (
+                        session.history_epoch == start_history_epoch
+                        and session.worldline == turn_worldline and session.conversation_id == conversation_id
+                        and await history_erasure_cursor(
+                            turn_worldline, session.session_id, conversation_id,
+                        ) == expected_erasure
+                    ):
+                        assistant_message_id = await models.save_message(
+                            session.session_id, "assistant", history_content, worldline=turn_worldline,
+                            turn_id=turn_id, revision=session.revision, conversation_id=conversation_id,
+                            translation=history_translation or None,
+                        )
                 if assistant_message_id is None:
+                    aborted_turn_written = True
+                    if segment_pipeline is not None:
+                        await segment_pipeline.cancel(reason="superseded_generation")
+                    await send_queue.put((epoch, {"type": "status", "dsk": "idle", "state": "done", "tts": "idle"}))
                     return
                 session.append_message(
                     {
@@ -2312,7 +2327,7 @@ async def processor_loop(
                 assistant_text=history_content,
                 api_key=session.api_key,
                 provider_snapshot=turn_provider,
-                expected_epoch=content_epoch,
+                expected_erasure=expected_erasure,
             )
         
         if history_translation and session.protocol_version < 2:
@@ -2416,7 +2431,7 @@ async def processor_loop(
                 turn_id=turn_id,
                 revision=epoch,
                 history_epoch=start_history_epoch,
-                content_epoch=content_epoch,
+                expected_erasure=expected_erasure,
             ))
             try:
                 await asyncio.shield(notice)
@@ -2481,7 +2496,7 @@ async def processor_loop(
                     turn_id=turn_id,
                     revision=epoch,
                     history_epoch=start_history_epoch,
-                    content_epoch=content_epoch,
+                    expected_erasure=expected_erasure,
                 )
             if session.active_segment_pipeline is segment_pipeline:
                 session.active_segment_pipeline = None

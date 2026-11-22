@@ -92,6 +92,19 @@ async def request_erasure(*, session_id: str, identity_mode: str, worldline: str
     return {**await _finish_erasure(request, worldline), **counts}
 
 
+async def history_erasure_cursor(worldline: str, session_id: str, conversation_id: str) -> int:
+    db = await get_db(worldline, "memory")
+    try:
+        row = await (await db.execute(
+            """SELECT COALESCE(MAX(rowid),0) FROM conversation_erasure_requests
+               WHERE session_id=? AND conversation_id=?""",
+            (session_id, conversation_id),
+        )).fetchone()
+        return int(row[0])
+    finally:
+        await db.close()
+
+
 async def truncate_cursor(db, *, session_id, identity_mode, conversation_id) -> int:
     row = await (await db.execute(
         """SELECT COALESCE(MAX(rowid),0) FROM conversation_erasure_requests

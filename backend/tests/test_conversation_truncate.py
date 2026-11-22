@@ -42,7 +42,8 @@ def test_truncate_keeps_prefix_and_history_only_memory(isolated_client):
     response = truncate(client, owner, conversation, ids[1], ids[-1])
     assert response.status_code == 200, response.text
     assert response.json()["messages_deleted"] == 2
-    assert [row["content"] for row in client.get(f"{path}/messages", params=params).json()] == ["keep"]
+    messages = client.get(f"{path}/messages", params=params).json()
+    assert [(row["id"], row["content"]) for row in messages] == [(ids[0], "keep")]
     assert _details(client, owner, fact)["fact"]["display_text"] == "Remembered before clearing history"
     assert _db_rows(
         "SELECT cutoff_message_id,source_message_ids FROM conversation_erasure_requests WHERE cutoff_message_id IS NOT NULL",
@@ -236,7 +237,9 @@ def test_truncate_conflicts_and_scope(isolated_client):
         sessions.pop(owner, None)
 
 
-def test_late_title_summary_and_reply_cannot_write(isolated_client, isolated_provider_credentials, monkeypatch):
+def test_truncate_blocks_stale_title_and_summary_but_retitles_prefix(
+    isolated_client, isolated_provider_credentials, monkeypatch,
+):
     from app.services.conversations import conversation_service
 
     client, owner = isolated_client, "truncate-late-writers"
@@ -249,7 +252,7 @@ def test_late_title_summary_and_reply_cannot_write(isolated_client, isolated_pro
     prefix_reply = save(owner, cid, "kept reply", "assistant")
     cutoff = save(owner, cid, "cut old details")
     scheduled = []
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *args, **kwargs: scheduled.append(kwargs))
+    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *args, **kwargs: scheduled.append((args, kwargs)))
 
     async def stale_title(**kwargs):
         response = await asyncio.to_thread(truncate, client, owner, cid, cutoff)
@@ -263,21 +266,140 @@ def test_late_title_summary_and_reply_cannot_write(isolated_client, isolated_pro
         epoch = await models.get_conversation_content_epoch(owner, conversation_id=cid)
         record = await conversation_service.generate_auto_title(
             cid, owner, "steins_gate", user_text="cut old details", assistant_text="", api_key="test",
-            provider_snapshot=snapshot, expected_epoch=epoch,
+            provider_snapshot=snapshot,
         )
         assert record["title"] == "New Conversation"
         assert not await models.save_memory_summary(owner, "stale summary", conversation_id=cid, expected_epoch=epoch)
-        assert await models.save_message(owner, "assistant", "stale reply", conversation_id=cid, expected_epoch=epoch) is None
+        (args, kwargs), = scheduled
+        assert (kwargs["user_text"], kwargs["assistant_text"]) == ("kept user", "kept reply")
+        assert kwargs["expected_erasure"] > 0
+        await models.invalidate_memory_summaries(owner, "steins_gate")
+        snapshot.adapter.complete_json = AsyncMock(return_value={"title": "retained prefix"})
+        kwargs["provider_snapshot"] = snapshot
+        retitled = await conversation_service.generate_auto_title(*args, **kwargs)
+        assert retitled["title"] == "retained prefix"
 
     asyncio.run(run_writers())
-    kwargs, = scheduled
-    assert (kwargs["user_text"], kwargs["assistant_text"], kwargs["expected_epoch"]) == ("kept user", "kept reply", 1)
     assert [m["content"] for m in asyncio.run(models.get_session_messages(owner, conversation_id=cid))] == [
         "kept user", "kept reply"
     ]
     assert not asyncio.run(models.get_latest_summary(owner, conversation_id=cid))
     assert truncate(client, owner, cid, prefix, prefix_reply).status_code == 200
     assert len(scheduled) == 1
+
+
+@pytest.mark.parametrize("operation", ["delete_fact", "truncate", "forget", "delete"])
+def test_streaming_reply_across_memory_or_history_erasure(
+    isolated_client, isolated_provider_credentials, monkeypatch, operation,
+):
+    from app.routers import chat_ws
+    from app.services.conversation_erasure import request_erasure
+    from app.services.conversations import conversation_service
+    from app.services.memory_v11 import jobs
+    from test_emotion_per_conversation import _ScriptedDeepSeek, _SilentTTS
+
+    client, owner = isolated_client, "streaming-erasure"
+    isolated_provider_credentials.set("deepseek", "test-credential")
+    _, _, fact, _ = _source(client, owner, "I like jasmine tea")
+    record = client.post("/api/conversations", json={"session_id": owner, "identity_mode": "self"})
+    assert record.status_code == 201, record.text
+    cid = record.json()["id"]
+    started, release = Event(), Event()
+    reply = "[EMO:sad] そうね。"
+
+    class Provider(_ScriptedDeepSeek):
+        async def get_chat_stream(self, active_history, **kwargs):
+            yield {"content": reply, "tool_calls": None}
+            started.set()
+            assert await asyncio.to_thread(release.wait, 10)
+
+        async def complete_json(self, **kwargs):
+            return {"title": "流式回复标题"}
+
+    monkeypatch.setattr(chat_ws, "deepseek_service", Provider([]))
+    monkeypatch.setattr(chat_ws, "tts_manager", _SilentTTS())
+    monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock())
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner}") as ws:
+            ws.send_json({"type": "auth", "protocol_version": 2, "client": "desktop",
+                          "conversation_mode": "history", "conversation_id": cid})
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": "next user message"})
+            try:
+                assert started.wait(5)
+                session = chat_ws.sessions[owner]
+                task, pipeline = session.active_task, session.active_segment_pipeline
+                heartbeat = pipeline._heartbeat_task
+                assert heartbeat is not None and not heartbeat.done()
+                if operation == "delete_fact":
+                    deleted = client.delete(f"/api/memory/facts/{fact}", params={
+                        **_facts_scope(owner), "expected_version": 1,
+                    })
+                    assert deleted.status_code == 200, deleted.text
+                else:
+                    cutoff = None
+                    if operation == "truncate":
+                        rows = asyncio.run(models.get_session_messages(owner, conversation_id=cid))
+                        cutoff = (rows[-1]["id"], rows[-1]["id"])
+                    asyncio.run(request_erasure(
+                        session_id=owner, identity_mode="self", worldline="steins_gate",
+                        conversation_id=cid, action="delete" if operation == "delete" else "forget",
+                        forget_long_term=operation == "truncate", cutoff=cutoff,
+                    ))
+            finally:
+                release.set()
+
+            async def finish():
+                await asyncio.wait_for(asyncio.shield(task), 5)
+                await asyncio.gather(*conversation_service._title_tasks)
+
+            client.portal.call(finish)
+            assert not session.is_busy
+            assert heartbeat.done(), "the reply left a running heartbeat"
+
+            async def terminal_frames():
+                status_done, terminal = False, None
+                while not (status_done and terminal):
+                    message = await asyncio.wait_for(ws._send_rx.receive(), 3)
+                    frame = json.loads(message["text"])
+                    if frame["type"] == "status" and frame["state"] == "done":
+                        status_done = True
+                    if frame["type"] in {"turn.completed", "turn.cancelled", "error"}:
+                        terminal = frame["type"]
+                return terminal
+
+            expected = "turn.completed" if operation == "delete_fact" else "turn.cancelled"
+            assert ws.portal.call(terminal_frames) == expected
+        history = client.get(f"/api/conversations/{cid}/messages", params={"session_id": owner})
+        if operation == "delete_fact":
+            assert [(row["role"], row["content"]) for row in history.json()] == [
+                ("user", "next user message"), ("assistant", reply),
+            ]
+            refreshed = client.get(f"/api/conversations/{cid}", params={"session_id": owner})
+            assert refreshed.json()["title"] == "流式回复标题"
+        elif operation == "delete":
+            assert history.status_code == 404
+        else:
+            assert history.json() == []
+    finally:
+        chat_ws.sessions.pop(owner, None)
+
+
+def test_truncate_succeeds_when_retitle_raises(isolated_client, monkeypatch):
+    from app.services.conversations import conversation_service
+
+    client, owner = isolated_client, "truncate-retitle-error"
+    cid, kept, _, _ = _source(client, owner, "kept context")
+    cut = save(owner, cid, "cut context")
+    retitle = AsyncMock(side_effect=RuntimeError)
+    monkeypatch.setattr(conversation_service, "retitle_after_truncate", retitle)
+    response = truncate(client, owner, cid, cut)
+    assert response.status_code == 200, response.text
+    assert response.json()["messages_deleted"] == 1
+    retitle.assert_awaited_once()
+    assert _db_rows("SELECT state FROM conversation_erasure_requests") == [{"state": "completed"}]
+    rows = asyncio.run(models.get_session_messages(owner, conversation_id=cid))
+    assert [row["id"] for row in rows] == [kept]
 
 
 def test_websocket_waits_for_truncate_and_uses_reloaded_prompt(

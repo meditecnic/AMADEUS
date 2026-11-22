@@ -1,6 +1,8 @@
 """Durable, worldline-scoped conversation HTTP API."""
 
 from __future__ import annotations
+
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
@@ -21,6 +23,7 @@ from app.services.provider_runtime import provider_registry
 
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -296,5 +299,8 @@ async def truncate_conversation(
             session.history_epoch += 1
             session.content_epoch = epoch
             await session.reload_history()
-        await conversation_service.retitle_after_truncate(record, session_id, wl, epoch)
+        try:
+            await conversation_service.retitle_after_truncate(record, session_id, wl)
+        except Exception as exc:
+            logger.warning("Could not schedule title after truncation (%s)", type(exc).__name__)
         return counts
