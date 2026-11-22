@@ -1379,8 +1379,7 @@ def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
         connection.execute("ALTER TABLE stable_fact_version_embeddings_new RENAME TO stable_fact_version_embeddings")
         connection.executemany(
             "INSERT OR REPLACE INTO schema_meta(key,value) VALUES(?,?)",
-            (("embedding_model", EMBEDDING_MODEL), ("embedding_dimension", str(EMBEDDING_DIMENSION)),
-             ("schema_version", str(SCHEMA_VERSION))),
+            (("embedding_model", EMBEDDING_MODEL), ("embedding_dimension", str(EMBEDDING_DIMENSION))),
         )
         connection.commit()
         return True
@@ -1432,14 +1431,18 @@ MEMORY_V17_COLUMNS = {
 }
 
 
+def _add_memory_v17_columns(connection: sqlite3.Connection) -> None:
+    for table, column in MEMORY_V17_COLUMNS.items():
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if columns and column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER")
+
+
 def _migrate_v16_to_v17(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
     connection.execute("BEGIN IMMEDIATE")
     try:
         if kind == "memory":
-            for table, column in MEMORY_V17_COLUMNS.items():
-                columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-                if columns and column not in columns:
-                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} INTEGER")
+            _add_memory_v17_columns(connection)
         connection.execute("UPDATE schema_meta SET value='17' WHERE key='schema_version'")
         connection.commit()
     except BaseException:
@@ -1500,6 +1503,10 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
             ).fetchone()
             if legacy or (current == 11 and table and "dimensions=384" in table[0]):
                 if not _migrate_v11_embeddings(connection):
+                    # Lexical retrieval still opens the archive while reindexing is deferred.
+                    with connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        _add_memory_v17_columns(connection)
                     return False
         if current == 11:
             current = 12
