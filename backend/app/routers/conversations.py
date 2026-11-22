@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from app import models
 from app.db import normalize_worldline
 from app.db import normalize_identity_mode
+from app.services.conversation_admission import conversation_admission
+from app.services.conversation_erasure import TruncateError, request_erasure
 from app.services.conversations import (
     ConversationNotFound,
     IdentityModeImmutableError,
@@ -23,11 +25,26 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 @asynccontextmanager
 async def _erasure_runtime(conversation_id: str, session_id: str, worldline: str, *, deleting: bool = False):
-    await conversation_service.require_owned(conversation_id, session_id, worldline)
+    async with conversation_admission(worldline, session_id, conversation_id):
+        async with _clear_runtime(conversation_id, session_id, worldline, deleting=deleting):
+            yield
+
+
+def _matching_session(conversation_id: str, session_id: str, worldline: str):
     from app.routers.chat_ws import sessions
-    from app.services.session_manager import cancel_inflight
+
     session = sessions.get(session_id)
-    if session is None or session.worldline != worldline or session.conversation_id != conversation_id:
+    if session is not None and session.worldline == worldline and session.conversation_id == conversation_id:
+        return session
+    return None
+
+
+@asynccontextmanager
+async def _clear_runtime(conversation_id: str, session_id: str, worldline: str, *, deleting: bool):
+    await conversation_service.require_owned(conversation_id, session_id, worldline)
+    from app.services.session_manager import cancel_inflight
+    session = _matching_session(conversation_id, session_id, worldline)
+    if session is None:
         yield
         return
     if getattr(session, 'erasure_pending', False):
@@ -42,6 +59,7 @@ async def _erasure_runtime(conversation_id: str, session_id: str, worldline: str
         await cancel_inflight(session)
         session.history = []
         session.memory_summary = ''
+        session._reset_emotion()
         yield
         if deleting and session.worldline == worldline and session.conversation_id == conversation_id:
             await session.load_from_db()
@@ -74,6 +92,11 @@ class ConversationPatch(BaseModel):
 
 class ConversationForget(BaseModel):
     forget_long_term: bool = False
+
+
+class ConversationTruncate(BaseModel):
+    from_message_id: int = Field(gt=0, strict=True)
+    expected_last_message_id: int = Field(gt=0, strict=True)
 
 
 def _not_found(exc: ConversationNotFound) -> HTTPException:
@@ -244,3 +267,34 @@ async def forget_conversation(
             )
     except ConversationNotFound as exc:
         raise _not_found(exc) from exc
+
+
+@router.post("/{conversation_id}/truncate")
+async def truncate_conversation(
+    conversation_id: str, request: ConversationTruncate, session_id: str, worldline: str = "steins_gate",
+):
+    wl = normalize_worldline(worldline)
+    async with conversation_admission(wl, session_id, conversation_id):
+        try:
+            record = await conversation_service.require_owned(conversation_id, session_id, wl)
+            session = _matching_session(conversation_id, session_id, wl)
+            if session is not None and session.is_busy:
+                raise TruncateError("conversation_busy")
+            counts = await request_erasure(
+                session_id=session_id, identity_mode=record["identity_mode"], worldline=wl,
+                conversation_id=conversation_id, action="forget", forget_long_term=True,
+                cutoff=(request.from_message_id, request.expected_last_message_id),
+            )
+        except ConversationNotFound as exc:
+            raise _not_found(exc) from exc
+        except TruncateError as exc:
+            code = str(exc)
+            raise HTTPException(422 if code == "invalid_truncate_point" else 409, detail={"code": code}) from exc
+        epoch = await models.get_conversation_content_epoch(session_id, wl, conversation_id)
+        session = _matching_session(conversation_id, session_id, wl)
+        if session is not None:
+            session.history_epoch += 1
+            session.content_epoch = epoch
+            await session.reload_history()
+        await conversation_service.retitle_after_truncate(record, session_id, wl, epoch)
+        return counts

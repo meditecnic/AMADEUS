@@ -33,6 +33,8 @@ async def save_message(
     revision: int = 0,
     conversation_id: str | None = None,
     translation: str | None = None,
+    *,
+    expected_epoch: int | None = None,
 ):
     wl = normalize_worldline(worldline)
     cid = await _resolve_conversation_id(session_id, wl, conversation_id)
@@ -41,11 +43,14 @@ async def save_message(
         cur = await db.execute(
             """INSERT INTO messages(
                    session_id,conversation_id,role,content,translation,turn_id,revision
-               ) VALUES(?,?,?,?,?,?,?)""",
-            (session_id, cid, role, content, translation, turn_id, revision),
+                 ) SELECT ?,?,?,?,?,?,?
+                   WHERE ? IS NULL OR COALESCE((SELECT epoch FROM conversation_content_epochs
+                       WHERE session_id=? AND conversation_id=?),0)=?""",
+            (session_id, cid, role, content, translation, turn_id, revision,
+             expected_epoch, session_id, cid, expected_epoch),
         )
         await db.commit()
-        return cur.lastrowid
+        return cur.lastrowid if cur.rowcount else None
     finally:
         await db.close()
 
