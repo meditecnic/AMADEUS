@@ -34,6 +34,7 @@ async def sources_erased(db: Any, *, session_id: str, identity_mode: str,
 
 # Earlier requests committed their intent before applying memory changes.
 _ATOMIC_REQUEST_PREFIX = "v17:"
+_OPTIMISTIC_ATTEMPTS = 3
 
 
 @dataclass
@@ -41,6 +42,7 @@ class FactRecompute:
     fact_id: str
     active_version: int
     dead_versions: list[int]
+    dead_evidence: set[str]
     live_support: set[str]
     restored_from: int | None
     restored_text: str | None
@@ -128,23 +130,29 @@ async def _plan_recompute(db, request, ids, authorized):
     for (fact_id, active), fact_rows in groupby(rows, key=lambda row: (row['fact_id'], row['active_version'])):
         alive_versions = {}
         dead_versions = []
+        dead_evidence = set()
         live_support = set()
         for version, evidence in groupby(fact_rows, key=lambda row: row['version_no']):
             links = list(evidence)
+            dead_links = {
+                row['observation_id'] for row in links
+                if row['observation_id'] is not None and row['observation_id'] not in live
+            }
+            dead_observations.update(dead_links)
             if any(row['evidence_role'] == 'primary' and row['observation_id'] in live for row in links):
                 alive_versions[version] = links[0]['display_text']
+                dead_evidence.update(dead_links)
             else:
                 dead_versions.append(version)
-                for row in links:
-                    observation = row['observation_id']
-                    if observation in live and row['evidence_role'] == 'supporting':
-                        live_support.add(observation)
-                    elif observation is not None and observation not in live:
-                        dead_observations.add(observation)
-        if dead_versions:
+                live_support.update(
+                    row['observation_id'] for row in links
+                    if row['evidence_role'] == 'supporting' and row['observation_id'] in live
+                )
+        if dead_versions or dead_evidence:
             restored_from = max(alive_versions) if active in dead_versions and alive_versions else None
             facts.append(FactRecompute(
-                fact_id, active, dead_versions, live_support, restored_from, alive_versions.get(restored_from),
+                fact_id, active, dead_versions, dead_evidence, live_support, restored_from,
+                alive_versions.get(restored_from),
             ))
 
     experiences = await (await db.execute(
@@ -219,8 +227,10 @@ async def _apply_recompute(db, request, worldline, plan, embeddings):
         )
         dead_versions = json.dumps(fact.dead_versions)
         await db.execute(
-            'DELETE FROM stable_fact_evidence WHERE fact_id=? AND version_no IN (SELECT value FROM json_each(?))',
-            (fact.fact_id, dead_versions),
+            """DELETE FROM stable_fact_evidence WHERE fact_id=?
+               AND (version_no IN (SELECT value FROM json_each(?))
+                    OR observation_id IN (SELECT value FROM json_each(?)))""",
+            (fact.fact_id, dead_versions, json.dumps(sorted(fact.dead_evidence))),
         )
         for obsolete in fact.dead_versions:
             await delete_version_embedding(db, fact_id=fact.fact_id, version_no=obsolete)
@@ -280,11 +290,15 @@ async def _commit_erasure_memory(request, worldline, *, history_ids: set[int] | 
     db = await get_db(worldline, 'memory')
     try:
         ids = None
-        while True:
-            # Recheck the same connection's data_version under the write lock.
-            # This also detects evidence/source updates that don't advance a version number.
-            revision = (await (await db.execute('PRAGMA data_version')).fetchone())[0]
-            await db.execute('BEGIN')
+        embedding_cache = {}
+        for attempt in range(_OPTIMISTIC_ATTEMPTS + 1):
+            write_locked = attempt == _OPTIMISTIC_ATTEMPTS
+            if write_locked:
+                # Sustained writes require a fresh plan held stable through commit.
+                await db.execute('BEGIN IMMEDIATE')
+            else:
+                revision = (await (await db.execute('PRAGMA data_version')).fetchone())[0]
+                await db.execute('BEGIN')
             if ids is None:
                 ids = (await _whole_conversation_sources(db, request, history_ids) if history_ids is not None
                        else set(json.loads(request['source_message_ids'])))
@@ -293,18 +307,25 @@ async def _commit_erasure_memory(request, worldline, *, history_ids: set[int] | 
             if request['forget_long_term']:
                 authorized = await _authorized_sources(db, request, ids)
                 plan = await _plan_recompute(db, request, ids, authorized)
-            await db.rollback()
+            if not write_locked:
+                await db.rollback()
 
             embeddings = {}
             if plan is not None and not legacy_pending:
                 for fact in plan[0]:
                     if fact.restored_from is not None:
-                        try:
-                            embeddings[fact.fact_id] = await prepare_passage_embedding(fact.restored_text, local_only=True)
-                        except MemoryValidationError:
-                            # A restored version can still be recalled through its text.
-                            pass
+                        key = (fact.fact_id, fact.restored_from, fact.restored_text)
+                        if key not in embedding_cache:
+                            try:
+                                embedding_cache[key] = await prepare_passage_embedding(fact.restored_text, local_only=True)
+                            except MemoryValidationError:
+                                # A restored version can still be recalled through its text.
+                                embedding_cache[key] = None
+                        embeddings[fact.fact_id] = embedding_cache[key]
 
+            if write_locked:
+                break
+            # Evidence can change without advancing a fact's version.
             await db.execute('BEGIN IMMEDIATE')
             if (await (await db.execute('PRAGMA data_version')).fetchone())[0] == revision:
                 break

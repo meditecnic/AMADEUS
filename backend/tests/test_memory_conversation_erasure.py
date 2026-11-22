@@ -329,6 +329,37 @@ def test_forget_prunes_middle_version_without_reverting_live_current_version(iso
     ) == [{"status": "deleted", "display_text": None}]
 
 
+def test_forget_removes_dead_support_from_live_version(isolated_client):
+    client, owner = isolated_client, "dead-support-owner"
+    _, _, fact, _ = _source(client, owner, "I run every week")
+    original = _details(client, owner, fact)
+    b, message = _message(client, owner, "I run past my private address")
+    _change(owner, fact, 1, b, message, "I run past my private address", op="ATTACH")
+    support, = _db_rows(
+        "SELECT observation_id FROM memory_observation_sources WHERE source_message_id=?", (message,),
+    )
+    assert any(p["conversation_id"] == b for p in _details(client, owner, fact)["provenance"])
+
+    assert _forget(client, owner, b).status_code == 200
+    assert _db_rows(
+        "SELECT status,display_text,semantic_json FROM memory_observations WHERE observation_id=?",
+        (support["observation_id"],),
+    ) == [{"status": "deleted", "display_text": None, "semantic_json": None}]
+    observations = client.get("/api/memory/observations", params={**_facts_scope(owner), "limit": 1})
+    assert observations.status_code == 200, observations.text
+    assert observations.json()["pagination"]["total"] == 1
+    assert {row["observation_id"] for row in observations.json()["observations"]} == {
+        original["provenance"][0]["observation_id"]
+    }
+    assert _details(client, owner, fact) == original
+
+    export = client.get("/api/data/export?kind=memory&worldline=sg")
+    assert export.status_code == 200, export.text
+    with ZipFile(BytesIO(export.content)) as archive:
+        exported, = json.loads(archive.read("sg/memory.json"))["stable_facts"]
+    assert (exported["fact_id"], exported["version_no"], exported["display_text"]) == (fact, 1, "I run every week")
+
+
 def test_forget_moves_live_support_after_concurrent_attach(isolated_client, monkeypatch):
     from app.services.memory_v11 import indexing
 
@@ -341,14 +372,14 @@ def test_forget_moves_live_support_after_concurrent_attach(isolated_client, monk
     calls = []
 
     async def prepare_with_attach(text, **kwargs):
-        calls.append(text)
-        if len(calls) == 1:
+        if not calls:
             await asyncio.to_thread(_change, owner, fact, 2, c, c_id, "I still run regularly", op="ATTACH")
+        calls.append(text)
         return await prepare(text, **kwargs)
 
     monkeypatch.setattr(indexing, "prepare_passage_embedding", prepare_with_attach)
     assert _forget(client, owner, b).status_code == 200
-    assert calls == ["I run every week", "I run every week"]
+    assert calls == ["I run every week"]
     details = _details(client, owner, fact)
     assert "lighthouse" not in str(details)
     assert "lighthouse" not in _recall(owner, "run every week")
@@ -361,6 +392,55 @@ def test_forget_moves_live_support_after_concurrent_attach(isolated_client, monk
            JOIN memory_observation_sources s USING(observation_id)
            WHERE e.fact_id=? AND s.conversation_id=?""", (fact, c),
     ) == [{"version_no": 3, "evidence_role": "supporting"}]
+
+
+def test_forget_finishes_during_continuous_memory_writes(isolated_client, monkeypatch):
+    from app.services import conversation_erasure
+    from app.services.memory_v11 import indexing
+
+    client, owner = isolated_client, "contended-erasure-owner"
+    _, _, fact, _ = _source(client, owner, "I run every week")
+    b, message = _message(client, owner, "I run at the lighthouse")
+    _change(owner, fact, 1, b, message, "I run at the lighthouse")
+    get_db = conversation_erasure.get_db
+    prepare = indexing.prepare_passage_embedding
+    writes = []
+    calls = []
+
+    async def prepare_once(text, **kwargs):
+        calls.append(text)
+        return await prepare(text, **kwargs)
+
+    async def connect(worldline, kind):
+        db = await get_db(worldline, kind)
+        if kind == "memory":
+            execute = db.execute
+
+            async def execute_after_write(sql, *args, **kwargs):
+                if sql == "BEGIN IMMEDIATE":
+                    assert len(writes) < 6, "Erasure should finish while other connections are still writing"
+                    writes.append(len(writes) + 1)
+                    writer = await get_db(worldline, kind)
+                    try:
+                        await writer.execute("INSERT OR REPLACE INTO schema_meta VALUES('write_probe',?)",
+                                             (str(writes[-1]),))
+                        await writer.commit()
+                    finally:
+                        await writer.close()
+                return await execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(db, "execute", execute_after_write)
+        return db
+
+    monkeypatch.setattr(indexing, "prepare_passage_embedding", prepare_once)
+    monkeypatch.setattr(conversation_erasure, "get_db", connect)
+    assert _forget(client, owner, b).status_code == 200
+    assert len(writes) >= 3
+    assert calls == ["I run every week"]
+    assert _details(client, owner, fact)["fact"]["display_text"] == "I run every week"
+    assert _db_rows(
+        "SELECT version_no FROM stable_fact_version_embeddings WHERE fact_id=?", (fact,),
+    ) == [{"version_no": 3}]
 
 
 def test_dead_version_number_cannot_be_reused_by_a_later_refinement(isolated_client):

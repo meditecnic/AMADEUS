@@ -34,33 +34,49 @@ async def list_observations(
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Advanced scoped diagnostics across ALL observation statuses.
+    """Scoped diagnostics across observation statuses.
 
-    Deleted/content-scrubbed observations return display_text=null; text is
-    never reconstructed from sources.
+    Deleted observations return display_text=null. Deleted observations with
+    only forgotten sources are omitted.
     """
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
     session = _require_session_id(session_id)
+    visible = """FROM memory_observations o
+                 WHERE o.session_id=? AND o.identity_mode=?
+                   AND NOT (
+                       o.status='deleted'
+                       AND EXISTS (SELECT 1 FROM memory_observation_sources s
+                                   WHERE s.observation_id=o.observation_id)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM memory_observation_sources s
+                            WHERE s.observation_id=o.observation_id
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM conversation_erasure_requests r
+                                  JOIN json_each(r.source_message_ids) erased
+                                    ON erased.value=s.source_message_id
+                                 WHERE r.session_id=o.session_id AND r.identity_mode=o.identity_mode
+                                   AND r.conversation_id=s.conversation_id AND r.forget_long_term=1
+                              )
+                       )
+                   )"""
 
     db = await get_db(wl, "memory")
     try:
         rows = await (
             await db.execute(
-                """SELECT observation_id, display_text, evidence_kind,
-                          memory_class, confidence, status, reanalysis_count,
-                          expires_at, created_at
-                     FROM memory_observations
-                    WHERE session_id=? AND identity_mode=?
-                    ORDER BY created_at DESC, observation_id ASC
+                f"""SELECT o.observation_id, o.display_text, o.evidence_kind,
+                           o.memory_class, o.confidence, o.status, o.reanalysis_count,
+                           o.expires_at, o.created_at
+                    {visible}
+                    ORDER BY o.created_at DESC, o.observation_id ASC
                     LIMIT ? OFFSET ?""",
                 (session, mode, int(limit), int(offset)),
             )
         ).fetchall()
         total_row = await (
             await db.execute(
-                """SELECT COUNT(*) AS n FROM memory_observations
-                    WHERE session_id=? AND identity_mode=?""",
+                f"SELECT COUNT(*) AS n {visible}",
                 (session, mode),
             )
         ).fetchone()
