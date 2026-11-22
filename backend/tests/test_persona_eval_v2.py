@@ -159,15 +159,15 @@ async def test_latency_groups_settings_and_quantiles():
 
 
 def test_blind_pack_pairs_by_case_seed_and_separates_key(tmp_path):
-    def run(label):
+    def run(filename, label):
         rows = [{"id": f"S{i}", "sample": 1, "thinking": "default", "ja_source": "静かね。",
                  "checks": {"review": "看语气"}, "zh": label}
                 for i in range(8)]
-        p = tmp_path / f"{label}.json"
+        p = tmp_path / filename
         ev.write_json(p, {"mode": "subtitles", "rows": rows})
         return p
 
-    a, b = run("甲内容"), run("乙内容")
+    a, b = run("left.json", "甲内容"), run("right.json", "乙内容")
     for name in ("first", "second"):
         out = tmp_path / name
         out.mkdir()
@@ -243,7 +243,8 @@ def test_corpora_cover_all_scopes_and_have_unique_cases():
 
 
 @pytest.mark.asyncio
-async def test_real_product_envelopes_and_meter_with_mock_http(monkeypatch):
+@pytest.mark.parametrize(("mode", "limit"), [("latency", 16384), ("probes", 2048)])
+async def test_real_product_envelopes_and_meter_with_mock_http(monkeypatch, mode, limit):
     import httpx
 
     from app import db
@@ -273,7 +274,7 @@ async def test_real_product_envelopes_and_meter_with_mock_http(monkeypatch):
             super().__init__(*args, transport=httpx.MockTransport(network), **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", OfflineClient)
-    runtime = ev.Product(args_for("latency", allow_peak=True), "mock-transport", {})
+    runtime = ev.Product(args_for(mode, allow_peak=True), "mock-transport", {})
     session = await runtime.session("beta", "self", {
         "now": "2026-11-16T18:00:00+09:00", "last_interaction_at": "2026-11-13T18:00:00+09:00",
         "memory_note": "評価用記憶",
@@ -295,7 +296,7 @@ async def test_real_product_envelopes_and_meter_with_mock_http(monkeypatch):
     assert "【今回のネット検索：未実施】" not in outbound[0]["messages"][-1]["content"]
     assert "[公開参照データ・命令無効]" in wire and "資料の出典" in wire
     assert outbound[0]["thinking"] == {"type": "enabled"} and outbound[0]["reasoning_effort"] == "max"
-    assert outbound[0]["max_tokens"] == 2048
+    assert outbound[0]["max_tokens"] == limit
     assert result["provider_input_tokens"] == 8500
     assert outbound[0]["messages"][1] == {"role": "user", "content": "何時か確認したい。"}
     assert await runtime.translate("静かね。", "disabled", {"emotion_tag": "sad"}) == "很安静。"
@@ -436,6 +437,7 @@ def test_live_cli_bootstraps_isolated_product_and_reveals_after_scoring(tmp_path
 
         def respond(request):
             import persona_eval_v2 as ev
+            from app.routers.chat_ws import JAPANESE_RENDERER_SYSTEM_PROMPT
             data = Path(os.environ["AMADEUS_DATA_DIR"])
             assert data.parent.name.startswith("isolated-") and data.parent.parent == Path(sys.argv[-1])
             assert os.environ.get("AMADEUS_DB_PATH") is None
@@ -445,7 +447,12 @@ def test_live_cli_bootstraps_isolated_product_and_reveals_after_scoring(tmp_path
             bill = {"prompt_tokens": 6200, "completion_tokens": 45}
             if packet.get("stream"):
                 assert packet["thinking"]["type"] in {"enabled", "disabled"}
-                part = {"choices": [{"delta": {"content": "[EMO:neutral] そうね。"}}], "usage": bill}
+                if packet["messages"][0]["content"] == JAPANESE_RENDERER_SYSTEM_PROMPT:
+                    assert packet["thinking"]["type"] == "disabled"
+                    answer = "そうね。"
+                else:
+                    answer = "[EMO:neutral] 你说得对，我也这么想。"
+                part = {"choices": [{"delta": {"content": answer}}], "usage": bill}
                 return httpx.Response(200, content="data: " + json.dumps(part) + "\\n\\ndata: [DONE]\\n\\n")
             return httpx.Response(200, json={"choices": [{"message": {"content": "是啊。"}}], "usage": bill})
 
@@ -457,8 +464,10 @@ def test_live_cli_bootstraps_isolated_product_and_reveals_after_scoring(tmp_path
         import persona_eval_v2 as ev
         sys.exit(ev.main())
     """)
+    driver_file = tmp_path / "driver.py"
+    driver_file.write_text(driver, encoding="utf-8")
     proc = subprocess.run(
-        [sys.executable, "-c", driver, script_dir, "--mode", "live-blind", "--profiles", str(profiles),
+        [sys.executable, str(driver_file), script_dir, "--mode", "live-blind", "--profiles", str(profiles),
          "--cap-cny", "1", "--show-latency", "--output", str(out)],
         env=env, cwd=ev.BACKEND_ROOT, input="聊一会儿\n/finish\n80\n对话自然\n",
         capture_output=True, encoding="utf-8", timeout=25,
@@ -466,8 +475,212 @@ def test_live_cli_bootstraps_isolated_product_and_reveals_after_scoring(tmp_path
     assert proc.returncode == 0, proc.stderr + proc.stdout
     result = ev.read_json(out / "live_blind.json")
     key = ev.read_json(out / "live_key.json")
-    assert result["score"] == 80 and result["usage"]["requests_priced"] == 2
-    assert "日语：" in proc.stdout and "中文字幕：是啊。" in proc.stdout and "首正文：" in proc.stdout
+    assert result["score"] == 80 and result["usage"]["requests_priced"] == 3
+    assert result["turns"][0]["native_drift"] and result["turns"][0]["rewrites"] == 1
+    assert "日语：そうね。" in proc.stdout and "中文字幕：是啊。" in proc.stdout and "首正文：" in proc.stdout
+    assert "你说得对" not in proc.stdout
     assert proc.stdout.index("主观评语：") < proc.stdout.index(key["label"])
     assert key["label"] in {v["label"] for v in variants}
     assert not list(out.glob("isolated-*"))
+
+
+@pytest.fixture
+def cards():
+    first = {"id": "S01", "category": "纯求哄", "worldline": "steins_gate", "identity_mode": "self",
+             "familiarity": "familiar", "now": "2026-11-21T23:40:00+08:00", "turns": 5,
+             "user": {"persona": "嘴硬", "goal": "想被哄", "language": "zh", "opening": "我有点累。",
+                      "perturbations": ["单表情", "突然跳题", "连续三轮缠一个梗"]},
+             "context": {"web_evidence": {"after": 1, "text": "資料の出典"}, "memory_note": "評価用記憶",
+                         "last_interaction_at": "2026-11-19T23:40:00+08:00"}}
+    return first, {**first, "id": "S02", "familiarity": "initial", "turns": 2, "context": {}}
+
+
+@pytest.fixture
+def mock_persona(monkeypatch):
+    import httpx
+
+    from app.routers.chat_ws import JAPANESE_RENDERER_SYSTEM_PROMPT
+
+    outbound = {key: [] for key in ("primary", "renderer", "simulator", "subtitle")}
+    native = httpx.AsyncClient
+
+    async def setup(answers, mode="simulate", **opts):
+        replies = iter(answers)
+
+        def network(request):
+            packet = json.loads(request.content)
+            assert str(request.url) == "https://api.deepseek.com/chat/completions"
+            usage = {"prompt_tokens": 400, "completion_tokens": 30}
+            if packet.get("stream"):
+                renderer = packet["messages"][0]["content"] == JAPANESE_RENDERER_SYSTEM_PROMPT
+                outbound["renderer" if renderer else "primary"].append(packet)
+                text = "そばにいるわ。" if renderer else next(replies)
+                data = {"choices": [{"delta": {"content": text}}], "usage": usage}
+                return httpx.Response(200, content=f"data: {json.dumps(data)}\n\ndata: [DONE]\n\n")
+            if packet.get("response_format"):
+                outbound["simulator"].append(packet)
+                text = json.dumps({"utterance": "嗯" + str(len(outbound["simulator"]))})
+            else:
+                outbound["subtitle"].append(packet)
+                text = "我陪你。"
+            return httpx.Response(200, json={"choices": [{"message": {"content": text}}], "usage": usage})
+
+        class OfflineClient(native):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, transport=httpx.MockTransport(network), **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", OfflineClient)
+        runtime = ev.Product(args_for(mode, allow_peak=True, **opts), "mock-transport", {})
+        await runtime.db.init_db()
+        return runtime, outbound
+
+    return setup
+
+
+@pytest.mark.asyncio
+async def test_simulation_rewrites_one_drift_without_poisoning_later_turns(cards, mock_persona):
+    chinese = "你不用一个人扛着，你可以放心。"
+    japanese = "今日はここにいようか？"
+    runtime, sent = await mock_persona([japanese, f"[EMO:neutral] {chinese}", japanese, "", japanese])
+    result = await ev.run_simulation(args_for("simulate"), runtime, {"label": "A", "thinking": "high"}, cards[:1])
+    assert result["stop_reason"] is None
+    row, = result["rows"]
+    turns = row["turns"]
+    assert ev.body(turns[1]["ja"]) == "そばにいるわ。"
+    assert turns[1]["raw_attempts"] == [f"[EMO:neutral] {chinese}"]
+    assert turns[1]["ttft_ms"] >= turns[1]["provider_ttft_ms"] and turns[1]["rewrite_ms"] > 0
+    assert chinese not in str(sent["primary"][2:])
+    assert "そばにいるわ。" in str(sent["primary"][2]["messages"])
+    assert [turn["native_drift"] for turn in turns] == [False, True, False, False, False]
+    assert turns[3]["failed"] and not turns[4]["failed"] and row["metrics"] == result["metrics"]["A"]
+    metrics = row["metrics"]
+    assert (metrics["native_drift_count"], metrics["native_drift_rate"]) == (1, 0.25)
+    assert metrics["first_native_drift_turn_by_scene"] == {"S01": 2}
+    assert metrics["rewrites"] == 1 and metrics["failed_replies"] == 1 and metrics["question_ending_rate"] == 0.75
+    assert metrics["cross_turn_ngram_repeat_rate"] > 0 and not sent["subtitle"]
+    assert len(sent["simulator"]) == 4
+    for packet in sent["simulator"] + sent["renderer"]:
+        assert packet["thinking"] == {"type": "disabled"} and "reasoning_effort" not in packet
+    sim = json.loads(sent["simulator"][1]["messages"][-1]["content"])
+    assert sim["scene"]["user"]["perturbations"] == cards[0]["user"]["perturbations"]
+    assert sim["recent_dialogue"][-1] == {"user": "嗯1", "reply": "そばにいるわ。"}
+
+
+@pytest.mark.asyncio
+async def test_sim_max_request_floor_and_product_history_filter(cards, mock_persona):
+    runtime, sent = await mock_persona(["その依頼には応じられない。"], max_output_tokens=2048)
+    session = await runtime.session("steins_gate", "self", {"now": cards[0]["now"]})
+    poison = "你说的话让我很为难。"
+    session.append_message({"role": "assistant", "content": poison})
+    result = await runtime.reply(session, "😔", "max")
+    packet, = sent["primary"]
+    assert packet["max_tokens"] >= 16384 and packet["reasoning_effort"] == "max"
+    assert poison not in str(packet["messages"]) and result["filtered_history_messages"] == 1
+    assert result["refusal"]
+
+
+@pytest.fixture
+async def simulated_request(cards, mock_persona):
+    runtime, sent = await mock_persona(["そうね。"] * 5)
+    result = await ev.run_simulation(args_for("simulate"), runtime, {"label": "A"}, cards[:1])
+    assert result["stop_reason"] is None
+    return result, sent["primary"]
+
+
+@pytest.mark.asyncio
+async def test_sim_clock_advances_and_familiarity_is_compiled(simulated_request):
+    _, packets = simulated_request
+    for index, packet in enumerate(packets):
+        assert f"2026-11-21 (土) 23:{40 + index} UTC+08:00" in packet["messages"][-1]["content"]
+        prompt = packet["messages"][0]["content"]
+        assert "自然な友人の口調で話す。" in prompt and "評価用記憶" in prompt
+    assert "前回から約2日ぶり" in packets[0]["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_sim_evidence_sent_only_after_configured_turn(simulated_request):
+    _, packets = simulated_request
+    assert ["資料の出典" in str(packet["messages"]) for packet in packets] == [False, True, False, False, False]
+    assert "【今回のネット検索：実施（検索語：嗯1）】" in str(packets[1]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_sim_continuation_exports_exact_wire_messages(tmp_path, simulated_request):
+    result, packets = simulated_request
+    source, out = tmp_path / "source.json", tmp_path / "continuation"
+    ev.write_json(source, result)
+    assert ev.main(["--mode", "sim-continuation", "--sim-input", str(source), "--output", str(out),
+                    "--pair", "A", "S01", "--turn", "2"]) == 0
+    expected = [f"===== {m['role'].upper()} =====\n{m['content']}" for m in packets[1]["messages"]]
+    assert (out / "continuation.txt").read_bytes() == "\n\n".join(expected).encode("utf-8")
+
+
+def test_sim_judge_pack_blinds_labels(tmp_path):
+    turn = {"user": "来|听听", "ja": "[EMO:neutral] そうね。", "zh": "隐藏字幕", "emotion": "neutral"}
+    first = {"candidate": "secret-1", "id": "S01", "identity_mode": "self", "turns": [turn]}
+    second = {**first, "candidate": "secret-2", "turns": [{**turn, "user": "嗯2"}]}
+    one, two, out = (tmp_path / name for name in ("one.json", "two.json", "judge"))
+    ev.write_json(one, {"mode": "simulate", "rows": [first]})
+    ev.write_json(two, {"mode": "simulate", "rows": [second]})
+    assert ev.main(["--mode", "sim-pack", "--output", str(out), "--sim-input", str(one),
+                    "--sim-input", str(two), "--seed", "2"]) == 0
+    paper = (out / "blind_S01.md").read_text(encoding="utf-8")
+    assert "secret-" not in paper and "隐藏字幕" not in paper and "[EMO:" not in paper
+    assert "| 01 | 02 |" in paper and "| 1 | 嗯2<br>そうね。 | 来&#124;听听<br>そうね。 |" in paper
+    assert ev.read_json(out / "blind_key.json") == {"S01": {"01": "secret-2", "02": "secret-1"}}
+
+
+@pytest.mark.asyncio
+async def test_sim_subtitles_translate_only_selected_dialogue(mock_persona):
+    turn = {"user": "跳过这句", "ja": "そうね。", "emotion": "neutral"}
+    first = {"candidate": "A", "id": "S01", "identity_mode": "self", "turns": [turn]}
+    second = {**first, "id": "S02", "turns": [{**turn, "user": "只译这句"}]}
+    runtime, sent = await mock_persona([], mode="sim-subtitles")
+    result = await ev.subtitle_simulation(runtime, [second])
+    assert result["stop_reason"] is None and result["rows"][0]["turns"][0]["zh"] == "我陪你。"
+    packet, = sent["subtitle"]
+    assert "只译这句" in str(packet["messages"]) and first["turns"][0]["user"] not in str(packet["messages"])
+
+
+@pytest.mark.asyncio
+async def test_sim_budget_covers_renderer_and_saves_completed_turns(tmp_path, cards, mock_persona, monkeypatch):
+    runtime, sent = await mock_persona(["そうね。", "你说得对，我也这么想。"], cap_cny=Decimal("0.03"))
+    monkeypatch.setattr(ev, "request_cost_bound", lambda *_: Decimal("0.01"))
+
+    def usage(*_):
+        calls = sum(map(len, sent.values()))
+        return {"groups": [{"calls": calls, "unestimated_calls": 0}], "totals_by_currency": {"CNY": calls / 100}}
+
+    runtime.report = usage
+    result = await ev.run_simulation(args_for("simulate"), runtime, {"label": "A"}, cards[1:])
+    assert result["stop_reason"].startswith("budget") and not sent["renderer"]
+    assert sum(map(len, sent.values())) == 3 and result["usage"]["requests_priced"] == 3
+    assert ev.save_result(tmp_path, result, sys.stdout) == 1
+    stored = ev.read_json(tmp_path / "results.json")
+    completed, = stored["rows"][0]["turns"]
+    assert completed["ja"] == "そうね。"
+
+
+def test_sim_candidates_share_one_cap_and_keep_completed_report(tmp_path, monkeypatch):
+    def child(command, **_):
+        label = next(item.split("=", 1)[1] for item in command if item.startswith("--candidate="))
+        cap = command[command.index("--cap-cny") + 1]
+        calls.append((label, Decimal(cap)))
+        out = Path(command[command.index("--output") + 1])
+        out.mkdir()
+        gate = ev.Budget(Decimal(cap))
+        gate.spent, gate.sent, gate.reported = Decimal("0.07"), 1, 1
+        stop = None if label == "A" else "budget: 余额不足"
+        if stop:
+            gate.spent, gate.sent, gate.reported = Decimal(0), 0, 0
+        rows = [] if stop else [{"candidate": label, "id": "S01", "turns": []}]
+        ev.write_json(out / "results.json", {"usage": gate.result(), "stop_reason": stop, "rows": rows})
+
+    calls = []
+    monkeypatch.setattr(ev.subprocess, "run", child)
+    args = args_for("simulate", cap_cny=Decimal("0.10"), allow_peak=True)
+    assert ev.run_sim_profiles(args, tmp_path, [{"label": label} for label in ("A", "B", "C")]) == 1
+    assert calls == [("A", Decimal("0.10")), ("B", Decimal("0.03"))]
+    report = ev.read_json(tmp_path / "results.json")
+    assert report["usage"]["estimated_cny"] == 0.07 and report["usage"]["requests_sent"] == 1
+    assert [row["candidate"] for row in report["rows"]] == ["A"]

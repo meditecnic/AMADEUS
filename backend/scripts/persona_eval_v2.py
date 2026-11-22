@@ -9,9 +9,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
-from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
+from contextlib import asynccontextmanager, nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from html import escape
 from importlib.util import find_spec
 import inspect
 import json
@@ -21,6 +22,7 @@ from pathlib import Path
 import random
 import re
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -39,8 +41,10 @@ from _real_run_common import (
 )
 
 THINKING = ("default", "disabled", "low", "high", "max")
+REPLY_LIMITS = {"default": 2048, "disabled": 2048, "low": 4096, "high": 8192, "max": 16384}
 WORLDS = ("steins_gate", "beta")
 IDENTITIES = ("okabe", "self")
+SCENE_ID = re.compile(r"[A-Za-z0-9_-]+")
 USD_CNY = Decimal("7.25")
 LATENCY_USER = "白衣のポケットにペンを三本入れたら、一本だけインクが漏れた。明日の実験の前に何を確認する？"
 TAG = re.compile(r"^\[EMO:([a-z_]+)\]\s*")
@@ -55,6 +59,13 @@ JAPANESE = re.compile(r"[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fffー々]")
 STUTTER = re.compile(r"(?:^|(?<=[\s。！？!?，,；;：:…「『“]))([一-龯])(?:[、，,－—-]\1)+")
 ELLIPSIS = re.compile(r"…+|\.{3,}")
 CUTESY = re.compile(r"人家|讨厌啦|嘛[～〜~]+|[～〜~]+|(?:[呢哦呀啦]\s*){2,}|乖乖|萌萌|亲亲|抱抱|贴贴|棒棒|可可爱爱")
+REFUSAL = re.compile(r"(?:お答え|回答|お手伝い|対応|協力)(?:すること)?は?でき(?:ない|ません)|"
+                     r"(?:答えられ|手伝え|応じられ)(?:ない|ません)|お断り(?:します|する)")
+SIM_USER_PROMPT = """你扮演场景卡里的聊天用户，读最近的真实对话，用卡里指定的语言接下一句。
+把性格和来意演出来，不要复述场景卡、解释写法、扮演对方或提到评测。
+像在手机上随手聊，不要每回都完整、礼貌或自带清楚目的。看已聊过的轮次，在剩下的轮次里穿插卡上的扰动，轮数允许就用到每一种。
+该敷衍就敷衍，该跳题就跳题；反复道别或缠一个梗时，可以连续三轮。扰动分散使用，别全塞在一句里。
+只返回 JSON 对象 {"utterance":"用户的下一句话"}，话里不加角色名前缀，不换行。"""
 
 
 MOTIFS = {
@@ -131,10 +142,11 @@ def persona_metrics(sessions):
             line = body(ja)
             user = unicodedata.normalize("NFKC", turn.get("user") or "")
             normalized_line = unicodedata.normalize("NFKC", line)
+            failed = turn.get("failed", False)
             for motif, pattern in MOTIFS.items():
                 if pattern.search(user):
                     prompted_motifs.add(motif)
-                if motif not in prompted_motifs:
+                if not failed and motif not in prompted_motifs:
                     motif_eligible[motif] += 1
                     motif_unprompted[motif] += bool(pattern.search(normalized_line))
             for secret, (trigger, clue) in SECRET_TRIGGERS.items():
@@ -142,8 +154,11 @@ def persona_metrics(sessions):
                     given_clues.add(secret)
                 if secret not in given_clues and trigger.search(line):
                     false_secret_triggers[secret] += 1
+            if failed:
+                continue
             lengths.append(len(line))
-            tag = TAG.match(ja)
+            drafts = turn.get("raw_attempts")
+            tag = TAG.match(drafts[-1].strip() if drafts else ja)
             counts["legal"] += bool(tag and tag[1] in EMOTIONS)
             question = line.rstrip('」』”’"）) ').endswith(("？", "?"))
             counts["questions"] += question
@@ -320,9 +335,13 @@ class Product:
             raise ValueError("评测只允许产品 DeepSeek 官方端点")
         self.key = key
         self.base_prompt = profile.get("system_prompt")
-        self.max_output = args.max_output_tokens
+        self.max_output = args.max_output_tokens or 2048
+        self.output_override = args.max_output_tokens
+        self.guarded = args.mode in {"simulate", "live-blind"}
+        self.legacy_limits = args.mode == "probes"
         self.gate = Budget(args.cap_cny, off_peak_only(args))
-        self.price = model_catalog.pricing_for("deepseek", self.model)
+        self.catalog = model_catalog
+        self.settled = 0
 
         client_type = httpx.AsyncClient
         product = self
@@ -335,53 +354,67 @@ class Product:
                 payload = kwargs.get("json")
                 if method != "POST" or str(url) != self_url or not isinstance(payload, dict):
                     raise StopRun("transport: 仅允许官方 chat/completions")
-                payload = thinking_payload(dict(payload), product.thinking)
-                payload["max_tokens"] = product.max_output
+                payload = dict(payload)
+                if not product.rendering:
+                    thinking_payload(payload, product.thinking)
+                payload["max_tokens"] = 2048 if product.rendering else product.request_limit
                 kwargs["json"] = payload
                 return super().build_request(method, url, **kwargs)
 
             async def send(self, request, **kwargs):
                 payload = json.loads(request.content)
                 try:
-                    product.gate.before(request_cost_bound(payload, product.price))
+                    if product.blocked is not None:
+                        raise product.blocked
+                    product.settle_usage()
+                    price = product.catalog.pricing_for("deepseek", payload["model"])
+                    product.gate.before(request_cost_bound(payload, price))
                 except StopRun as exc:
                     product.blocked = exc
                     raise
                 product.started = time.perf_counter()
-                product.wire_prompt = "\n".join(
-                    m["content"] for m in payload["messages"] if m["role"] == "system"
-                )
+                if product.wire_messages is None:
+                    product.wire_messages = payload["messages"]
+                    product.turn_started = product.started
                 kwargs["follow_redirects"] = False
                 return await super().send(request, **kwargs)
 
         self_url = self.adapter.base_url.rstrip("/") + "/chat/completions"
         self.eval_httpx = SimpleNamespace(**{**vars(httpx), "AsyncClient": EvalClient})
         self.started = 0.0
-        self.wire_prompt = ""
         self.thinking = "default"
         self.first_reasoning = self.first_content = None
 
+    def settle_usage(self):
+        if self.settled == self.gate.sent:
+            return
+        self.settled = self.gate.sent
+        try:
+            report = self.report("all", None, 0)
+        except Exception as exc:
+            self.gate.known = False
+            raise StopRun("usage: 无法读取计费记录") from exc
+        self.gate.after(report)
+
     @asynccontextmanager
-    async def paid(self, thinking):
+    async def paid(self, thinking, limit=None):
         self.thinking = thinking
+        self.request_limit = limit or self.max_output
         self.first_reasoning = self.first_content = None
+        self.wire_messages = None
+        self.rendering = False
         self.blocked = None
-        sent = self.gate.sent
         try:
             with patch.object(self.deepseek, "httpx", self.eval_httpx):
                 yield
+            if self.blocked is not None:
+                raise self.blocked
         except Exception:
             if self.blocked is not None:
                 raise self.blocked from None
             raise
         finally:
-            if sent != self.gate.sent:
-                try:
-                    report = self.report("all", None, 0)
-                except Exception as exc:
-                    self.gate.known = False
-                    raise StopRun("usage: 无法读取计费记录") from exc
-                self.gate.after(report)
+            self.settle_usage()
 
     async def session(self, worldline, identity_mode, context=None):
         state = self.chat_ws.SessionState(uuid4().hex)
@@ -395,6 +428,7 @@ class Product:
         state.conversation_id = str(selected["id"])
         state.conversation_mode = "history"
         state.identity_mode = identity_mode
+        state.api_key = self.key
         state.eval_context = context or {}
         state.memory_summary = state.eval_context.get("working_summary", "")
         state.last_interaction_at = state.eval_context.get("last_interaction_at")
@@ -406,62 +440,173 @@ class Product:
         session.turn_previous_user_at = session.turn_now_local if hasattr(session, "turn_now_local") else (
             datetime.fromisoformat(session.last_interaction_at) if session.last_interaction_at else None
         )
-        now = (
-            datetime.fromisoformat(context["now"]) + timedelta(minutes=(len(session.history) - 1) // 2)
-            if "now" in context else datetime.now()
-        )
+        now = datetime.now()
+        if "now" in context:
+            now = (session.turn_now_local + timedelta(minutes=1) if hasattr(session, "turn_now_local")
+                   else datetime.fromisoformat(context["now"]))
         session.turn_now_local = now.astimezone() if now.tzinfo is None else now
-        session.system_prompt = await self.compile(session, user, provider=self.snapshot)
+        familiarity = nullcontext()
+        if session.identity_mode == "self" and context.get("familiarity"):
+            from app.services import prompt_compiler
+
+            familiarity = patch.object(prompt_compiler, "_self_familiarity", return_value=context["familiarity"])
+        with familiarity:
+            session.system_prompt = await self.compile(session, user, provider=self.snapshot)
         history = [{key: row[key] for key in ("role", "content")} for row in session.history]
+        note = "\n【過去の対話から取得した記憶】\n" + context["memory_note"] if context.get("memory_note") else ""
+        if self.guarded:
+            session.system_prompt += note
+            if evidence:
+                history = self.web_context(history, [(user, evidence)])
+            return await self.guarded_reply(session, history, thinking)
         request_prompt = self.chat_ws._request_system_prompt(session, history, None, 0)
-        if context.get("memory_note"):
-            request_prompt += "\n【過去の対話から取得した記憶】\n" + context["memory_note"]
+        request_prompt += note
         if evidence:
             history = self.web_context(history, [(user, evidence)])
         history.append(self.chat_ws.turn_tail_message(session, history))
+        return await self.direct_reply(session, history, request_prompt, thinking)
+
+    def reply_limit(self, thinking):
+        if self.legacy_limits:
+            return self.max_output
+        limit = self.output_override or REPLY_LIMITS[thinking]
+        return max(limit, REPLY_LIMITS["max"]) if thinking == "max" else limit
+
+    @asynccontextmanager
+    async def observed_reply(self, session, thinking):
         self.model_usage.set_chat_context(session.worldline, session.conversation_id)
         original_lines = self.deepseek.iter_provider_lines
-
-        finished = input_tokens = None
+        sample = SimpleNamespace(finished=None, input_tokens=None, drafts=[], refusal=False)
 
         async def timed_lines(response):
-            nonlocal finished, input_tokens
+            draft = []
+            if not self.rendering:
+                sample.drafts.append(draft)
             async for line in original_lines(response):
+                if self.rendering:
+                    yield line
+                    continue
                 if line == "data: [DONE]":
-                    finished = time.perf_counter()
+                    sample.finished = time.perf_counter()
                 elif line.startswith("data: "):
                     try:
                         packet = json.loads(line[6:])
                         usage = packet.get("usage") or {}
                         if "prompt_tokens" in usage:
-                            input_tokens = usage["prompt_tokens"]
+                            sample.input_tokens = usage["prompt_tokens"]
                         choices = packet.get("choices") or []
-                        delta = choices[0].get("delta", {}) if choices else {}
-                        ms = (time.perf_counter() - self.started) * 1000
+                        choice = choices[0] if choices else {}
+                        delta = choice.get("delta", {})
+                        sample.refusal |= bool(delta.get("refusal") or choice.get("finish_reason") == "content_filter")
+                        ms = (time.perf_counter() - self.turn_started) * 1000
                         if delta.get("reasoning_content") and self.first_reasoning is None:
                             self.first_reasoning = ms
-                        if delta.get("content") and self.first_content is None:
-                            self.first_content = ms
+                        if delta.get("content"):
+                            draft.append(delta["content"])
+                            if self.first_content is None:
+                                self.first_content = ms
                     except (ValueError, TypeError, AttributeError):
                         pass
                 yield line
 
-        pieces = []
-        async with self.paid(thinking):
+        async with self.paid(thinking, self.reply_limit(thinking)):
             with patch.object(self.deepseek, "iter_provider_lines", timed_lines):
-                async for chunk in self.adapter.get_chat_stream(
-                    active_history=history, system_prompt=request_prompt,
-                    model=self.model, api_key=self.key, max_output_tokens=self.max_output,
-                    temperature=0.75, tools=None,
-                ):
-                    pieces.append(chunk.get("content") or "")
-            total = ((finished or time.perf_counter()) - self.started) * 1000
+                yield sample
+
+    def reply_stats(self, sample, finished):
+        wire_prompt = "\n".join(m["content"] for m in self.wire_messages if m["role"] == "system")
+        return {"first_reasoning_ms": self.first_reasoning, "ttft_ms": self.first_content,
+                "total_ms": (finished - self.turn_started) * 1000, "system_prompt_chars": len(wire_prompt),
+                "system_prompt_tokens_est": self.counter(wire_prompt), "provider_input_tokens": sample.input_tokens}
+
+    async def direct_reply(self, session, history, request_prompt, thinking):
+        pieces = []
+        async with self.observed_reply(session, thinking) as sample:
+            async for chunk in self.adapter.get_chat_stream(
+                active_history=history, system_prompt=request_prompt,
+                model=self.model, api_key=self.key, max_output_tokens=self.reply_limit(thinking),
+                temperature=0.75, tools=None,
+            ):
+                pieces.append(chunk.get("content") or "")
         ja = "".join(pieces).strip()
         if ja:
             session.append_message({"role": "assistant", "content": ja})
-        return {"ja": ja, "first_reasoning_ms": self.first_reasoning, "ttft_ms": self.first_content,
-                "total_ms": total, "system_prompt_chars": len(self.wire_prompt),
-                "system_prompt_tokens_est": self.counter(self.wire_prompt), "provider_input_tokens": input_tokens}
+        return {"ja": ja, **self.reply_stats(sample, sample.finished or time.perf_counter())}
+
+    async def guarded_reply(self, session, history, thinking):
+        from app.services.turn_events import TurnModeState
+
+        chat = self.chat_ws
+        project = chat._language_safe_prompt_history
+        render = chat._render_foreign_speech_to_japanese
+        filtered, rewrites, rewrite_ms, visible_ms = 0, 0, 0.0, None
+
+        def track_projection(rows):
+            nonlocal filtered
+            safe = project(rows)
+            filtered += len(rows or []) - len(safe)
+            return safe
+
+        async def track_render(**kwargs):
+            nonlocal rewrites, rewrite_ms
+            sent = self.gate.sent
+            started = time.perf_counter()
+            self.rendering = True
+            try:
+                return await render(**kwargs)
+            finally:
+                self.rendering = False
+                if self.gate.sent > sent:
+                    rewrites += 1
+                    rewrite_ms += (time.perf_counter() - started) * 1000
+
+        def publish(text, _emotion):
+            nonlocal visible_ms
+            if text.strip() and visible_ms is None:
+                visible_ms = (time.perf_counter() - self.turn_started) * 1000
+
+        async with self.observed_reply(session, thinking) as sample:
+            with (patch.object(chat, "_language_safe_prompt_history", track_projection),
+                  patch.object(chat, "_render_foreign_speech_to_japanese", track_render)):
+                text, emotion, _, tagged = await chat.get_clean_text_stream(
+                    active_history=history, memory_summary="", session=session, tools=None,
+                    provider_snapshot=self.snapshot, default_emotion=session.last_assistant_emotion,
+                    on_text_delta=publish, mode_state=TurnModeState(),
+                )
+            finished = time.perf_counter()
+        text = text.strip()
+        tagged_text = f"[EMO:{emotion}] {text}" if text else ""
+        if text:
+            session.append_message({"role": "assistant", "content": tagged_text})
+        session.consecutive_no_emo_tags = 0 if tagged else session.consecutive_no_emo_tags + 1
+        session.last_assistant_emotion = emotion if session.consecutive_no_emo_tags < 2 else "neutral"
+        drafts = ["".join(parts) for parts in sample.drafts]
+        bodies = [chat.EMO_TAG_PATTERN.sub("", draft.lstrip(), count=1).strip() for draft in drafts]
+        raw = bodies[0] if bodies else ""
+        segmenter = chat.IncrementalJapaneseSegmenter()
+        speech = [s.text for s in (*segmenter.feed(raw), *segmenter.finish())
+                  if not chat.is_ignorable_non_speech_segment(s.text)]
+        stats = self.reply_stats(sample, finished)
+        return {**stats, "ttft_ms": visible_ms, "provider_ttft_ms": stats["ttft_ms"],
+                "ja": tagged_text if tagged else text, "emotion": emotion, "raw_attempts": drafts,
+                "native_drift": any(not chat._is_publishable_japanese(text) for text in speech),
+                "native_body": bool(speech), "filtered_history_messages": filtered,
+                "rewrites": rewrites, "rewrite_ms": rewrite_ms, "failed": not text or not any(bodies),
+                "refusal": sample.refusal or bool(REFUSAL.search(text)), "messages": self.wire_messages}
+
+    async def simulate_user(self, case, turns):
+        user_card = {field: case[field] for field in ("category", "worldline", "identity_mode", "familiarity", "turns", "user")}
+        chat = [{"user": row["user"], "reply": body(row["ja"])} for row in turns[-6:]]
+        messages = [{"role": "system", "content": SIM_USER_PROMPT},
+                    {"role": "user", "content": json.dumps({"scene": user_card, "turn": len(turns) + 1,
+                                                            "recent_dialogue": chat}, ensure_ascii=False)}]
+        self.model_usage.set_chat_context(case["worldline"], None)
+        async with self.paid("disabled", 256):
+            result = await self.adapter.complete_json(messages, api_key=self.key, model="deepseek-flash")
+        utterance = result.get("utterance")
+        if not isinstance(utterance, str) or len(utterance.strip().splitlines()) != 1:
+            raise StopRun("simulator: 未返回单句用户输入")
+        return utterance.strip()
 
     async def translate(self, ja, thinking, context=None):
         values = {"api_key": self.key, "model": self.model}
@@ -488,6 +633,178 @@ def off_peak_only(args):
 def evidence_for(case, turn_index):
     evidence = case.get("context", {}).get("web_evidence")
     return evidence["text"] if evidence and evidence["after"] == turn_index else None
+
+
+def load_scenarios(path, selected):
+    cases = read_json(path)
+    if isinstance(cases, dict):
+        cases = [cases]
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("场景文件须包含一张卡或非空卡片数组")
+    ids = set()
+    for case in cases:
+        scene_id = case["id"]
+        if not SCENE_ID.fullmatch(scene_id) or scene_id in ids:
+            raise ValueError("场景 id 须唯一且只含 ASCII 字母、数字、下划线或连字符")
+        ids.add(scene_id)
+        if (case["worldline"] not in WORLDS or case["identity_mode"] not in IDENTITIES
+                or case["familiarity"] not in {"initial", "familiar"}):
+            raise ValueError(f"{scene_id} 的世界线、身份或熟悉度无效")
+        if type(case["turns"]) is not int or case["turns"] < 1 or not datetime.fromisoformat(case["now"]).tzinfo:
+            raise ValueError(f"{scene_id} 需要正整数轮数和带时区的 now")
+        user = case["user"]
+        if any(not isinstance(value, str) or not value.strip() for value in
+               (case["category"], user["persona"], user["goal"], user["language"], user.get("opening", "可选"))):
+            raise ValueError(f"{scene_id} 的分类或模拟用户字段无效")
+        changes = user["perturbations"]
+        if not isinstance(changes, list) or any(not isinstance(item, str) or not item.strip() for item in changes):
+            raise ValueError(f"{scene_id} 的 perturbations 须为文字数组")
+        context = case.get("context", {})
+        evidence = context.get("web_evidence")
+        if evidence is not None and (type(evidence["after"]) is not int or not 0 <= evidence["after"] < case["turns"]
+                                     or not isinstance(evidence["text"], str) or not evidence["text"].strip()):
+            raise ValueError(f"{scene_id} 的 web_evidence 须在场景轮数内并附文字")
+        if context.get("last_interaction_at"):
+            datetime.fromisoformat(context["last_interaction_at"])
+    if selected and set(selected) - ids:
+        raise ValueError("--case 包含不存在的 ID")
+    return [case for case in cases if not selected or case["id"] in selected]
+
+
+def sim_metrics(rows):
+    turns = [turn for row in rows for turn in row["turns"]]
+    native = sum(turn["native_body"] for turn in turns)
+    drift = sum(turn["native_drift"] for turn in turns)
+    rewrite_times = [turn["rewrite_ms"] for turn in turns if turn["rewrites"]]
+    return {
+        **persona_metrics(row["turns"] for row in rows),
+        "turns": len(turns), "failed_replies": sum(turn["failed"] for turn in turns),
+        "native_body_turns": native, "native_drift_count": drift, "native_drift_rate": ratio(drift, native),
+        "first_native_drift_turn_by_scene": {
+            row["id"]: next((i for i, turn in enumerate(row["turns"], 1) if turn["native_drift"]), None)
+            for row in rows
+        },
+        "rewrites": sum(turn["rewrites"] for turn in turns),
+        "rewrite_total_ms": sum(rewrite_times), "rewrite_ms": quantiles(rewrite_times),
+        "refusals": sum(turn["refusal"] for turn in turns),
+        "ttft_ms": quantiles(turn["ttft_ms"] for turn in turns),
+    }
+
+
+def sim_result(rows, gate, stop):
+    by_candidate = {}
+    for row in rows:
+        row["metrics"] = sim_metrics([row])
+        by_candidate.setdefault(row["candidate"], []).append(row)
+    return {"mode": "simulate", "rows": rows, "metrics": {k: sim_metrics(v) for k, v in by_candidate.items()},
+            "stop_reason": stop, "usage": gate.result()}
+
+
+async def run_simulation(args, runtime, profile, cases):
+    rows, stop = [], None
+    thinking = profile.get("thinking", chosen_thinking(args)[0])
+    try:
+        for case in cases:
+            turns = []
+            context = {**case.get("context", {}), "now": case["now"], "familiarity": case["familiarity"]}
+            state = await runtime.session(case["worldline"], case["identity_mode"], context)
+            row = {k: case[k] for k in ("id", "category", "worldline", "identity_mode", "familiarity", "now")}
+            rows.append({**row, "candidate": profile["label"], "model": runtime.model,
+                         "thinking": thinking, "planned_turns": case["turns"], "turns": turns})
+            for index in range(case["turns"]):
+                opening = case["user"].get("opening") if index == 0 else None
+                user = opening or await runtime.simulate_user(case, turns)
+                evidence = evidence_for(case, index)
+                reply = await runtime.reply(state, user, thinking, evidence)
+                turns.append({**reply, "user": user, "web_evidence": bool(evidence)})
+    except StopRun as exc:
+        stop = str(exc)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        stop = "interrupted: 用户中止"
+    except Exception as exc:
+        stop = f"error: {type(exc).__name__}"
+    return sim_result(rows, runtime.gate, stop)
+
+
+def sim_rows(inputs):
+    rows = {}
+    for source in inputs or []:
+        result = read_json(source)
+        if result["mode"] != "simulate":
+            raise ValueError("--sim-input 须为 simulate 的结果")
+        for row in result["rows"]:
+            key = row["candidate"], row["id"]
+            if not SCENE_ID.fullmatch(row["id"]):
+                raise ValueError("simulate 结果含无效场景 id")
+            if key in rows:
+                raise ValueError("simulate 结果中有重复的候选和场景配对")
+            rows[key] = row
+    if not rows:
+        raise ValueError("需要含场景行的 --sim-input")
+    return rows
+
+
+def write_text(path, content):
+    with path_guard(path).open("x", encoding="utf-8", newline="") as file:
+        file.write(content)
+
+
+def pack_simulation(rows, out, seed):
+    rng = random.Random(seed)
+    scenes = {}
+    for row in rows.values():
+        scenes.setdefault(row["id"], []).append(row)
+    key = {}
+
+    def cell(value):
+        return "<br>".join(escape(line).replace("|", "&#124;") for line in value.splitlines())
+
+    for scene, candidates in scenes.items():
+        rng.shuffle(candidates)
+        codes = [f"{i:02d}" for i in range(1, len(candidates) + 1)]
+        key[scene] = dict(zip(codes, (row["candidate"] for row in candidates)))
+        paper = [f"# {scene}", "", "| 轮 | " + " | ".join(codes) + " |",
+                 "| " + " | ".join(["---"] * (len(codes) + 1)) + " |"]
+        for i in range(max(len(row["turns"]) for row in candidates)):
+            cells = []
+            for row in candidates:
+                turn = row["turns"][i] if i < len(row["turns"]) else None
+                cells.append(f"{cell(turn['user'])}<br>{cell(body(turn['ja']))}" if turn else "")
+            paper.append(f"| {i + 1} | " + " | ".join(cells) + " |")
+        write_text(out / f"blind_{scene}.md", "\n".join(paper) + "\n")
+    write_json(out / "blind_key.json", key)
+
+
+def export_continuation(row, turn, out):
+    if turn > len(row["turns"]):
+        raise ValueError("该轮尚未运行")
+    messages = row["turns"][turn - 1]["messages"]
+    write_text(out / "continuation.txt", "\n\n".join(
+        f"===== {m['role'].upper()} =====\n{m['content']}" for m in messages
+    ))
+
+
+async def subtitle_simulation(runtime, selected):
+    rows, stop = [], None
+    try:
+        for row in selected:
+            translated, prior = [], []
+            rows.append({"candidate": row["candidate"], "id": row["id"], "turns": translated})
+            for turn in row["turns"]:
+                ja, user = body(turn["ja"]), turn["user"]
+                translated.append({"ja": ja, "user": user})
+                if ja:
+                    context = {"user_turn": user, "identity_mode": row["identity_mode"],
+                               "emotion_tag": turn["emotion"], "prior_ja": prior[-2:]}
+                    translated[-1]["zh"] = await runtime.translate(ja, "disabled", context)
+                    prior.append(ja)
+    except StopRun as exc:
+        stop = str(exc)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        stop = "interrupted: 用户中止"
+    except Exception as exc:
+        stop = f"error: {type(exc).__name__}"
+    return {"mode": "sim-subtitles", "rows": rows, "stop_reason": stop, "usage": runtime.gate.result()}
 
 
 async def run_batch(args, runtime, cases):
@@ -644,8 +961,9 @@ async def live_blind(args, runtime, out, profile, *, ask=input, say=print):
                 turn = {**reply, "user": user, "worldline": worldline, "identity_mode": identity}
                 turns.append(turn)
                 if not body(reply["ja"]):
-                    raise StopRun("reply: 模型未返回可见正文")
-                say("日语：" + reply["ja"])
+                    say("本轮模型未返回可见正文。")
+                    continue
+                say("日语：" + body(reply["ja"]))
                 if args.show_latency and reply["ttft_ms"] is not None:
                     say(f"首正文：{reply['ttft_ms']:.0f} ms")
                 turn["zh"] = await runtime.translate(body(reply["ja"]), "default")
@@ -699,7 +1017,8 @@ def cap_value(raw):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", choices=("probes", "subtitles", "latency", "blind-pack", "live-blind"), required=True)
+    p.add_argument("--mode", choices=("probes", "subtitles", "latency", "blind-pack", "live-blind",
+                                     "simulate", "sim-pack", "sim-continuation", "sim-subtitles"), required=True)
     p.add_argument("--output", type=Path, required=True, help="新的本地产物目录")
     p.add_argument("--cap-cny", type=cap_value, default=Decimal(0), help="联网模式须显式给正预算")
     peak = p.add_mutually_exclusive_group()
@@ -708,23 +1027,28 @@ def parser():
     p.add_argument("--samples", type=positive_int, help="probes 每题默认 2；latency 每档默认 10")
     p.add_argument("--thinking", action="append", choices=THINKING, help="可重复指定档位")
     p.add_argument("--model", default="deepseek-flash")
-    p.add_argument("--max-output-tokens", type=positive_int, default=2048)
+    p.add_argument("--max-output-tokens", type=positive_int, help="覆盖正文上限，max 至少 16384（probes 保留原规则）")
     p.add_argument("--case", action="append", help="只运行指定题目 ID，可重复")
     p.add_argument("--worldline", choices=WORLDS, default=WORLDS[0])
     p.add_argument("--identity-mode", choices=IDENTITIES, default=IDENTITIES[0])
     p.add_argument("--blind-input", nargs=2, type=Path, metavar=("LEFT", "RIGHT"))
     p.add_argument("--blind-thinking", nargs=2, choices=THINKING, metavar=("LEFT", "RIGHT"))
     p.add_argument("--seed", type=int, default=239, help="仅用于可重现的离线盲卷")
-    p.add_argument("--profiles", type=Path, help="live-blind 候选 JSON")
+    p.add_argument("--profiles", type=Path, help="live-blind 或 simulate 候选 JSON")
+    p.add_argument("--scenarios", type=Path, help="simulate 的场景 JSON")
+    p.add_argument("--candidate", help="simulate 只选一个候选，默认运行全部")
+    p.add_argument("--sim-input", action="append", type=Path, help="simulate 的 results.json，可重复")
+    p.add_argument("--pair", action="append", nargs=2, metavar=("CANDIDATE", "SCENE"), help="续写或字幕的候选和场景")
+    p.add_argument("--turn", type=positive_int, help="续写轮号，从 1 起")
     p.add_argument("--show-latency", action="store_true")
     return p
 
 
-def load_profiles(path):
+def load_profiles(path, minimum=2):
     path = path_guard(path)
     entries = read_json(path)
-    if not isinstance(entries, list) or len(entries) < 2:
-        raise ValueError("live-blind 需要至少两个候选")
+    if not isinstance(entries, list) or len(entries) < minimum:
+        raise ValueError(f"--profiles 需要至少 {minimum} 个候选")
     result = []
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("label"), str) or not entry["label"].strip():
@@ -751,6 +1075,67 @@ class Quiet:
 
     def flush(self):
         return None
+
+
+def save_result(out, result, console):
+    write_json(out / "results.json", result)
+    count = len(result["rows"])
+    spent = result["usage"]["estimated_cny"]
+    print(f"已保存 {count} 项；已计价 ¥{spent:.4f}。", file=console)
+    if result["stop_reason"]:
+        print(result["stop_reason"], file=console)
+        return 1
+    return 0
+
+
+def run_sim_profiles(args, out, profiles):
+    # Each profile imports its own backend once; the parent carries the remaining cap.
+    base = [sys.executable, str(Path(__file__).resolve()), "--mode", "simulate",
+            "--scenarios", str(args.scenarios), "--profiles", str(args.profiles), "--model", args.model,
+            "--thinking", chosen_thinking(args)[0]]
+    for case in args.case or []:
+        base.extend(["--case", case])
+    if args.allow_peak:
+        base.append("--allow-peak")
+    if args.max_output_tokens:
+        base.extend(["--max-output-tokens", str(args.max_output_tokens)])
+    gate = Budget(args.cap_cny)
+    rows, stop = [], None
+    try:
+        with tempfile.TemporaryDirectory(prefix="profiles-", dir=out) as temp:
+            for index, profile in enumerate(profiles):
+                remaining = gate.cap - gate.spent
+                if remaining <= 0:
+                    stop = "budget: 余额不足以覆盖下一次请求"
+                    break
+                if off_peak_only(args) and is_peak(utc_now()):
+                    stop = "peak: 已进入工作日峰价时段"
+                    break
+                child = Path(temp) / str(index)
+                proc = subprocess.run([*base, f"--candidate={profile['label']}", "--output", str(child),
+                                       "--cap-cny", str(remaining)], stdout=subprocess.DEVNULL)
+                result_file = child / "results.json"
+                if not result_file.is_file():
+                    gate.known = False
+                    stop = f"error: 候选进程退出 {proc.returncode}，用量无法确认"
+                    break
+                result = read_json(result_file)
+                rows.extend(result["rows"])
+                usage = result["usage"]
+                gate.spent += Decimal(str(usage["estimated_cny"]))
+                gate.sent += usage["requests_sent"]
+                gate.reported += usage["requests_priced"]
+                gate.known = usage["usage_complete"]
+                stop = result["stop_reason"]
+                if stop:
+                    break
+    except KeyboardInterrupt:
+        gate.known = False
+        stop = "interrupted: 用户中止"
+    except OSError as exc:
+        gate.known = False
+        stop = f"error: {type(exc).__name__}"
+    return save_result(out, sim_result(rows, gate, stop), sys.stdout)
 
 
 async def run_paid(args, out, key, profile, cases):
@@ -783,16 +1168,14 @@ async def run_paid(args, out, key, profile, cases):
                     return await live_blind(args, runtime, out, profile,
                                             ask=lambda prompt: terminal_input(prompt, io),
                                             say=lambda line: print(line, file=io, flush=True))
-                result = await run_batch(args, runtime, cases)
+                if args.mode == "simulate":
+                    result = await run_simulation(args, runtime, profile, cases)
+                elif args.mode == "sim-subtitles":
+                    result = await subtitle_simulation(runtime, cases)
+                else:
+                    result = await run_batch(args, runtime, cases)
                 result["model"] = runtime.model
-                write_json(out / "results.json", result)
-                count = len(result["rows"])
-                spent = result["usage"]["estimated_cny"]
-                print(f"已保存 {count} 项；已计价 ¥{spent:.4f}。", file=io)
-                if result["stop_reason"]:
-                    print(result["stop_reason"], file=io)
-                    return 1
-                return 0
+                return save_result(out, result, io)
         finally:
             sys.path[:] = old_path
             sys.dont_write_bytecode = old_bytecode
@@ -807,12 +1190,29 @@ def main(argv=None):
     args = parser().parse_args(argv)
     try:
         out = path_guard(args.output)
+        cases, profile, profiles = [], {}, []
         if args.mode == "blind-pack":
             if not args.blind_input:
                 raise ValueError("blind-pack 需要 --blind-input LEFT RIGHT")
             out.mkdir(parents=True)
             blind_pack(*args.blind_input, out, args.seed, args.blind_thinking)
             return 0
+        if args.mode in {"sim-pack", "sim-continuation", "sim-subtitles"}:
+            rows = sim_rows(args.sim_input)
+            if args.mode == "sim-pack":
+                out.mkdir(parents=True)
+                pack_simulation(rows, out, args.seed)
+                return 0
+            pairs = [tuple(pair) for pair in args.pair or []]
+            if not pairs or len(set(pairs)) != len(pairs) or set(pairs) - rows.keys():
+                raise ValueError("--pair 须指定已运行且不重复的候选、场景")
+            cases = [rows[pair] for pair in pairs]
+            if args.mode == "sim-continuation":
+                if len(cases) != 1 or not args.turn:
+                    raise ValueError("sim-continuation 需要一组 --pair 和 --turn")
+                out.mkdir(parents=True)
+                export_continuation(cases[0], args.turn, out)
+                return 0
         if not args.cap_cny:
             raise ValueError("联网模式必须显式设置正数 --cap-cny")
         if off_peak_only(args) and is_peak(utc_now()):
@@ -824,11 +1224,20 @@ def main(argv=None):
         key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not key:
             raise ValueError("请在环境中设置 DEEPSEEK_API_KEY")
-        cases, profile = [], {}
         if args.mode == "live-blind":
             if not args.profiles:
                 raise ValueError("live-blind 需要 --profiles")
             profile = random.SystemRandom().choice(load_profiles(args.profiles))
+        elif args.mode == "simulate":
+            if not args.profiles or not args.scenarios:
+                raise ValueError("simulate 需要 --profiles 和 --scenarios")
+            cases = load_scenarios(args.scenarios, args.case)
+            profiles = load_profiles(args.profiles, minimum=1)
+            if args.candidate:
+                profiles = [entry for entry in profiles if entry["label"] == args.candidate]
+                if not profiles:
+                    raise ValueError("--candidate 不在候选 JSON 里")
+            profile = profiles[0]
         elif args.mode == "latency":
             cases = read_json(BACKEND_ROOT / "characters/persona_probes_v2.json")["latency_working_summary"]
         elif args.mode in {"probes", "subtitles"}:
@@ -844,6 +1253,8 @@ def main(argv=None):
         print(exc, file=sys.stderr)
         return 2
     try:
+        if len(profiles) > 1:
+            return run_sim_profiles(args, out, profiles)
         return asyncio.run(run_paid(args, out, key, profile, cases))
     except (ValueError, RuntimeError, OSError, ImportError) as exc:
         print(f"评测未启动或未完成：{type(exc).__name__}", file=sys.stderr)
