@@ -318,10 +318,14 @@ async def test_consolidation_preview_apply_evidence_and_conversation_forgetting(
     with connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM memory_tombstones").fetchone()[0] == 0
         assert conn.execute("SELECT status FROM memory_consolidation_proposals").fetchone()[0] == "applied"
-    for mid in (1, 2):
+        conversations = dict(conn.execute(
+            """SELECT e.evidence_role,s.conversation_id FROM stable_fact_evidence e
+               JOIN memory_observation_sources s USING(observation_id)"""
+        ))
+    for role, remaining in (("supporting", 1), ("primary", 0)):
         await request_erasure(session_id="owner", identity_mode="self", worldline=SG,
-                              conversation_id=f"c-owner-self-{mid}", action="delete", forget_long_term=True)
-        assert len(await repo.list_active_stable_facts(session_id="owner", worldline=SG, identity_mode="self")) == (1 if mid == 1 else 0)
+                              conversation_id=conversations[role], action="delete", forget_long_term=True)
+        assert len(await repo.list_active_stable_facts(session_id="owner", worldline=SG, identity_mode="self")) == remaining
     assert counts()["stable_fact_versions"] == 0
     with connection() as conn:
         assert not conn.execute("SELECT 1 FROM memory_observations WHERE display_text IS NOT NULL").fetchone()
