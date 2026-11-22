@@ -104,7 +104,7 @@ export type ArchiveTopicNotice = { kind: 'info' | 'error'; text: string } | null
 // §4.14: closing/switching with unsaved Fact edits requires an explicit
 // discard choice. This product state (never window.confirm) names the
 // original action that will run only after the user discards.
-export type ArchiveDiscardAction = 'back' | 'exit-archive' | 'scope-switch' | 'close-memory';
+export type ArchiveDiscardAction = 'back' | 'exit-archive' | 'scope-switch' | 'close-memory' | 'select-diary';
 export type ArchiveDiscardConfirm = { action: ArchiveDiscardAction } | null;
 
 export type ArchivePendingState = {
@@ -327,6 +327,7 @@ export function createArchiveModule(deps?: {
   let factsSeq = 0;
   let experiencesSeq = 0;
   let diariesSeq = 0;
+  let topicsSeq = 0;
   let titlesLoadedKey: string | null = null;
   // Same latest-request-wins discipline for details and pending loads:
   // A→B→A details re-selection must not let the FIRST A response win, and
@@ -338,6 +339,7 @@ export function createArchiveModule(deps?: {
   let disposed = false;
   // Deferred while a pending draft waits for an explicit discard choice.
   let pendingScopeChange: { scope: ArchiveScope; options: ArchiveOpenOptions } | null = null;
+  let pendingDiarySelectId: string | null = null;
 
   function notify() {
     state = { ...state };
@@ -448,8 +450,9 @@ export function createArchiveModule(deps?: {
   async function loadTopics(guardEpoch: number) {
     if (!state.scope) return;
     const scope = state.scope;
+    const mySeq = ++topicsSeq;
     const result = await fetchTopics(scope, { fetcher, signal: inflight?.signal });
-    if (stale(guardEpoch) || scopeKey(scope) !== scopeKey(state.scope)) return;
+    if (stale(guardEpoch) || mySeq !== topicsSeq || scopeKey(scope) !== scopeKey(state.scope)) return;
     if (result.type === 'ok') {
       commit({ topics: { status: 'ready', items: result.payload } }, { persist: false });
       return;
@@ -655,9 +658,11 @@ export function createArchiveModule(deps?: {
     factsSeq += 1;
     experiencesSeq += 1;
     diariesSeq += 1;
+    topicsSeq += 1;
     detailsSeq += 1;
     pendingSeq += 1;
     titlesLoadedKey = null;
+    pendingDiarySelectId = null;
     inflight?.abort();
     inflight = new AbortController();
     const guardEpoch = epoch;
@@ -763,6 +768,15 @@ export function createArchiveModule(deps?: {
         return;
       case 'select':
         if (intent.kind === 'diary') {
+          if (state.editor?.status === 'saving') {
+            commit({ announcement: SAVING_NOTICE }, { persist: false });
+            return;
+          }
+          if (state.editor) {
+            pendingDiarySelectId = intent.recordId;
+            commit({ discardConfirm: { action: 'select-diary' } }, { persist: false });
+            return;
+          }
           detailsSeq += 1;
           commit({
             selection: { kind: 'diary', recordId: intent.recordId },
@@ -802,7 +816,8 @@ export function createArchiveModule(deps?: {
       case 'discard-draft':
         // Explicit discard invalidates any in-flight save completion.
         saveGeneration += 1;
-        commit({ editor: null });
+        pendingDiarySelectId = null;
+        commit({ editor: null, discardConfirm: null });
         return;
       case 'reapply-draft':
         // Deliberate reapply against the newly reviewed backend version.
@@ -910,10 +925,26 @@ export function createArchiveModule(deps?: {
           }
           return;
         }
+        if (action === 'select-diary') {
+          const targetId = pendingDiarySelectId;
+          pendingDiarySelectId = null;
+          if (targetId) {
+            detailsSeq += 1;
+            commit({
+              selection: { kind: 'diary', recordId: targetId },
+              details: { status: 'idle', payload: null, errorCode: null },
+              editor: null,
+              deleteFlow: null,
+              focusFallback: null,
+            });
+          }
+          return;
+        }
         return;
       }
       case 'cancel-discard': {
-        // Continue editing: keep the draft AND the deferred/exit action.
+        // Continue editing: keep the draft AND clear any deferred diary selection.
+        pendingDiarySelectId = null;
         commit({ discardConfirm: null }, { persist: false });
         return;
       }

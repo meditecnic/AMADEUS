@@ -1224,4 +1224,161 @@ describe('archive deep module: semantic back, restore and deep links', () => {
     expect(fetcher.mock.calls.some(([url]) => String(url).includes('graph/projection'))).toBe(false);
     module.dispose();
   });
+
+  it('discards stale loadTopics responses so late initial fetches cannot clobber created or deleted topics', async () => {
+    const scopeEcho = {
+      session_id: SCOPE_A.sessionId,
+      worldline: SCOPE_A.worldline,
+      identity_mode: SCOPE_A.identityMode,
+    };
+    const pendingTopicGets: Array<(topics: Array<{ topic_id: string; display_label: string; fact_count: number }>) => void> = [];
+    const fetcher = vi.fn((input: string, init?: RequestInit) => {
+      if (input.startsWith('/api/memory/topics?') && (init?.method ?? 'GET') === 'GET') {
+        return new Promise<Response>((resolve) => {
+          pendingTopicGets.push((topics) =>
+            resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ scope: scopeEcho, topics }),
+            } as unknown as Response),
+          );
+        });
+      }
+      if (input.startsWith('/api/memory/topics?') && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            topic_id: 't-new',
+            display_label: '临时灵感',
+            normalized_label: '临时灵感',
+            user_retained: true,
+            scope: scopeEcho,
+          }),
+        } as unknown as Response);
+      }
+      if (input.startsWith('/api/memory/topics/t-new?') && init?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 204, json: async () => null } as unknown as Response);
+      }
+      const scripted = defaultResponder(SCOPE_A)(input, init);
+      const body = scripted?.body ?? {};
+      return Promise.resolve({ ok: true, status: scripted?.status ?? 200, json: async () => body } as unknown as Response);
+    });
+
+    const module = createArchiveModule({ fetcher });
+    module.open(SCOPE_A);
+    await flush();
+    expect(pendingTopicGets).toHaveLength(1);
+
+    // Create a topic before the initial GET /api/memory/topics resolves.
+    module.dispatch({ type: 'create-topic-start' });
+    module.dispatch({ type: 'create-topic-input', text: '临时灵感' });
+    module.dispatch({ type: 'create-topic-save' });
+    await flush();
+    expect(pendingTopicGets).toHaveLength(2);
+
+    // Newer GET resolves first, then the stale initial GET resolves late.
+    pendingTopicGets[1]([
+      { topic_id: 't1', display_label: '咖啡', fact_count: 1 },
+      { topic_id: 't-new', display_label: '临时灵感', fact_count: 0 },
+    ]);
+    await flush();
+    pendingTopicGets[0]([{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }]);
+    await flush();
+    expect(module.snapshot().topics.items.map((item) => item.topicId)).toEqual(['t1', 't-new']);
+
+    // Delete the empty topic; a stale GET arriving after delete must not resurrect it.
+    module.dispatch({ type: 'delete-topic', topicId: 't-new' });
+    await flush();
+    expect(pendingTopicGets).toHaveLength(3);
+    pendingTopicGets[2]([{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }]);
+    await flush();
+    expect(module.snapshot().topics.items.map((item) => item.topicId)).toEqual(['t1']);
+    module.dispose();
+  });
+
+  it('guards diary selection behind discard confirmation when editing a fact and blocks switching while saving', async () => {
+    const scopeEcho = {
+      session_id: SCOPE_A.sessionId,
+      worldline: SCOPE_A.worldline,
+      identity_mode: SCOPE_A.identityMode,
+    };
+    let releaseSave: ((res: Response) => void) | null = null;
+    const fetcher = vi.fn((input: string, init?: RequestInit) => {
+      if (input.startsWith('/api/memory/diaries?')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            scope: scopeEcho,
+            diaries: [
+              {
+                diary_id: 'd1',
+                conversation_id: 'c1',
+                body_ja: '覚えている。',
+                body_zh: '我还记得。',
+                written_at: '2026-11-18T12:00:00Z',
+                source_count: 6,
+              },
+            ],
+          }),
+        } as unknown as Response);
+      }
+      if (input.startsWith('/api/memory/facts/f1?') && init?.method === 'PATCH') {
+        return new Promise<Response>((resolve) => {
+          releaseSave = resolve;
+        });
+      }
+      const scripted = defaultResponder(SCOPE_A)(input, init);
+      const body = scripted?.body ?? {};
+      return Promise.resolve({ ok: true, status: scripted?.status ?? 200, json: async () => body } as unknown as Response);
+    });
+
+    const module = createArchiveModule({ fetcher });
+    module.open(SCOPE_A);
+    await flush();
+    module.dispatch({ type: 'select', kind: 'fact', recordId: 'f1' });
+    await flush();
+    module.dispatch({ type: 'open-editor' });
+    module.dispatch({ type: 'edit-input', text: '未保存草稿' });
+
+    // Switching to the diary tab keeps the editor; clicking a diary asks before discarding.
+    module.dispatch({ type: 'set-kind', kind: 'diary' });
+    module.dispatch({ type: 'select', kind: 'diary', recordId: 'd1' });
+    expect(module.snapshot().discardConfirm).toEqual({ action: 'select-diary' });
+    expect(module.snapshot().editor?.draft).toBe('未保存草稿');
+    expect(module.snapshot().selection).toEqual({ kind: 'fact', recordId: 'f1' });
+
+    // Canceling keeps the draft and fact selection intact.
+    module.dispatch({ type: 'cancel-discard' });
+    expect(module.snapshot().discardConfirm).toBeNull();
+    expect(module.snapshot().editor?.draft).toBe('未保存草稿');
+    expect(module.snapshot().selection).toEqual({ kind: 'fact', recordId: 'f1' });
+
+    // While a save is in flight, selecting a diary is refused without losing the save.
+    module.dispatch({ type: 'save-edit' });
+    expect(module.snapshot().editor?.status).toBe('saving');
+    module.dispatch({ type: 'select', kind: 'diary', recordId: 'd1' });
+    expect(module.snapshot().editor?.status).toBe('saving');
+    expect(module.snapshot().discardConfirm).toBeNull();
+    expect(module.snapshot().selection).toEqual({ kind: 'fact', recordId: 'f1' });
+    expect(module.snapshot().announcement).toBe('正在保存，请稍候');
+
+    // Finish the save (fail back to editing), then confirm discard to open the diary.
+    releaseSave?.({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: { code: 'memory_operation_failed' } }),
+    } as unknown as Response);
+    await flush();
+    expect(module.snapshot().editor?.status).toBe('editing');
+
+    module.dispatch({ type: 'select', kind: 'diary', recordId: 'd1' });
+    expect(module.snapshot().discardConfirm).toEqual({ action: 'select-diary' });
+    module.dispatch({ type: 'confirm-discard' });
+    expect(module.snapshot().editor).toBeNull();
+    expect(module.snapshot().discardConfirm).toBeNull();
+    expect(module.snapshot().selection).toEqual({ kind: 'diary', recordId: 'd1' });
+    module.dispose();
+  });
 });
