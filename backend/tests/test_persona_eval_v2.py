@@ -45,6 +45,8 @@ def test_gate_2b_metrics_use_user_history_through_current_turn():
     assert ev.persona_metrics([
         [{"user": "手記の『波の音』のところが好き", "ja": "……読んだの？"}],
         [{"user": "看了你留在记忆档案里的手记", "ja": "読んだの？"}],
+        [{"user": "初版と改訂版どっち？", "ja": "私が読んだのは初版よ"}],
+        [{"user": "その論文知ってる？", "ja": "前に読んだのよ。"}],
     ])["false_secret_trigger_counts"] == {"fork": 0, "diary": 2}
     assert ev.persona_metrics([])["directive_or_question_ending_rate"] is None
 

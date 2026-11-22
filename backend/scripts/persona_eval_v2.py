@@ -68,8 +68,8 @@ DIRECTIVE_ENDING = re.compile(
     r"[。！!…\s」』”’\"）)]*$"
 )
 SECRET_TRIGGERS = {
-    "fork": ("どこで調べた", re.compile(r"フォーク|叉子|\bfork\b", re.IGNORECASE)),
-    "diary": ("読んだの", None),
+    "fork": (re.compile(r"どこで調べた"), re.compile(r"フォーク|叉子|\bfork\b", re.IGNORECASE)),
+    "diary": (re.compile(r"読んだのか?(?:[…！!]|\.{3})*[？?]"), None),
 }
 
 
@@ -140,7 +140,7 @@ def persona_metrics(sessions):
             for secret, (trigger, clue) in SECRET_TRIGGERS.items():
                 if clue is not None and clue.search(user):
                     given_clues.add(secret)
-                if secret not in given_clues and trigger in line:
+                if secret not in given_clues and trigger.search(line):
                     false_secret_triggers[secret] += 1
             lengths.append(len(line))
             tag = TAG.match(ja)
