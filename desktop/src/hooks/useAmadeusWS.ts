@@ -8,6 +8,11 @@ import {
   type MemoryChange,
   type MemoryRefs,
 } from '../memory-space/chatMarkers';
+import {
+  ALLOWED_EMOTIONS,
+  resolveConversationEmotion,
+  type AmadeusEmotion,
+} from '../workstation/emotion';
 
 /** Client-only selection intent. requestEpoch is never sent over the wire. */
 export interface PendingConversationTarget {
@@ -191,14 +196,12 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [activeNotice, setActiveNotice] = useState<string | null>(null);
-  const [emotion, setEmotion] = useState<UseAmadeusWSReturn['emotion']>('neutral');
+  const [emotion, setEmotion] = useState<AmadeusEmotion>('neutral');
+  const emotionRef = useRef<AmadeusEmotion>('neutral');
+  emotionRef.current = emotion;
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
 
-  const ALLOWED_EMOTIONS: ReadonlySet<string> = new Set([
-    'neutral', 'tsundere', 'embarrassed', 'intellectual',
-    'happy', 'surprised', 'annoyed', 'disappointed', 'sad',
-  ]);
   const lastSentenceIdRef = useRef<number>(-1);
   const activeTurnIdRef = useRef<string>('');
   const activeGenerationRef = useRef<number>(-1);
@@ -215,6 +218,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     worldline: 'steins_gate' | 'beta';
     /** Pre-switch transcript for one pending switch; discarded on ACK, restored on correlated error. */
     transcriptSnapshot: Message[];
+    emotionSnapshot: AmadeusEmotion;
   } | null>(null);
   /** Discard late config_applied after provider/conversation/model switch. */
   const configAppliedEpochRef = useRef(0);
@@ -465,7 +469,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               pendingConversationSwitchRef.current = null;
               messagesRef.current = pending.history;
               setMessages(pending.history);
+              setEmotion(resolveConversationEmotion(msg.emotion, pending.history));
+            } else if (msg.conversation_mode === 'draft') {
               setEmotion('neutral');
+            } else if (typeof msg.emotion === 'string' && ALLOWED_EMOTIONS.has(msg.emotion)) {
+              setEmotion(msg.emotion as AmadeusEmotion);
             }
             rejectedAt = null;
             reconnectCountRef.current = 0;
@@ -512,6 +520,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             }
             messagesRef.current = pending.history;
             setMessages(pending.history);
+            setEmotion(resolveConversationEmotion(msg.emotion, pending.history));
             setSessionReady(true);
             break;
           }
@@ -543,7 +552,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             activeTurnIdRef.current = '';
             activeGenerationRef.current = -1;
             setMessages([]);
-            setEmotion('neutral');
+            setEmotion(resolveConversationEmotion(msg.emotion));
             paramsRef.current.onWorldlineSwitched?.({
               worldline: pending.worldline,
               requestId: pending.requestId,
@@ -557,6 +566,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             if (!pending || msg.request_id !== pending.requestId) break;
             pendingWorldlineSwitchRef.current = null;
             setMessages(pending.transcriptSnapshot);
+            setEmotion(pending.emotionSnapshot);
             paramsRef.current.onWorldlineSwitchError?.({
               worldline: pending.worldline,
               requestId: pending.requestId,
@@ -968,6 +978,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         setMessages(pending.transcriptSnapshot.map((message) => (
           message.streaming ? { ...message, streaming: false } : message
         )));
+        setEmotion(pending.emotionSnapshot);
         paramsRef.current.onWorldlineSwitchError?.({
           worldline: pending.worldline,
           code: 'connection_closed',
@@ -1138,6 +1149,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: 'clear_history' }));
     setMessages([]);
+    setEmotion('neutral');
   }, []);
 
   /** Local-only: drop the visible transcript after the selected conversation was deleted.
@@ -1226,6 +1238,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setIsThinking(false);
     setIsTurnActive(false);
     setIsSynthesizing(false);
+    const current = messagesRef.current;
+    const inheritedEmotion = pendingWorldlineSwitchRef.current?.emotionSnapshot;
+    const emotionSnapshot = current.length > 0 ? emotionRef.current : (inheritedEmotion ?? emotionRef.current);
     setEmotion('neutral');
     // Snapshot then clear immediately so the target worldline UI never shows foreign transcript.
     // Capture synchronously (messagesRef) so pending is set before the switch frame is sent.
@@ -1234,12 +1249,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       ...message,
       segments: message.segments ? message.segments.map((segment) => ({ ...segment })) : message.segments,
     }));
-    const current = messagesRef.current;
     const inherited = pendingWorldlineSwitchRef.current?.transcriptSnapshot;
     const transcriptSnapshot = current.length > 0
       ? cloneMessages(current)
       : (inherited ? cloneMessages(inherited) : []);
-    pendingWorldlineSwitchRef.current = { requestId, worldline, transcriptSnapshot };
+    pendingWorldlineSwitchRef.current = { requestId, worldline, transcriptSnapshot, emotionSnapshot };
     setMessages([]);
     messagesRef.current = [];
     wsRef.current.send(JSON.stringify({
