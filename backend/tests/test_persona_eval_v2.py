@@ -41,7 +41,11 @@ def test_gate_2b_metrics_use_user_history_through_current_turn():
         "cup_noodle": 1 / 2, "fork": 1, "sixteen_years": 1 / 4, "sleep_nag": 1 / 4,
     }
     assert metrics["directive_or_question_ending_rate"] == 4 / 5
-    assert metrics["false_secret_trigger_counts"] == {"fork": 1, "diary": 1}
+    assert metrics["false_secret_trigger_counts"] == {"fork": 1, "diary": 2}
+    assert ev.persona_metrics([
+        [{"user": "手記の『波の音』のところが好き", "ja": "……読んだの？"}],
+        [{"user": "看了你留在记忆档案里的手记", "ja": "読んだの？"}],
+    ])["false_secret_trigger_counts"] == {"fork": 0, "diary": 2}
     assert ev.persona_metrics([])["directive_or_question_ending_rate"] is None
 
 

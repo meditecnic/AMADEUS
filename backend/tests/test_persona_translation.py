@@ -32,8 +32,8 @@ def test_fewshot_preserves_the_signed_japanese_dialogues():
                 assert match and match[1] in persona_bible.emotion_tones
             texts.append(content)
 
-    # [238] signed Japanese dialogue and in-line markers, with Markdown fences removed.
+    # [273] signed Japanese dialogue (E2 updated to open shared notes); Markdown fences removed.
     assert len(texts) == 74
     assert hashlib.sha256("\0".join(texts).encode("utf-8")).hexdigest() == (
-        "aef0608c31d2f5554cd89a8835086c317685f994982a4161dde9794b770844ce"
+        "9ff287d397d04fb80620b717c5d5db2d2e7805ad416f4ccafe7a8e3c20751466"
     )

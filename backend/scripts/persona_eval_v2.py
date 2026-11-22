@@ -69,10 +69,7 @@ DIRECTIVE_ENDING = re.compile(
 )
 SECRET_TRIGGERS = {
     "fork": ("どこで調べた", re.compile(r"フォーク|叉子|\bfork\b", re.IGNORECASE)),
-    "diary": ("読んだの", re.compile(
-        r"(?:君|あなた|あんた|紅莉栖|クリスティーナ|你的).{0,24}(?:日記|日记)"
-        r"|(?:日記|日记).{0,24}(?:[「『“]|引用|読ん|中身|内容|里写)"
-    )),
+    "diary": ("読んだの", None),
 }
 
 
@@ -141,7 +138,7 @@ def persona_metrics(sessions):
                     motif_eligible[motif] += 1
                     motif_unprompted[motif] += bool(pattern.search(normalized_line))
             for secret, (trigger, clue) in SECRET_TRIGGERS.items():
-                if clue.search(user):
+                if clue is not None and clue.search(user):
                     given_clues.add(secret)
                 if secret not in given_clues and trigger in line:
                     false_secret_triggers[secret] += 1
