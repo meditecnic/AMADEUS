@@ -192,6 +192,17 @@ class SessionState:
                 identity_mode=self.identity_mode,
             )
 
+    def _reset_emotion(self) -> None:
+        self.last_assistant_emotion = "neutral"
+        self.consecutive_no_emo_tags = 0
+
+    def _sync_emotion_from_history(self) -> None:
+        self.last_assistant_emotion = _extract_last_assistant_emotion(
+            self._history,
+            get_session_allowed_emotions(self),
+        )
+        self.consecutive_no_emo_tags = 0
+
     async def reload_history(self):
         self._history = await models.get_recent_messages(
             self.session_id,
@@ -204,6 +215,7 @@ class SessionState:
             worldline=self.worldline,
             conversation_id=self.conversation_id,
         )
+        self._sync_emotion_from_history()
 
     async def enter_draft(self):
         """Load runtime defaults without activating any persisted conversation."""
@@ -224,6 +236,7 @@ class SessionState:
         self._history = []
         self.memory_summary = ""
         self.content_epoch = 0
+        self._reset_emotion()
         if self.client_type == "voice":
             from app.services.soul_engine import soul_engine
             await soul_engine.restore_emotion(
@@ -278,6 +291,22 @@ def get_session_allowed_emotions(session: "SessionState") -> set:
     if session.client_type in ("desktop", "voice"):
         return DESKTOP_ALLOWED_EMOTIONS
     return MOBILE_ALLOWED_EMOTIONS
+
+
+def _extract_last_assistant_emotion(
+    history: Sequence[Mapping[str, Any]],
+    allowed: set[str],
+) -> str:
+    for msg in reversed(history):
+        if msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content") or "").lstrip()
+        match = EMO_TAG_PATTERN.match(content)
+        if not match:
+            return "neutral"
+        emotion = match.group(1).lower()
+        return emotion if emotion in allowed else "neutral"
+    return "neutral"
 
 def extract_sentences_from_buffer(buffer: str, is_end: bool = False):
     """
@@ -2874,6 +2903,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     # Reserved/overlong names fail closed to "" (client shows the hint).
                     from app.services.prompt_compiler import sanitize_self_name
                     session.self_name = sanitize_self_name(data.get("self_name"))
+                if "client" in data:
+                    session.client_type = data["client"]
 
                 if requested_mode == "draft":
                     await session.enter_draft()
@@ -2950,8 +2981,6 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     session.sovits_url = data["sovits_url"]
                 
                 from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
-                if "client" in data:
-                    session.client_type = data["client"]
 
                 base_prompt = data.get("system_prompt") or SYSTEM_PROMPT_BASE
                 session.base_system_prompt = base_prompt
@@ -2994,6 +3023,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     "conversation_id": session.conversation_id,
                     "worldline": session.worldline,
                     "generation": session.current_epoch,
+                    "emotion": session.last_assistant_emotion,
                 }))
                 continue
             
@@ -3074,6 +3104,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     "model": session.model,
                     "api_key": session.api_key,
                     "identity_mode": session.identity_mode,
+                    "last_assistant_emotion": session.last_assistant_emotion,
+                    "consecutive_no_emo_tags": session.consecutive_no_emo_tags,
                 }
                 previous_selected = None
                 try:
@@ -3136,6 +3168,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     "conversation_id": session.conversation_id,
                     "worldline": session.worldline,
                     "generation": session.current_epoch,
+                    "emotion": session.last_assistant_emotion,
                 }))
                 continue
 
@@ -3191,6 +3224,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     "conversation_mode": session.conversation_mode,
                     "conversation_id": session.conversation_id,
                     "generation": session.current_epoch,
+                    "emotion": session.last_assistant_emotion,
                 }))
                 continue
                 
@@ -3205,6 +3239,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     continue
                 
                 session.history = []
+                session._reset_emotion()
                 session.history_epoch += 1
                 session.current_epoch += 1
                 
@@ -3273,6 +3308,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 
                 if needs_reset:
                     session.history = []
+                    session._reset_emotion()
                     session.history_epoch += 1
                     session.current_epoch += 1
                     await cancel_inflight(session)

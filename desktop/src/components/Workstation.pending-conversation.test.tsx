@@ -24,7 +24,7 @@ vi.mock('./SettingsModal', () => ({
   loadStoredSelfName: () => '', persistSelfName: () => {},
 }));
 vi.mock('./TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
-vi.mock('./AvatarViewer', () => ({ default: () => null }));
+vi.mock('./AvatarViewer', () => ({ default: ({ emotion }: { emotion?: string }) => <div data-testid="avatar-stage" data-emotion={emotion} /> }));
 vi.mock('./SpriteAnimator', () => ({ default: () => null }));
 vi.mock('./BilingualMessage', () => ({ BilingualMessage: ({ fallbackJa }: { fallbackJa: string }) => <span>{fallbackJa}</span> }));
 vi.mock('./ForgetConversationModal', () => ({ ForgetConversationModal: () => null }));
@@ -94,6 +94,7 @@ let deleteCount: number;
 let listQueryCount: number;
 let afterPost: (() => void) | null;
 let assistantHistory: string | null = null;
+const historyByConversation = new Map<string, string>();
 const missingHistory = new Set<string>();
 const failedHistory = new Set<string>();
 const statusHistory = new Map<string, number>();
@@ -110,7 +111,7 @@ beforeEach(() => {
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
   failedHistory.clear(); heldHistory.clear(); statusHistory.clear(); playback.playing = false;
-  listQueryCount = 0; assistantHistory = null;
+  listQueryCount = 0; assistantHistory = null; historyByConversation.clear();
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
   vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id));
@@ -165,8 +166,9 @@ beforeEach(() => {
       if (failedHistory.has(id)) throw new TypeError('Failed to fetch');
       if (missingHistory.has(id)) return json({}, 404);
       if (statusHistory.has(id)) return json({}, statusHistory.get(id)!);
+      const assistantLine = historyByConversation.get(id) ?? assistantHistory;
       return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` },
-        ...(assistantHistory === null ? [] : [{ role: 'assistant', content: assistantHistory }])]);
+        ...(assistantLine === null ? [] : [{ role: 'assistant', content: assistantLine }])]);
     }
     if (url === '/api/search/settings') return json({ provider: 'tavily', configured: false });
     throw new Error(`unexpected fetch: ${url}`);
@@ -977,4 +979,27 @@ it.each([
   assistantHistory = raw;
   await startOld(false);
   expect(screen.getByText(expected)).toBeInTheDocument();
+});
+
+it('updates portrait emotion when switching between conversations and creating an empty one', async () => {
+  rows = [oldRow, { ...oldRow, id: 'conv-b', title: '对话 B', is_selected: false }];
+  historyByConversation.set('old', '[EMO:sad] かなしいわ。');
+  historyByConversation.set('conv-b', '[EMO:happy] うれしいわ！');
+  await startOld(false);
+  expect(screen.getByTestId('avatar-stage')).toHaveAttribute('data-emotion', 'sad');
+
+  fireEvent.click(document.querySelector('[data-conversation-id="conv-b"] .conversation-select')!);
+  await flush(100);
+  expect(active()).toBe('conv-b');
+  expect(screen.getByTestId('avatar-stage')).toHaveAttribute('data-emotion', 'happy');
+
+  fireEvent.click(document.querySelector('[data-conversation-id="old"] .conversation-select')!);
+  await flush(100);
+  expect(active()).toBe('old');
+  expect(screen.getByTestId('avatar-stage')).toHaveAttribute('data-emotion', 'sad');
+
+  fireEvent.click(newButton());
+  await flush(100);
+  expect(active()).toBe('new');
+  expect(screen.getByTestId('avatar-stage')).toHaveAttribute('data-emotion', 'neutral');
 });

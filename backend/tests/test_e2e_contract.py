@@ -229,6 +229,7 @@ class TestBackendE2EContract:
                 "conversation_id": conversation_id,
                 "worldline": worldline,
                 "generation": sessions[session_id].current_epoch,
+                "emotion": "neutral",
             }
             duplicate = websocket.receive_json()
             assert duplicate["type"] == "error"

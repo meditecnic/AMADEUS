@@ -29,6 +29,7 @@ import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
 import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory';
+import { parseLeadingEmotion } from '../workstation/emotion';
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
@@ -1511,16 +1512,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }>;
       const history: Message[] = rows
         .filter((row) => row.role === 'user' || row.role === 'assistant')
-        .map((row, index) => ({
-          id: `history_${conversation.id}_${index}`,
-          role: row.role as 'user' | 'assistant',
-          content: row.role === 'assistant'
-            ? row.content.replace(/[ \t]*(?:\[EMO:[^\]\r\n]{1,24}\][ \t]*)+/gi,
-                (tags) => tags.replace(/\[EMO:[^\]\r\n]{1,24}\]/gi, '') ? ' ' : '').trimStart()
-            : row.content,
-          translation: row.role === 'assistant' ? row.translation || '' : undefined,
-          streaming: false,
-      }));
+        .map((row, index) => {
+          const parsedEmotion = row.role === 'assistant' ? parseLeadingEmotion(row.content) : undefined;
+          return {
+            id: `history_${conversation.id}_${index}`,
+            role: row.role as 'user' | 'assistant',
+            content: row.role === 'assistant'
+              ? row.content.replace(/[ \t]*(?:\[EMO:[^\]\r\n]{1,24}\][ \t]*)+/gi,
+                  (tags) => tags.replace(/\[EMO:[^\]\r\n]{1,24}\]/gi, '') ? ' ' : '').trimStart()
+              : row.content,
+            translation: row.role === 'assistant' ? row.translation || '' : undefined,
+            ...(parsedEmotion ? { emotion: parsedEmotion } : {}),
+            streaming: false,
+          };
+        });
       return await enterConversation(conversation, history, epoch);
     } catch (error) {
       console.warn('Conversation switch failed:', error);
