@@ -15,7 +15,7 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-_SIGNED_BIOGRAPHY = "4d58f159fbfde001306367a9918ba7d368b5d85e9819a7b7c2c83c0cf152c648"
+_SIGNED_BIOGRAPHY = "a5818b8d185b0f2fbff6946692c06d1cd5d7175269292036a08b8b45759ab79e"
 _SIGNED_SITUATIONS = {
     ("steins_gate", "okabe"): "467ea6832b65ca62855d04a8eb69008ee365c9012b7dfd783a4d87fe906c2ec2",
     ("steins_gate", "self"): "70631c4518092dd93f60ef2a95e7f194270d34c2780dacfba9cae0e8a30de9ee",

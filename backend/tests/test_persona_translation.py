@@ -32,8 +32,8 @@ def test_fewshot_preserves_the_signed_japanese_dialogues():
                 assert match and match[1] in persona_bible.emotion_tones
             texts.append(content)
 
-    # [286] signed Japanese dialogue (B2 wording adjusted for text chat); Markdown fences removed.
+    # [294] signed Japanese dialogue (A1 fake timestamp removed for round 2); Markdown fences removed.
     assert len(texts) == 76
     assert hashlib.sha256("\0".join(texts).encode("utf-8")).hexdigest() == (
-        "07dd9073ac0e8188c3d194e9c0289429c78ad623980f51e9f3917c4243c18e6d"
+        "3863a1bd361ea9ac362d760cf0cd13585714e889350b52fe4820708bb233170a"
     )
