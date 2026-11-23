@@ -888,14 +888,32 @@ async def get_clean_text_stream(
 
             sent_ids = _extract_persisted_ids(bounded)
             if sent_ids != _extract_persisted_ids(prompt_history):
-                prev = (session.system_prompt, session.turn_compiled_prompt, getattr(session, "turn_injected_fact_ids", ()))
-                session.system_prompt = await compile_for_session(session, _latest_real_user_request(prompt_history), provider=provider_snapshot, sent_message_ids=sent_ids)
+                prev = (
+                    session.system_prompt,
+                    session.turn_compiled_prompt,
+                    getattr(session, "turn_injected_fact_ids", ()),
+                )
+                session.system_prompt = await compile_for_session(
+                    session,
+                    _latest_real_user_request(prompt_history),
+                    provider=provider_snapshot,
+                    sent_message_ids=sent_ids,
+                )
                 re_eff = _request_system_prompt(session, prompt_history, tools, attempt)
-                re_bounded, re_dropped = trim_request_history(old[dropped:], [*current, turn_tail_message(session, prompt_history)], re_eff, memory_summary, builder, budget)
+                re_tail = turn_tail_message(session, prompt_history)
+                re_bounded, re_dropped = trim_request_history(
+                    old[dropped:], [*current, re_tail], re_eff, memory_summary, builder, budget,
+                )
                 if request_envelope_tokens(re_bounded, re_eff, memory_summary, builder) <= budget:
-                    eff_system_prompt, bounded, dropped = re_eff, re_bounded, dropped + re_dropped
+                    eff_system_prompt = re_eff
+                    bounded = re_bounded
+                    dropped += re_dropped
                 else:
-                    session.system_prompt, session.turn_compiled_prompt, session.turn_injected_fact_ids = prev
+                    (
+                        session.system_prompt,
+                        session.turn_compiled_prompt,
+                        session.turn_injected_fact_ids,
+                    ) = prev
         record = getattr(session, "turn_execution", None)
         if record is not None:
             stored_old, _ = split_current_turn(session.history)
@@ -2325,10 +2343,21 @@ async def processor_loop(
                             type(exc).__name__,
                         )
                     try:
-                        from app.services.memory_v11.diary_generation import sync_conversation_diary_windows
-                        await sync_conversation_diary_windows(session_id=session.session_id, identity_mode=getattr(session, "identity_mode", "okabe"), worldline=session.worldline, conversation_id=conversation_id)
+                        from app.services.memory_v11.diary_generation import (
+                            sync_conversation_diary_windows,
+                        )
+
+                        await sync_conversation_diary_windows(
+                            session_id=session.session_id,
+                            identity_mode=getattr(session, "identity_mode", "okabe"),
+                            worldline=session.worldline,
+                            conversation_id=conversation_id,
+                        )
                     except Exception as exc:
-                        logger.warning("[MemoryV11] diary window sync failed (%s); chat continues", type(exc).__name__)
+                        logger.warning(
+                            "[MemoryV11] diary window sync failed (%s); chat continues",
+                            type(exc).__name__,
+                        )
 
                 if isinstance(user_message_id, int) and user_message_id > 0:
                     _schedule_background_task(session, _enqueue_memory_v11())

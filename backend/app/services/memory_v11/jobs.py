@@ -1046,7 +1046,12 @@ async def process_memory_job(
     if job["pipeline_version"] == DIARY_PIPELINE_VERSION:
         from app.services.memory_v11.diary_generation import process_diary_job
 
-        return await process_diary_job(job=job, worldline=wl, lease_owner=lease_owner, diary_completion=diary_completion)
+        return await process_diary_job(
+            job=job,
+            worldline=wl,
+            lease_owner=lease_owner,
+            diary_completion=diary_completion,
+        )
 
     # A user deletion suppresses this entire source window across pipelines.
     # Check before ordinary receipt replay so the reason is recorded even for

@@ -113,7 +113,10 @@ SUPPLEMENT_TIMEOUT_SECONDS = 5.0
 FACTS_HEADERS = {"okabe": "【あんたについて覚えていること】", "self": "【あなたについて覚えていること】"}
 EPISODES_HEADER = "【最近のやりとりと気になっていること】"
 DIARIES_HEADER = "【最近の手記】"
-DIARIES_GUIDANCE = "二人の記憶アーカイブに残した私の手記。残っている印象だけを自然な受け答えになじませ、自分から「日記」や「手記」と持ち出したり、文面をそのまま繰り返したりしない。"
+DIARIES_GUIDANCE = (
+    "二人の記憶アーカイブに残した私の手記。残っている印象だけを自然な受け答えになじませ、"
+    "自分から「日記」や「手記」と持ち出したり、文面をそのまま繰り返したりしない。"
+)
 DIARY_MAX_ITEMS = 3
 SUMMARY_HEADER = "【これまでの流れ】"
 SEARCH_NOT_RUN = "【今回のネット検索：未実施】"
@@ -375,7 +378,9 @@ class PromptCompiler:
         self.token_counter = token_counter or self._estimate_tokens
         self.input_budget = input_budget
 
-    SECTION_ORDER = ("identity", "persona", "core", "episodic", "diaries", "history", "principles", "examples")
+    SECTION_ORDER = (
+        "identity", "persona", "core", "episodic", "diaries", "history", "principles", "examples",
+    )
 
     def compile(self, inputs: PromptInputs) -> str:
         return self.compile_with_report(inputs).text
@@ -431,8 +436,12 @@ class PromptCompiler:
                 inputs.worldline, identity_mode=mode, year=inputs.local_year,
             ) + "\n\n" + address,
             "core": render_core(),
-            "episodic": self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
-            "diaries": self._render_whole_items(diary_items, self._format_diaries, self.BUDGETS["diaries"]),
+            "episodic": self._render_whole_items(
+                episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"],
+            ),
+            "diaries": self._render_whole_items(
+                diary_items, self._format_diaries, self.BUDGETS["diaries"],
+            ),
             "history": (
                 f"{SUMMARY_HEADER}\nここは会話をつなぐ一時的なメモ。相手について覚えている事実や出来事を書き換えない。"
                 f"\n{self._fit(inputs.working_summary, self.BUDGETS['history'])}"
@@ -461,7 +470,9 @@ class PromptCompiler:
             supplement_text = self._render_supplement(supplement_result, supplement_items)
         while over_budget() and diary_items:
             diary_items = diary_items[:-1]
-            sections["diaries"] = self._render_whole_items(diary_items, self._format_diaries, self.BUDGETS["diaries"])
+            sections["diaries"] = self._render_whole_items(
+                diary_items, self._format_diaries, self.BUDGETS["diaries"],
+            )
         if over_budget():
             sections["diaries"] = ""
         if over_budget():
@@ -498,7 +509,10 @@ class PromptCompiler:
             or self.token_counter(self._format_episodic_memory(episodic_items)) > self.BUDGETS["episodic"]
         ):
             episodic_items = episodic_items[:-1]
-        while diary_items and (not sections["diaries"].strip() or self.token_counter(self._format_diaries(diary_items)) > self.BUDGETS["diaries"]):
+        while diary_items and (
+            not sections["diaries"].strip()
+            or self.token_counter(self._format_diaries(diary_items)) > self.BUDGETS["diaries"]
+        ):
             diary_items = diary_items[:-1]
         experience_ids = tuple(item.experience_id for item in episodic_items
                                if isinstance(item, _PromptExperience))
@@ -629,7 +643,10 @@ class PromptCompiler:
     def _format_diaries(items: Sequence[PromptDiary]) -> str:
         if not items:
             return ""
-        lines = "\n".join(f"- 〔{i.relative_time}〕{i.body_ja}" if i.relative_time else f"- {i.body_ja}" for i in items)
+        lines = "\n".join(
+            f"- 〔{i.relative_time}〕{i.body_ja}" if i.relative_time else f"- {i.body_ja}"
+            for i in items
+        )
         return f"{DIARIES_HEADER}\n{DIARIES_GUIDANCE}\n{lines}"
 
     def _fit(self, text: str, budget: int, keep_tail: bool = True) -> str:
@@ -870,21 +887,43 @@ def _extract_persisted_ids(history: Sequence[Any]) -> set[int]:
 
 
 async def _select_v11_prompt_diaries(
-    *, session_id: str, worldline: str, identity_mode: str, sent_message_ids: Iterable[int],
-    working_summary: str = "", now_local: datetime | None = None, conversation_id: str | None = None,
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    sent_message_ids: Iterable[int],
+    working_summary: str = "",
+    now_local: datetime | None = None,
+    conversation_id: str | None = None,
 ) -> list[PromptDiary]:
     from app.db import get_db
     from app.services.memory_v11.diaries import list_diaries
 
     try:
-        rows = list((await list_diaries(session_id=session_id, identity_mode=identity_mode, worldline=worldline)).get("diaries") or [])
-        clean_ids = sorted({int(mid) for mid in sent_message_ids if _is_pos_int(mid)}) if rows else []
+        payload = await list_diaries(
+            session_id=session_id,
+            identity_mode=identity_mode,
+            worldline=worldline,
+        )
+        rows = list(payload.get("diaries") or [])
+        clean_ids = (
+            sorted({int(mid) for mid in sent_message_ids if _is_pos_int(mid)}) if rows else []
+        )
         id_to_conv: dict[int, str | None] = {}
         if clean_ids:
+            placeholders = ",".join("?" * len(clean_ids))
             hdb = await get_db(worldline, "history")
             try:
-                cur = await hdb.execute(f"SELECT id, conversation_id FROM messages WHERE session_id=? AND id IN ({','.join('?' * len(clean_ids))})", (session_id, *clean_ids))
-                id_to_conv = {int(r["id"]): str(r["conversation_id"]) for r in await cur.fetchall()}
+                cur = await hdb.execute(
+                    f"""SELECT id, conversation_id
+                          FROM messages
+                         WHERE session_id = ?
+                           AND id IN ({placeholders})""",
+                    (session_id, *clean_ids),
+                )
+                id_to_conv = {
+                    int(r["id"]): str(r["conversation_id"]) for r in await cur.fetchall()
+                }
             finally:
                 await hdb.close()
             for mid in clean_ids:
@@ -894,53 +933,113 @@ async def _select_v11_prompt_diaries(
             body_ja = str(r.get("body_ja") or "").strip()
             if not body_ja or _duplicates_working_summary(body_ja, working_summary):
                 continue
-            d_conv, f_id, l_id = str(r["conversation_id"]), int(r["first_message_id"]), int(r["last_message_id"])
-            if not any((cid is None or cid == d_conv) and f_id <= mid <= l_id for mid, cid in id_to_conv.items()):
-                selected.append(PromptDiary(str(r["diary_id"]), body_ja, format_diary_relative_time(r.get("written_at"), now_local)))
+            d_conv = str(r["conversation_id"])
+            f_id = int(r["first_message_id"])
+            l_id = int(r["last_message_id"])
+            overlaps_sent = any(
+                (cid is None or cid == d_conv) and f_id <= mid <= l_id
+                for mid, cid in id_to_conv.items()
+            )
+            if not overlaps_sent:
+                rel_time = format_diary_relative_time(r.get("written_at"), now_local)
+                selected.append(PromptDiary(str(r["diary_id"]), body_ja, rel_time))
                 if len(selected) >= DIARY_MAX_ITEMS:
                     break
         return selected
     except Exception as exc:
-        logger.warning("v11 prompt: diary selection failed (%s); omitting diaries", type(exc).__name__)
+        logger.warning(
+            "v11 prompt: diary selection failed (%s); omitting diaries",
+            type(exc).__name__,
+        )
         return []
 
 
 _RELAXED_SPEECH = re.compile(
-    r"敬語(?:は不要|不要|なし|を使わない|をやめ|じゃなくていい)|気楽に(?:話|タメ口)|タメ口(?:で話|でいい|が(?:好き|いい|好み)|を(?:希望|好む)|にして)|常体(?:で話|を好)|平語|平语"
-    r"|(?:不用|别|不要|不必).{0,6}(?:敬语|敬語|客气|端着)|(?:说话|聊天|口吻|语气).{0,8}(?:放松|随意|随便|自然一点|像朋友)"
-    r"|(?:叫我|称呼我(?:为)?|喊我)\s*[^\s，。！？,!?]+|(?:希望|要求|让|请).{0,8}(?:叫|称呼|喊)(?:用户|他|她|我)|(?:と|って)呼(?:んで|ぶよう|ばれる)|呼び捨て"
+    r"敬語(?:は不要|不要|なし|を使わない|をやめ|じゃなくていい)"
+    r"|気楽に(?:話|タメ口)"
+    r"|タメ口(?:で話|でいい|が(?:好き|いい|好み)|を(?:希望|好む)|にして)"
+    r"|常体(?:で話|を好)|平語|平语"
+    r"|(?:不用|别|不要|不必).{0,6}(?:敬语|敬語|客气|端着)"
+    r"|(?:说话|聊天|口吻|语气).{0,8}(?:放松|随意|随便|自然一点|像朋友)"
+    r"|(?:叫我|称呼我(?:为)?|喊我)\s*[^\s，。！？,!?]+"
+    r"|(?:希望|要求|让|请).{0,8}(?:叫|称呼|喊)(?:用户|他|她|我)"
+    r"|(?:と|って)呼(?:んで|ぶよう|ばれる)|呼び捨て"
 )
 
 
-async def _self_familiarity(session, facts: Sequence[dict[str, Any]], user_message: str = "") -> str:
-    if any(_RELAXED_SPEECH.search(str(r.get("display_text", ""))) or _RELAXED_SPEECH.search(str(r.get("fact_text", ""))) for r in facts):
+async def _self_familiarity(
+    session,
+    facts: Sequence[dict[str, Any]],
+    user_message: str = "",
+) -> str:
+    if any(
+        _RELAXED_SPEECH.search(str(r.get("display_text", "")))
+        or _RELAXED_SPEECH.search(str(r.get("fact_text", "")))
+        for r in facts
+    ):
         return "familiar"
     from app.db import get_db
 
     try:
         mdb = await get_db(session.worldline, "memory")
         try:
-            rows = await (await mdb.execute(
-                """SELECT v.display_text, v.semantic_json FROM stable_facts f
-                     JOIN stable_fact_versions v ON v.fact_id=f.fact_id AND v.version_no=f.active_version AND v.invalid_at IS NULL
-                    WHERE f.session_id=? AND f.identity_mode='self' AND f.state='active'
-                      AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.fact_id=f.fact_id AND t.session_id=f.session_id AND t.identity_mode=f.identity_mode)""",
+            fcur = await mdb.execute(
+                """SELECT v.display_text, v.semantic_json
+                     FROM stable_facts f
+                     JOIN stable_fact_versions v
+                       ON v.fact_id = f.fact_id
+                      AND v.version_no = f.active_version
+                      AND v.invalid_at IS NULL
+                    WHERE f.session_id = ?
+                      AND f.identity_mode = 'self'
+                      AND f.state = 'active'
+                      AND NOT EXISTS (
+                          SELECT 1
+                            FROM memory_tombstones t
+                           WHERE t.fact_id = f.fact_id
+                             AND t.session_id = f.session_id
+                             AND t.identity_mode = f.identity_mode
+                      )""",
                 (session.session_id,),
-            )).fetchall()
-            if any(_RELAXED_SPEECH.search(str(r["display_text"] or "")) or _RELAXED_SPEECH.search(str(r["semantic_json"] or "")) for r in rows):
+            )
+            rows = await fcur.fetchall()
+            if any(
+                _RELAXED_SPEECH.search(str(r["display_text"] or ""))
+                or _RELAXED_SPEECH.search(str(r["semantic_json"] or ""))
+                for r in rows
+            ):
                 return "familiar"
         finally:
             await mdb.close()
     except Exception as exc:
         logger.warning("v11 prompt: familiarity fact check failed (%s)", type(exc).__name__)
+
     h_rows = list(getattr(session, "history", None) or [])
-    unsaved = sum(1 for r in h_rows if isinstance(r, dict) and r.get("role") == "user" and not _is_pos_int(r.get("id")))
-    extra = int(bool(str(user_message or "").strip()) and (not h_rows or not isinstance(h_rows[-1], dict) or h_rows[-1].get("role") != "user"))
+    unsaved = sum(
+        1
+        for r in h_rows
+        if isinstance(r, dict) and r.get("role") == "user" and not _is_pos_int(r.get("id"))
+    )
+    has_trailing_user = (
+        bool(h_rows) and isinstance(h_rows[-1], dict) and h_rows[-1].get("role") == "user"
+    )
+    extra = int(bool(str(user_message or "").strip()) and not has_trailing_user)
     db_users = 0
     try:
         db = await get_db(session.worldline, "history")
         try:
-            row = await (await db.execute("SELECT COUNT(*) AS n FROM messages m JOIN conversations c ON c.id=m.conversation_id AND c.session_id=m.session_id WHERE m.session_id=? AND c.identity_mode='self' AND m.role='user'", (session.session_id,))).fetchone()
+            ucur = await db.execute(
+                """SELECT COUNT(*) AS n
+                     FROM messages m
+                     JOIN conversations c
+                       ON c.id = m.conversation_id
+                      AND c.session_id = m.session_id
+                    WHERE m.session_id = ?
+                      AND c.identity_mode = 'self'
+                      AND m.role = 'user'""",
+                (session.session_id,),
+            )
+            row = await ucur.fetchone()
             db_users = int(row["n"] or 0) if row is not None else 0
         finally:
             await db.close()
@@ -1005,8 +1104,24 @@ async def compile_for_session(
             exclude_fact_ids=[str(row["fact_id"]) for row in resident.facts],
         )
     turn_now = getattr(session, "turn_now_local", None)
-    sent_ids = set(sent_message_ids) if sent_message_ids is not None else _extract_persisted_ids(getattr(session, "history", None) or ())
-    diaries = await _select_v11_prompt_diaries(session_id=str(session.session_id), worldline=normalize_worldline(session.worldline), identity_mode=mode, sent_message_ids=sent_ids, working_summary=str(getattr(session, "memory_summary", "") or ""), now_local=turn_now, conversation_id=getattr(session, "conversation_id", None))
+    if sent_message_ids is not None:
+        sent_ids = set(sent_message_ids)
+    else:
+        sent_ids = _extract_persisted_ids(getattr(session, "history", None) or ())
+    diaries = await _select_v11_prompt_diaries(
+        session_id=str(session.session_id),
+        worldline=normalize_worldline(session.worldline),
+        identity_mode=mode,
+        sent_message_ids=sent_ids,
+        working_summary=str(getattr(session, "memory_summary", "") or ""),
+        now_local=turn_now,
+        conversation_id=getattr(session, "conversation_id", None),
+    )
+    familiarity = (
+        await _self_familiarity(session, resident.facts, user_message=user_message)
+        if mode == "self"
+        else "initial"
+    )
     compiled = prompt_compiler.compile_with_report(PromptInputs(
         worldline=session.worldline,
         base_identity=base_identity or "You are Amadeus Kurisu.",
@@ -1019,7 +1134,7 @@ async def compile_for_session(
         identity_mode=mode,
         self_name=_session_self_name(session),
         conversation_key=str(getattr(session, "conversation_id", None) or session.session_id),
-        familiarity=await _self_familiarity(session, resident.facts, user_message=user_message) if mode == "self" else "initial",
+        familiarity=familiarity,
         local_year=(turn_now or datetime.now()).year,
         resident_profile=resident,
         memory_supplement=supplement,
