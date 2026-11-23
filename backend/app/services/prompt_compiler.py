@@ -8,7 +8,7 @@ import logging
 import math
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Callable, Iterable, Sequence
@@ -331,6 +331,7 @@ class CompiledPrompt:
     experience_ids: tuple[str, ...] = ()
     diary_ids: tuple[str, ...] = ()
     supplement_text: str = ""
+    inputs: PromptInputs | None = field(default=None, repr=False, compare=False)
 
     @property
     def injected_fact_ids(self) -> tuple[str, ...]:
@@ -525,6 +526,7 @@ class PromptCompiler:
             resident_fact_ids=resident_ids,
             supplement_fact_ids=supplement_ids,
             resident_complete=len(resident_items) >= candidate_count,
+            inputs=inputs,
         )
 
     def select_resident_profile(
@@ -955,16 +957,29 @@ async def _select_v11_prompt_diaries(
 
 
 _RELAXED_SPEECH = re.compile(
-    r"敬語(?:は不要|不要|なし|を使わない|をやめ|じゃなくていい)"
-    r"|気楽に(?:話|タメ口)"
-    r"|タメ口(?:で話|でいい|が(?:好き|いい|好み)|を(?:希望|好む)|にして)"
-    r"|常体(?:で話|を好)|平語|平语"
-    r"|(?:不用|别|不要|不必).{0,6}(?:敬语|敬語|客气|端着)"
-    r"|(?:说话|聊天|口吻|语气).{0,8}(?:放松|随意|随便|自然一点|像朋友)"
-    r"|(?:叫我|称呼我(?:为)?|喊我)\s*[^\s，。！？,!?]+"
-    r"|(?:希望|要求|让|请).{0,8}(?:叫|称呼|喊)(?:用户|他|她|我)"
-    r"|(?:と|って)呼(?:んで|ぶよう|ばれる)|呼び捨て"
+    r"敬語(?:は不要|不要|は要らない|はいらない|なしで|抜きで|はやめて|をやめて|じゃなくていい)"
+    r"|気楽に(?:話して|タメ口)"
+    r"|タメ口(?:で話|でいい|にして|が(?:好き|いい|好み)|を(?:希望|好む))"
+    r"|常体(?:で話|でいい|にして|を(?:希望|好む))"
+    r"|(?:不用|不必|别|不要)(?:跟我|对我|和用户|跟用户|再)?(?:说|用|讲|端着)?(?:敬语|敬語)"
+    r"|(?:说话|聊天|口吻|语气)(?:可以|不用那么拘谨，?)?(?:放松一点|随意一点|自然一点|像朋友一样)"
+    r"|(?:请|直接|以后|平时)?(?:叫我|称呼我(?:为)?)\s*"
+    r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}(?:就行|就好|就可以)"
+    r"|(?:请|直接|以后)(?:叫我|称呼我(?:为)?)\s*[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,8}吧"
+    r"|希望(?:你|红莉栖|紅莉栖|Amadeus)?(?:叫|称呼)(?:我|用户|他|她)(?:为)?\s*"
+    r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}"
+    r"|[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,12}(?:と|って)呼んで"
+    r"(?:ほしい|ね|くれ|ください|$|[。！!、])"
 )
+_RELAXED_SPEECH_NEGATION = re.compile(
+    r"不喜欢|讨厌|反感|不习惯|不希望|不接受|别人|他人|老板|上司|同事|同僚|父母|妈妈|爸爸"
+    r"|嫌い|苦手|怒られ"
+)
+
+
+def _has_relaxed_speech_preference(text: Any) -> bool:
+    s = str(text or "").strip()
+    return bool(s and _RELAXED_SPEECH.search(s) and not _RELAXED_SPEECH_NEGATION.search(s))
 
 
 async def _self_familiarity(
@@ -973,8 +988,8 @@ async def _self_familiarity(
     user_message: str = "",
 ) -> str:
     if any(
-        _RELAXED_SPEECH.search(str(r.get("display_text", "")))
-        or _RELAXED_SPEECH.search(str(r.get("fact_text", "")))
+        _has_relaxed_speech_preference(r.get("display_text"))
+        or _has_relaxed_speech_preference(r.get("fact_text"))
         for r in facts
     ):
         return "familiar"
@@ -984,7 +999,7 @@ async def _self_familiarity(
         mdb = await get_db(session.worldline, "memory")
         try:
             fcur = await mdb.execute(
-                """SELECT v.display_text, v.semantic_json
+                """SELECT v.display_text
                      FROM stable_facts f
                      JOIN stable_fact_versions v
                        ON v.fact_id = f.fact_id
@@ -1003,11 +1018,7 @@ async def _self_familiarity(
                 (session.session_id,),
             )
             rows = await fcur.fetchall()
-            if any(
-                _RELAXED_SPEECH.search(str(r["display_text"] or ""))
-                or _RELAXED_SPEECH.search(str(r["semantic_json"] or ""))
-                for r in rows
-            ):
+            if any(_has_relaxed_speech_preference(r["display_text"]) for r in rows):
                 return "familiar"
         finally:
             await mdb.close()
@@ -1142,4 +1153,31 @@ async def compile_for_session(
     ))
     session.turn_compiled_prompt = compiled
     set_turn_injected_fact_ids(session, compiled.injected_fact_ids)
+    return compiled.text
+
+
+async def recompile_session_diaries(session, sent_message_ids: Iterable[int]) -> str:
+    """Re-select only the diary section after history trimming, keeping retrieved memories."""
+    from app.db import normalize_worldline
+    from app.services.session_manager import set_turn_injected_fact_ids
+
+    prev = getattr(session, "turn_compiled_prompt", None)
+    if prev is None or prev.inputs is None:
+        return getattr(session, "system_prompt", None) or ""
+    diaries = await _select_v11_prompt_diaries(
+        session_id=str(session.session_id),
+        worldline=normalize_worldline(session.worldline),
+        identity_mode=_session_identity_mode(session),
+        sent_message_ids=set(sent_message_ids),
+        working_summary=prev.inputs.working_summary,
+        now_local=getattr(session, "turn_now_local", None),
+        conversation_id=getattr(session, "conversation_id", None),
+    )
+    if diaries == prev.inputs.diaries:
+        return prev.text
+    compiled = prompt_compiler.compile_with_report(replace(prev.inputs, diaries=diaries))
+    session.turn_compiled_prompt = compiled
+    set_turn_injected_fact_ids(session, compiled.injected_fact_ids)
+    if getattr(session, "turn_execution", None) is not None:
+        session.turn_execution.injected_fact_ids = session.turn_injected_fact_ids
     return compiled.text

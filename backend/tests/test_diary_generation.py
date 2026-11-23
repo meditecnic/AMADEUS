@@ -768,9 +768,70 @@ async def test_6_source_grounding_rewrites_once_then_discards_with_reason():
         == "redacted_leak"
     )
 
+    def zh_src(user_zh: str) -> list[dict]:
+        return [
+            {"role": "user", "text": user_zh, "translation": ""},
+            {
+                "role": "assistant",
+                "text": "そうですね、気持ちはよく分かります。",
+                "translation": "",
+            },
+        ]
+
+    e_num, e_ent, e_quo = "ungrounded_number", "ungrounded_entity", "ungrounded_quote"
+    for u_zh, ja, zh, expected in [
+        ("我们聊了很久", "二人で長く話して落ち着いたわ。", "两个人聊了很久。", None),
+        ("我们聊了很久", "三人で長く話して落ち着いたわ。", "聊了很久。", e_num),
+        ("我们三个人聊了很久", "三人で長く話して落ち着いたわ。", "三个人聊了很久。", None),
+        ("工作和家人", "二つの間で揺れているみたいね。", "在两件事之间摇摆呢。", None),
+        ("工作和家人", "三つの間で揺れているみたいね。", "心里摇摆不定。", e_num),
+        ("工作学业和家人三件事", "三つの間で揺れているみたいね。", "三件事很难兼顾。", None),
+        ("我妈打电话来", "お母さんから電話が来て忙しそうね。", "妈妈打电话来了。", None),
+        ("我爸我哥我姐来信了", "お父さんやお兄さん、お姉さんの連絡ね。", "爸哥姐来信了。", None),
+        ("家里打电话来", "田中さんから電話が来て忙しそうね。", "家里来电话了。", e_ent),
+        ("田中先生打电话来", "田中さんから電話が来て忙しそうね。", "田中先生来电了。", None),
+        ("我男朋友说了一句重话", "彼氏に言われた一言が気になるのね。", "男朋友的话很在意。", None),
+        ("和女朋友散步了", "彼女と歩いて気分転換できたわね。", "和女朋友散步了。", None),
+        ("同事说了一句重话", "佐藤氏に言われた一言が気になるのね。", "对方的话很在意。", e_ent),
+        (
+            "佐藤先生说了一句重话",
+            "佐藤氏に言われた一言が気になるのね。",
+            "佐藤先生的话很在意。",
+            None,
+        ),
+        ("今天忙坏了", "今日は忙しかったわね。", "喝了五杯咖啡，跑了七次便利店。", e_num),
+        ("喝了五杯咖啡跑了七次便利店", "忙しかったわね。", "喝了五杯咖啡，跑了七次便利店。", None),
+        (
+            "我说「先做完」",
+            "「先做完」と言ったわね。",
+            "说「先做完」却想「你根本不在乎我」。",
+            e_quo,
+        ),
+        (
+            "我说「先做完」别想「你根本不在乎我」",
+            "「先做完」ね。",
+            "没想「你根本不在乎我」。",
+            None,
+        ),
+        ("今晚继续整理数据", "今夜は十一時まで作業する気ね。", "今晚继续整理数据。", e_num),
+        ("今晚整理数据到十一点", "今夜は十一時まで作業する気ね。", "今晚忙到十一点。", None),
+    ]:
+        assert validate_diary_grounding(ja, zh, zh_src(u_zh))[0] == expected, (u_zh, ja, zh)
+
+    okabe_ja = "実験記録を片付けたのは立派ね、岡部。倫太郎らしい粘り強さだわ。"
+    okabe_src = zh_src("今天把实验记录整理完了")
+    for mode, ja, exp in [
+        ("okabe", okabe_ja, None),
+        ("self", okabe_ja, e_ent),
+        ("okabe", "まゆりも心配してたわ。", e_ent),
+    ]:
+        assert validate_diary_grounding(ja, "整理完了呢。", okabe_src, identity_mode=mode)[0] == exp
+
 
 @pytest.mark.asyncio
-async def test_7_injection_dedupes_by_sent_message_ids_and_summary_and_drops_deleted_diary():
+async def test_7_injection_dedupes_by_sent_message_ids_and_summary_and_drops_deleted_diary(
+    monkeypatch,
+):
     session_id, cid = await _new_conv("s7")
     early_ids = await _append_turns(
         session_id,
@@ -878,30 +939,97 @@ async def test_7_injection_dedupes_by_sent_message_ids_and_summary_and_drops_del
         credential_required=False,
         transport=httpx.MockTransport(handle_trim_stream),
     )
+    from app.services import prompt_compiler as pc_mod
+    from app.services.memory_v11.events import referenced_items_for_turn
+
+    async def seed_fact(text: str, key: str, conf: float = 0.99) -> dict:
+        return await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text=text,
+            semantic_json={"subject": "user", "predicate": "note", "object": key},
+            confidence=conf,
+        )
+
+    for idx in range(32):
+        await seed_fact(f"常駐事実{idx:02d}：緑茶を飲む", f"tea_{idx}")
+    sup_fact = await seed_fact("今の短い質問では古い回路図ノートを探す", "schematic", 0.86)
+    calls = {"sup": 0, "mem": 0, "res": 0, "fam": 0}
+    for key, attr in [
+        ("sup", "_select_v11_memory_supplement"),
+        ("mem", "_select_v11_prompt_memories"),
+        ("res", "_select_v11_resident_profile"),
+        ("fam", "_self_familiarity"),
+    ]:
+        orig = getattr(pc_mod, attr)
+
+        async def spy(*a, _k=key, _fn=orig, **kw):
+            calls[_k] += 1
+            return await _fn(*a, **kw)
+
+        monkeypatch.setattr(pc_mod, attr, spy)
+
+    await _sql(
+        "steins_gate",
+        "history",
+        "UPDATE messages SET content = ? WHERE id = ?",
+        ("昔の長文" + "あ" * 1800, early_ids[-1]),
+    )
+    session.protocol_version = 2
+    session.provider_id = "custom"
+    session.model = "tight-window"
+    session.enable_tts = False
     session.memory_summary = ""
     session.history = [
         {"id": early_ids[-1], "role": "user", "content": "昔の長文" + "あ" * 1800},
         {"id": late_ids[-2], "role": "user", "content": "最近の質問"},
         {"id": late_ids[-1], "role": "assistant", "content": "[EMO:neutral] 最近の返答です。"},
-        {"id": None, "role": "user", "content": "今の短い質問"},
     ]
-    session.system_prompt = await compile_for_session(session, "今の短い質問")
-    assert DIARIES_HEADER not in session.system_prompt
-    await chat_ws.get_clean_text_stream(
-        active_history=session.history,
-        memory_summary="",
-        session=session,
-        provider_snapshot=SimpleNamespace(
-            adapter=trim_adapter,
-            model_id="tight-window",
-            temperature=None,
-            reasoning_effort=None,
-            context_window=PromptCompiler._estimate_tokens(session.system_prompt) + 2136,
-            max_output_tokens=512,
+    probe_compiled = await compile_for_session(session, "今の短い質問 古い回路図ノート")
+    assert DIARIES_HEADER not in probe_compiled
+    assert sup_fact["fact_id"] in session.turn_compiled_prompt.supplement_fact_ids
+    base_tok = pc_mod.prompt_compiler.token_counter(probe_compiled)
+    sup_tok = pc_mod.prompt_compiler.token_counter(session.turn_compiled_prompt.supplement_text)
+    monkeypatch.setattr(pc_mod.prompt_compiler, "input_budget", base_tok + sup_tok + 25)
+    monkeypatch.setattr(
+        type(provider_registry),
+        "snapshot",
+        staticmethod(
+            lambda pid, mid=None, **_kw: ProviderSnapshot(
+                provider_id=pid,
+                model_id=mid or "tight-window",
+                capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT})),
+                adapter=trim_adapter,
+                credential_required=False,
+                context_window=base_tok + 2600,
+                max_output_tokens=512,
+            )
         ),
     )
+    calls.update(sup=0, mem=0, res=0, fam=0)
+
+    q7: asyncio.Queue = asyncio.Queue()
+    await chat_ws.process_queued_turn(
+        session,
+        "今の短い質問 古い回路図ノート",
+        q7,
+        session.current_epoch,
+        session.history_epoch,
+    )
+    if session.background_tasks:
+        await asyncio.gather(*list(session.background_tasks))
+    assert calls == {"sup": 1, "mem": 1, "res": 1, "fam": 1}
     sent_system = captured[-1]["messages"][0]["content"]
     assert DIARIES_HEADER in sent_system and diary_text in sent_system
+    assert session.turn_compiled_prompt.supplement_fact_ids == ()
+    events_out = [q7.get_nowait()[1] for _ in range(q7.qsize())]
+    assert any(e.get("type") == "turn.completed" for e in events_out)
+    assert [e for e in events_out if e.get("type") == "memory.referenced"] == []
+    refs = await referenced_items_for_turn(
+        (session_id, "steins_gate", "self"), session.turn_compiled_prompt, ()
+    )
+    assert refs == []
 
     session.history = [
         {"id": mid, "role": "user" if idx % 2 == 0 else "assistant", "content": "後半"}
@@ -995,6 +1123,29 @@ async def test_8_cross_window_self_familiarity_counts_worldline_utterances_and_d
     )
     assert "叫我阿哲就行" not in pref_prompt
     assert "自然な友人の口調で話す。" in pref_prompt
+
+    neg_session = f"s8-neg-{uuid4().hex[:8]}"
+    neg_texts = [
+        "老板经常叫我加班",
+        "妈妈每天叫我早点睡",
+        "用户不喜欢别人不用敬语跟他说话",
+        "同僚に呼び捨てにされるのが嫌い",
+        "上司に敬語を使わないと怒られる",
+        "用户在学日语的平语和敬语区别",
+    ]
+    for idx, text in enumerate(neg_texts):
+        await create_stable_fact(
+            session_id=neg_session,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text=text,
+            semantic_json={"subject": "user", "predicate": "note", "object": f"neg_{idx}"},
+            confidence=0.92,
+        )
+    neg_state = chat_ws.SessionState(neg_session)
+    neg_state.worldline, neg_state.identity_mode = "steins_gate", "self"
+    neg_prompt = await compile_for_session(neg_state, "こんにちは")
+    assert "対等な「です・ます」で話す。" in neg_prompt and neg_prompt.count("<example>") == 2
 
 
 @pytest.mark.asyncio

@@ -88,14 +88,24 @@ _QUOTE_RES = tuple(
         r'"([^"\r\n]+)"',
     )
 )
+_JA_IDIOMATIC_COUNTS = frozenset({"一人", "二人", "一つ", "二つ", "一度", "十分"})
 _KANJI_COUNTER_RE = re.compile(
-    r"(?<!一)([二三四五六七八九十百千万]+)"
-    r"(回|度|人|冊|個|本|枚|杯|件|時間|分|秒|歳|週間|ヶ月|か月|年|円|時|つ)"
+    r"(?<![〇零一二三四五六七八九十百千万])([〇零一二三四五六七八九十百千万]+)"
+    r"(時間|週間|ヶ月|か月|回|度|人|冊|個|本|枚|杯|件|分|秒|歳|年|円|時|つ)"
+)
+_ZH_IDIOMATIC_COUNTS = frozenset(
+    "两人 两个人 二人 兩人 兩個人 两个 兩個 两件 兩件 十分 十二分 万分".split()
+)
+_ZH_COUNTER_RE = re.compile(
+    r"(?<![〇零一二三四五六七八九十百千万两兩周期拜])([〇零一二三四五六七八九十百千万两兩]+)"
+    r"(个小时|个月|个星期|个礼拜|个人|分钟|小时|星期|礼拜|点钟"
+    r"|次|回|遍|趟|杯|碗|瓶|罐|本|册|张|枚|件|条|份|篇|页|章|节"
+    r"|道|题|步|层|楼|间|家|座|台|辆|部|支|根|块|元|岁|年|周|天|晚|夜|点|分|秒|人|个)"
 )
 _EXPLICIT_DATE_RE = re.compile(
     r"([〇零一二三四五六七八九十百千\d]+年"
     r"|[〇零一二三四五六七八九十\d]+月"
-    r"|[〇零二三四五六七八九十\d]+日)"
+    r"|[〇零一二三四五六七八九十\d]+日)"
 )
 _WEEKDAY_RE = re.compile(r"([月火水木金土日])曜(?:日)?")
 _WEEKDAY_ALIASES = {
@@ -108,13 +118,17 @@ _WEEKDAY_ALIASES = {
     "日": ("日曜", "周日", "周天", "星期日", "星期天", "sunday"),
 }
 _PERSON_SUFFIX_RE = re.compile(
-    r"([一-龥々ヶ]{1,6}|[ァ-ヴー]{2,12})(さん|くん|君|ちゃん|様|氏|先生|教授|先輩|博士)"
+    r"[おご]?([一-龥々ヶ]{1,6}|[ァ-ヴー]{2,12})(さん|くん|君|ちゃん|様|氏|先生|教授|先輩|博士)"
 )
 _PLACE_SUFFIX_RE = re.compile(
     r"([一-龥々ヶ]{2,6}|[ァ-ヴー]{2,12})(駅|空港|大学|公園|神社|県|市|区)"
 )
 _COMMON_PERSON_STEMS = frozenset(
-    {"皆", "みな", "お姉", "お兄", "お母", "お父", "お客", "店員", "相手", "誰", "何", "自分", "人"}
+    (
+        "皆 みな 母 父 兄 姉 弟 妹 祖父 祖母 爺 婆 叔父 叔母 伯父 伯母 義母 義父 義兄 義姉 "
+        "親 両親 親御 家族 息子 娘 奥 旦那 嫁 夫 妻 主人 嬢 坊 赤 客 店員 医者 大家 相手 "
+        "誰 何 自分 人 神 王 彼 彼女"
+    ).split()
 )
 _COMMON_PLACE_WORDS = frozenset(
     {
@@ -251,6 +265,8 @@ def validate_diary_grounding(
     body_ja: str,
     body_zh: str,
     prepared_sources: list[dict[str, Any]],
+    *,
+    identity_mode: str = "self",
 ) -> tuple[str | None, str | None]:
     ja = str(body_ja or "").strip()
     zh = str(body_zh or "").strip()
@@ -280,10 +296,11 @@ def validate_diary_grounding(
     source_compact = _SPACE_RE.sub("", source_norm)
     source_lower = source_norm.casefold()
     source_folded = source_compact.translate(_CJK_FOLD)
+    self_names = {"岡部", "倫太郎"} if normalize_identity_mode(identity_mode) == "okabe" else set()
 
     ja_quotes = [q for pat in _QUOTE_RES for q in pat.findall(ja)]
     zh_quotes = [q for pat in _QUOTE_RES for q in pat.findall(zh)]
-    for quote in ja_quotes or zh_quotes:
+    for quote in [*ja_quotes, *zh_quotes]:
         qc = _SPACE_RE.sub("", unicodedata.normalize("NFKC", quote))
         if not qc or qc not in source_compact:
             return "ungrounded_quote", f"未出の引用「{quote[:24]}」"
@@ -294,6 +311,8 @@ def validate_diary_grounding(
 
     for m in _EXPLICIT_DATE_RE.finditer(ja_norm):
         tok = m.group(1)
+        if tok == "一日":
+            continue
         _, tok_ints = _extract_numbers(tok)
         if tok not in source_compact and not (tok_ints and tok_ints.issubset(source_ints)):
             return "ungrounded_date", f"未出の日付表現「{tok}」"
@@ -308,26 +327,44 @@ def validate_diary_grounding(
 
     for m in _KANJI_COUNTER_RE.finditer(ja_norm):
         full = m.group(0)
+        val = _kanji_to_int(m.group(1))
         if (
-            full != "十分"
+            val is not None
+            and val > 1
+            and full not in _JA_IDIOMATIC_COUNTS
             and not (full == "二度" and ja_norm[m.end() : m.end() + 1] == "と")
-            and (val := _kanji_to_int(m.group(1))) is not None
+            and val not in source_ints
+        ):
+            return "ungrounded_number", f"未出の数量「{full}」"
+
+    for m in _ZH_COUNTER_RE.finditer(zh_norm):
+        full = m.group(0)
+        val = _kanji_to_int(m.group(1))
+        if (
+            val is not None
+            and val > 1
+            and full not in _ZH_IDIOMATIC_COUNTS
             and val not in source_ints
         ):
             return "ungrounded_number", f"未出の数量「{full}」"
 
     for canonical, aliases in _KNOWN_ENTITY_ALIASES.items():
+        if canonical in self_names:
+            continue
         if canonical in ja_norm and not any(a.casefold() in source_lower for a in aliases):
             return "ungrounded_entity", f"未出の固有名詞「{canonical}」"
 
     for m in _PERSON_SUFFIX_RE.finditer(ja_norm):
+        full = m.group(0)
         stem = m.group(1)
         if (
-            stem not in _COMMON_PERSON_STEMS
+            not full.endswith(("彼氏", "諸氏", "同氏", "某氏", "姓氏", "両氏"))
+            and stem not in self_names
+            and stem not in _COMMON_PERSON_STEMS
             and stem not in source_compact
             and stem.translate(_CJK_FOLD) not in source_folded
         ):
-            return "ungrounded_entity", f"未出の人名「{m.group(0)}」"
+            return "ungrounded_entity", f"未出の人名「{full}」"
 
     for m in _PLACE_SUFFIX_RE.finditer(ja_norm):
         full = m.group(0)
@@ -884,7 +921,9 @@ async def process_diary_job(
                 return await discard_and_cancel("json_unsupported")
             body_ja = str(payload.get("body_ja") or "").strip()
             body_zh = str(payload.get("body_zh") or "").strip()
-            rewrite_reason, rewrite_detail = validate_diary_grounding(body_ja, body_zh, prepared)
+            rewrite_reason, rewrite_detail = validate_diary_grounding(
+                body_ja, body_zh, prepared, identity_mode=mode
+            )
             if rewrite_reason is None:
                 valid_pair = (body_ja, body_zh)
                 break

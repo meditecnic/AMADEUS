@@ -884,7 +884,11 @@ async def get_clean_text_stream(
             builder, budget,
         )
         if dropped > 0 and getattr(session, "turn_compiled_prompt", None) is not None:
-            from app.services.prompt_compiler import _extract_persisted_ids
+            from app.services.prompt_compiler import (
+                _extract_persisted_ids,
+                recompile_session_diaries,
+            )
+            from app.services.session_manager import set_turn_injected_fact_ids
 
             sent_ids = _extract_persisted_ids(bounded)
             if sent_ids != _extract_persisted_ids(prompt_history):
@@ -893,12 +897,7 @@ async def get_clean_text_stream(
                     session.turn_compiled_prompt,
                     getattr(session, "turn_injected_fact_ids", ()),
                 )
-                session.system_prompt = await compile_for_session(
-                    session,
-                    _latest_real_user_request(prompt_history),
-                    provider=provider_snapshot,
-                    sent_message_ids=sent_ids,
-                )
+                session.system_prompt = await recompile_session_diaries(session, sent_ids)
                 re_eff = _request_system_prompt(session, prompt_history, tools, attempt)
                 re_tail = turn_tail_message(session, prompt_history)
                 re_bounded, re_dropped = trim_request_history(
@@ -909,11 +908,10 @@ async def get_clean_text_stream(
                     bounded = re_bounded
                     dropped += re_dropped
                 else:
-                    (
-                        session.system_prompt,
-                        session.turn_compiled_prompt,
-                        session.turn_injected_fact_ids,
-                    ) = prev
+                    session.system_prompt, session.turn_compiled_prompt, prev_ids = prev
+                    set_turn_injected_fact_ids(session, prev_ids)
+                    if getattr(session, "turn_execution", None) is not None:
+                        session.turn_execution.injected_fact_ids = session.turn_injected_fact_ids
         record = getattr(session, "turn_execution", None)
         if record is not None:
             stored_old, _ = split_current_turn(session.history)
@@ -2398,7 +2396,8 @@ async def processor_loop(
                 from app.services.memory_v11.events import referenced_items_for_turn
                 referenced_items = await referenced_items_for_turn(
                     (session.session_id, turn_worldline, turn_record.snapshot.identity_mode),
-                    compiled_prompt, turn_record.sent_recall_fact_ids,
+                    session.turn_compiled_prompt or compiled_prompt,
+                    turn_record.sent_recall_fact_ids,
                 )
             await segment_pipeline.complete(segment_count=segment_count)
 
