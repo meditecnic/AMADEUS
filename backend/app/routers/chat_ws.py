@@ -2347,9 +2347,10 @@ async def processor_loop(
 
                         await sync_conversation_diary_windows(
                             session_id=session.session_id,
-                            identity_mode=getattr(session, "identity_mode", "okabe"),
-                            worldline=session.worldline,
+                            identity_mode=turn_record.snapshot.identity_mode,
+                            worldline=turn_worldline,
                             conversation_id=conversation_id,
+                            through_message_id=assistant_message_id,
                         )
                     except Exception as exc:
                         logger.warning(

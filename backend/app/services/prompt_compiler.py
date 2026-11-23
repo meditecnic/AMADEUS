@@ -956,6 +956,12 @@ async def _select_v11_prompt_diaries(
         return []
 
 
+_CALL_ME = r"(?:叫我|称呼我(?:为)?)"
+_PREFERRED_NAME = r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}"
+_CALL_ME_BEFORE_QUOTE = re.compile(rf"{_CALL_ME}\s*$")
+_QUOTED_SPEECH = re.compile(r'「[^」]*」|『[^』]*』|“[^”]*”|‘[^’]*’|"[^"\n]*"')
+_SPEECH_SENTENCE_END = re.compile(r"[。．.!！?？;；\n]+")
+
 _RELAXED_SPEECH = re.compile(
     r"敬語(?:は不要|不要|は要らない|はいらない|なしで|抜きで|はやめて|をやめて|じゃなくていい)"
     r"|気楽に(?:話して|タメ口)"
@@ -965,7 +971,8 @@ _RELAXED_SPEECH = re.compile(
     r"|(?:说话|聊天|口吻|语气)(?:可以|不用那么拘谨，?)?(?:放松一点|随意一点|自然一点|像朋友一样)"
     r"|(?:请|直接|以后|平时)?(?:叫我|称呼我(?:为)?)\s*"
     r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}(?:就行|就好|就可以)"
-    r"|(?:请|直接|以后)(?:叫我|称呼我(?:为)?)\s*[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,8}吧"
+    rf"|(?:请|直接|以后){_CALL_ME}\s*{_PREFERRED_NAME}(?:吧|(?=$|[，,]))"
+    rf"|{_CALL_ME}\s*「{_PREFERRED_NAME}」"
     r"|希望(?:你|红莉栖|紅莉栖|Amadeus)?(?:叫|称呼)(?:我|用户|他|她)(?:为)?\s*"
     r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}"
     r"|[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,12}(?:と|って)呼んで"
@@ -978,8 +985,22 @@ _RELAXED_SPEECH_NEGATION = re.compile(
 
 
 def _has_relaxed_speech_preference(text: Any) -> bool:
-    s = str(text or "").strip()
-    return bool(s and _RELAXED_SPEECH.search(s) and not _RELAXED_SPEECH_NEGATION.search(s))
+    text = str(text or "")
+
+    def mask_quote(match: re.Match[str]) -> str:
+        name = match.group()[1:-1]
+        if re.fullmatch(_PREFERRED_NAME, name):
+            if _CALL_ME_BEFORE_QUOTE.search(text, 0, match.start()):
+                return f"「{name}」"
+            if text.startswith(("と呼んで", "って呼んで"), match.end()):
+                return name
+        return "\ufffc"
+
+    return any(
+        _RELAXED_SPEECH.search(sentence.strip())
+        and not _RELAXED_SPEECH_NEGATION.search(sentence)
+        for sentence in _SPEECH_SENTENCE_END.split(_QUOTED_SPEECH.sub(mask_quote, text))
+    )
 
 
 async def _self_familiarity(

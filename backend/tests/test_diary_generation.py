@@ -38,6 +38,7 @@ from app.services.memory_v11.jobs import (
     enqueue_memory_job,
     get_memory_job,
     process_due_jobs_once,
+    process_memory_job,
 )
 from app.services.memory_v11.repository import create_stable_fact
 from app.services.prompt_compiler import (
@@ -491,6 +492,14 @@ async def test_3_five_turns_persists_due_at_across_reopen_and_extends_before_exp
         row_after["last_message_id"],
         row_after["source_count"],
     ) == (ids_2[0], ids_6[-1], 12)
+    assert await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid,
+        through_message_id=ids_more[-1],
+        now=t_6,
+    ) == []
     assert (
         await promote_due_diary_windows(worldline="steins_gate", now=t_5 + timedelta(minutes=31))
         == []
@@ -813,7 +822,12 @@ async def test_6_source_grounding_rewrites_once_then_discards_with_reason():
             "没想「你根本不在乎我」。",
             None,
         ),
-        ("今晚继续整理数据", "今夜は十一時まで作業する気ね。", "今晚继续整理数据。", e_num),
+        (
+            "今晚继续整理数据",
+            "今夜は十一時まで作業する気ね。",
+            "今晚继续整理数据。",
+            "ungrounded_date",
+        ),
         ("今晚整理数据到十一点", "今夜は十一時まで作業する気ね。", "今晚忙到十一点。", None),
     ]:
         assert validate_diary_grounding(ja, zh, zh_src(u_zh))[0] == expected, (u_zh, ja, zh)
@@ -1150,9 +1164,18 @@ async def test_8_cross_window_self_familiarity_counts_worldline_utterances_and_d
 
 @pytest.mark.asyncio
 async def test_9_non_json_model_skips_diary_while_chat_succeeds(monkeypatch):
+    from app.services.memory_v11 import diary_generation
+
     await init_db()
     session_id = f"s9-{uuid4().hex[:8]}"
     credentials.credential_store.set("custom", "no-json-needed-credential")
+    sync_bounds = []
+
+    async def record_sync_bound(**kwargs):
+        sync_bounds.append(kwargs.get("through_message_id"))
+        return await sync_conversation_diary_windows(**kwargs)
+
+    monkeypatch.setattr(diary_generation, "sync_conversation_diary_windows", record_sync_bound)
 
     def handle_plain_chat(req: httpx.Request) -> httpx.Response:
         if str(req.url).endswith("/chat/completions") and json.loads(req.content).get("stream"):
@@ -1219,6 +1242,8 @@ async def test_9_non_json_model_skips_diary_while_chat_succeeds(monkeypatch):
         conversation_id=conv["id"],
     )
     assert len(saved_msgs) == 16
+    assert len(sync_bounds) == 8
+    assert set(sync_bounds) == {int(row["id"]) for row in saved_msgs if row["role"] == "assistant"}
     await process_due_jobs_once(lease_owner="w9", worldlines=("steins_gate",), limit=16)
     diaries_payload = await list_diaries(
         session_id=session_id,
@@ -1400,6 +1425,172 @@ async def test_10_truncate_re_enqueue_avoids_unique_cursor_conflict_and_guards_i
     cur_job = await get_memory_job(d_cur, worldline="steins_gate")
     assert cur_job is not None
     assert (cur_job["state"], cur_job["last_error_code"]) == ("cancelled", "conversation_truncated")
+
+
+@pytest.mark.parametrize(
+    ("sources", "ja", "zh", "error"),
+    [
+        (["喝了三杯茶，开了五次会"], "五月三日に話したわ。", "聊过天。", "ungrounded_date"),
+        (["喝了三杯茶，开了五次会"], "話したわ。", "五月三日聊过。", "ungrounded_date"),
+        (["五月四日", "六月三日"], "五月三日に話したわ。", "聊过天。", "ungrounded_date"),
+        (["我们5/3聊过"], "五月三日に話したわ。", "5月3日聊过。", None),
+        (["五月三日聊过"], "5月3日に話したわ。", "5/3聊过。", None),
+        (["2026-05-03聊过"], "五月三日に話したわ。", "2026年5月3日聊过。", None),
+        (["五月三日聊过"], "五月三日に話したわ。", "2026年5月3日聊过。", "ungrounded_date"),
+        (["晚点再聊"], "一時に話すのね。", "晚点聊。", "ungrounded_date"),
+        (["晚点再聊"], "また話すのね。", "一点聊。", "ungrounded_date"),
+        (["表达了担心"], "心配していたのね。", "有一点担心，这一点我明白。", None),
+        (["一点再聊"], "一時に話すのね。", "1:00再聊。", None),
+        (["下午一点半见"], "午後一時半に会うのね。", "13:30见。", None),
+        (["一点出发，开了三十分钟"], "一時半に出たのね。", "一点半出发。", "ungrounded_date"),
+        (["十点再聊"], "一時に話すのね。", "晚点聊。", "ungrounded_date"),
+        (["晚点再聊"], "また話すのね。", "星期四再聊。", "ungrounded_date"),
+        (["周四再聊"], "木曜日にまた話すのね。", "星期四再聊。", None),
+        (["星期五再聊"], "金曜日にまた話すのね。", "周四再聊。", "ungrounded_date"),
+        (["先做", "完再说"], "「做完」と言ったわ。", "说了先做完。", "ungrounded_quote"),
+        (["先做", "完再说"], "先にするのね。", "说过「做完」。", "ungrounded_quote"),
+        (["先做完再说"], "「先做完」と言ったわ。", "说了「先做完」。", None),
+        (["喝了两碗茶"], "お茶を二杯飲んだのね。", "喝了两杯茶。", None),
+        (["跑了三次"], "三回走ったのね。", "跑了三次。", None),
+        (["提到了三件事"], "三年待ったそうね。", "等了三年。", None),
+        (["今天和高校老师聊了研究"], "大学教授と研究の話をしたのね。", "聊了研究。", None),
+        (["今天和高校老师聊了研究"], "真帆先生と話したのね。", "聊了研究。", "ungrounded_entity"),
+    ],
+)
+def test_diary_grounding_checks_complete_dates_times_and_message_quotes(sources, ja, zh, error):
+    assert validate_diary_grounding(ja, zh, [{"text": text} for text in sources])[0] == error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("eighth_reply_saved", [False, True])
+async def test_diary_window_sync_stops_at_triggering_reply(eighth_reply_saved):
+    sid, cid = await _new_conv("diary-snapshot")
+    scope = dict(
+        session_id=sid, conversation_id=cid, worldline="steins_gate", identity_mode="self",
+    )
+    ids = await _append_turns(sid, cid, [("話そう。", "聞いているわ。")] * 7)
+    user8 = await models.save_message(
+        sid, "user", "続きがあるよ。", worldline="steins_gate", conversation_id=cid,
+    )
+
+    async def save_reply():
+        return await models.save_message(
+            sid, "assistant", "続きも聞いたわ。", worldline="steins_gate", conversation_id=cid,
+        )
+
+    reply8 = await save_reply() if eighth_reply_saved else None
+    now = datetime.now(timezone.utc)
+    [diary_id] = await sync_conversation_diary_windows(**scope, through_message_id=ids[-1], now=now)
+    [row] = await _sql(
+        "steins_gate", "memory", "SELECT last_message_id FROM memory_diaries WHERE diary_id=?",
+        (diary_id,),
+    )
+    assert row["last_message_id"] == ids[-1]
+    assert await promote_due_diary_windows(worldline="steins_gate", now=now) == []
+
+    if reply8 is None:
+        reply8 = await save_reply()
+    [updated_id] = await sync_conversation_diary_windows(
+        **scope, through_message_id=reply8, now=now,
+    )
+    assert updated_id == diary_id
+    assert await promote_due_diary_windows(worldline="steins_gate", now=now) == [diary_id]
+    received = []
+
+    async def completion(**kwargs):
+        received.extend(message["id"] for message in kwargs["messages"])
+        return {"body_ja": "話を聞いた記録よ。", "body_zh": "听了你说的话。"}
+
+    job = await process_memory_job(
+        job_id=diary_id, worldline="steins_gate", lease_owner="diary", diary_completion=completion,
+    )
+    assert job["state"] == "completed"
+    assert received == [*ids, user8, reply8]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_attempt_written", [False, True])
+async def test_diary_lease_recovery_never_starts_third_generation(second_attempt_written):
+    sid, cid = await _new_conv("diary-restart")
+    await _append_turns(sid, cid, [("話そう。", "聞いているわ。")] * 8)
+    scope = dict(session_id=sid, identity_mode="self", worldline="steins_gate")
+    [diary_id] = await sync_conversation_diary_windows(
+        **scope, conversation_id=cid, now=T0 + timedelta(hours=1),
+    )
+    assert await promote_due_diary_windows(
+        worldline="steins_gate", now=T0 + timedelta(hours=1),
+    ) == [diary_id]
+    calls = []
+
+    for attempt in (1, 2):
+        owner = f"worker-{attempt}"
+
+        async def stopped_completion(**_):
+            calls.append(attempt)
+            if attempt == 2 and second_attempt_written:
+                assert await commit_diary(
+                    **scope, diary_id=diary_id, lease_owner=owner, verified_phrases=[],
+                    body_ja="話を聞いた記録よ。", body_zh="听了你说的话。",
+                )
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await process_memory_job(
+                job_id=diary_id, worldline="steins_gate", lease_owner=owner,
+                diary_completion=stopped_completion,
+            )
+        await _sql(
+            "steins_gate", "memory",
+            "UPDATE memory_ingest_jobs SET lease_expires_at=? WHERE job_id=?",
+            (T0.isoformat(), diary_id),
+        )
+
+    async def unexpected_completion(**_):
+        calls.append(3)
+        return {"body_ja": "話を聞いた記録よ。", "body_zh": "听了你说的话。"}
+
+    job = await process_memory_job(
+        job_id=diary_id, worldline="steins_gate", lease_owner="restarted",
+        diary_completion=unexpected_completion,
+    )
+    assert calls == [1, 2]
+    assert job["state"] == ("completed" if second_attempt_written else "failed")
+    assert len((await list_diaries(**scope))["diaries"]) == int(second_attempt_written)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fact", "familiar"),
+    [
+        ("用户在学日语，课文里写着「タメ口でいい」", False),
+        ("老师说“请叫我阿哲”。", False),
+        ("老板经常叫我加班", False),
+        ("用户不喜欢别人不用敬语跟他说话", False),
+        ("用户不喜欢别人叫自己小王。请叫我阿哲。", True),
+        ("不用敬语。之前老板和我谈过日语学习。", True),
+        ("请叫我阿哲", True),
+        ("叫我「阿哲」", True),
+    ],
+)
+async def test_self_familiarity_uses_direct_requests_in_saved_facts(fact, familiar):
+    sid, cid = await _new_conv("diary-preference")
+    await _append_turns(sid, cid, [("こんにちは。", "こんにちは。")])
+    await create_stable_fact(
+        session_id=sid, worldline="steins_gate", identity_mode="self", display_text=fact,
+        semantic_json={"subject": "user", "predicate": "note", "object": "register"},
+        confidence=0.94,
+    )
+    await request_erasure(
+        session_id=sid, conversation_id=cid, worldline="steins_gate", identity_mode="self",
+        action="forget", forget_long_term=False,
+    )
+    fresh = await conversation_service.create(sid, "steins_gate", identity_mode="self")
+    session = chat_ws.SessionState(sid)
+    session.worldline, session.identity_mode, session.conversation_id = (
+        "steins_gate", "self", fresh["id"],
+    )
+    prompt = await compile_for_session(session, "こんにちは。")
+    assert ("自然な友人の口調で話す。" in prompt) is familiar
 
 
 async def _cursor_bump_and_return(session_id: str, cid: str, cutoff_id: int) -> dict[str, str]:

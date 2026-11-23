@@ -102,23 +102,43 @@ _ZH_COUNTER_RE = re.compile(
     r"|次|回|遍|趟|杯|碗|瓶|罐|本|册|张|枚|件|条|份|篇|页|章|节"
     r"|道|题|步|层|楼|间|家|座|台|辆|部|支|根|块|元|岁|年|周|天|晚|夜|点|分|秒|人|个)"
 )
-_EXPLICIT_DATE_RE = re.compile(
-    r"([〇零一二三四五六七八九十百千\d]+年"
-    r"|[〇零一二三四五六七八九十\d]+月"
-    r"|[〇零一二三四五六七八九十\d]+日)"
+_TEMPORAL_NUMBER = r"(?:[0-9]{1,4}|[〇零一二三四五六七八九十百千万两兩]+)"
+_DATE_RE = re.compile(
+    rf"(?:(?:{_TEMPORAL_NUMBER})年[ \t]*)?"
+    rf"{_TEMPORAL_NUMBER}月(?:[ \t]*{_TEMPORAL_NUMBER}[日号號])?"
+    r"|(?:[0-9]{4}|[〇零一二三四五六七八九]{4}|[一二三四五六七八九]千[零一二三四五六七八九十百]*)年"
+    rf"|{_TEMPORAL_NUMBER}[日号號](?!間)"
+    r"|(?<![\d/])(?:\d{4}/)?\d{1,2}/\d{1,2}(?![\d/])"
+    r"|(?<![\d-])\d{4}-\d{1,2}-\d{1,2}(?![\d-])"
 )
-_WEEKDAY_RE = re.compile(r"([月火水木金土日])曜(?:日)?")
-_WEEKDAY_ALIASES = {
-    "月": ("月曜", "周一", "星期一", "monday"),
-    "火": ("火曜", "周二", "星期二", "tuesday"),
-    "水": ("水曜", "周三", "星期三", "wednesday"),
-    "木": ("木曜", "周四", "星期四", "thursday"),
-    "金": ("金曜", "周五", "星期五", "friday"),
-    "土": ("土曜", "周六", "星期六", "saturday"),
-    "日": ("日曜", "周日", "周天", "星期日", "星期天", "sunday"),
+_DATE_FIELD_RE = re.compile(rf"({_TEMPORAL_NUMBER})([年月日号號])")
+_CLOCK_RE = re.compile(
+    rf"(?P<period>午前|午後|上午|下午|晚上)?[ \t]*"
+    rf"(?<![有这這那哪差每])(?P<hour>{_TEMPORAL_NUMBER})"
+    r"(?::(?P<colon_minute>[0-9]{2})(?!\d)|[時点點](?!間|点|點|儿|兒|也|的|期)"
+    rf"(?:(?P<minute>{_TEMPORAL_NUMBER})分|(?P<half>半))?)"
+)
+_WEEKDAYS = {
+    alias: day
+    for day, aliases in enumerate(
+        (
+            ("月曜日", "月曜", "周一", "週一", "星期一", "monday"),
+            ("火曜日", "火曜", "周二", "週二", "星期二", "tuesday"),
+            ("水曜日", "水曜", "周三", "週三", "星期三", "wednesday"),
+            ("木曜日", "木曜", "周四", "週四", "星期四", "thursday"),
+            ("金曜日", "金曜", "周五", "週五", "星期五", "friday"),
+            ("土曜日", "土曜", "周六", "週六", "星期六", "saturday"),
+            ("日曜日", "日曜", "周日", "週日", "周天", "週天", "星期日", "星期天", "sunday"),
+        ),
+        start=1,
+    )
+    for alias in aliases
 }
+_WEEKDAY_RE = re.compile(
+    r"(?<![a-z])(?:" + "|".join(_WEEKDAYS) + r")(?![a-z])",
+)
 _PERSON_SUFFIX_RE = re.compile(
-    r"[おご]?([一-龥々ヶ]{1,6}|[ァ-ヴー]{2,12})(さん|くん|君|ちゃん|様|氏|先生|教授|先輩|博士)"
+    r"[おご]?([一-龥々ヶ]{1,6}|[ァ-ヴー]{2,12})(さん|くん|君|ちゃん|様|氏)"
 )
 _PLACE_SUFFIX_RE = re.compile(
     r"([一-龥々ヶ]{2,6}|[ァ-ヴー]{2,12})(駅|空港|大学|公園|神社|県|市|区)"
@@ -261,6 +281,42 @@ def _extract_numbers(text: str) -> tuple[set[str], set[int]]:
     return raw, ints
 
 
+def _temporal_number(token: str) -> int:
+    if token.isdecimal():
+        return int(token)
+    return _kanji_to_int(token) or 0
+
+
+def _temporal_expressions(text: str):
+    for match in _DATE_RE.finditer(text):
+        token = match.group()
+        if token == "一日":
+            continue
+        if "/" in token or "-" in token:
+            parts = token.replace("-", "/").split("/")
+            fields = dict(zip("年月日"[-len(parts):], map(int, parts)))
+        else:
+            fields = {
+                "日" if unit in "号號" else unit: _temporal_number(value)
+                for value, unit in _DATE_FIELD_RE.findall(token)
+            }
+        yield ("date", fields.get("年"), fields.get("月"), fields.get("日")), token
+
+    for match in _CLOCK_RE.finditer(text):
+        hour = _temporal_number(match["hour"])
+        minute = _temporal_number(match["colon_minute"] or match["minute"] or "0")
+        if match["half"]:
+            minute = 30
+        if match["period"] in ("午後", "下午", "晚上") and hour < 12:
+            hour += 12
+        elif match["period"] in ("午前", "上午") and hour == 12:
+            hour = 0
+        yield ("clock", hour, minute), match.group().strip()
+
+    for match in _WEEKDAY_RE.finditer(text.casefold()):
+        yield ("weekday", _WEEKDAYS[match.group()]), match.group()
+
+
 def validate_diary_grounding(
     body_ja: str,
     body_zh: str,
@@ -293,6 +349,9 @@ def validate_diary_grounding(
         for f in ("text", "translation")
     ]
     source_norm = unicodedata.normalize("NFKC", "\n".join(p for p in pieces if p))
+    source_messages = [
+        _SPACE_RE.sub("", unicodedata.normalize("NFKC", piece)) for piece in pieces
+    ]
     source_compact = _SPACE_RE.sub("", source_norm)
     source_lower = source_norm.casefold()
     source_folded = source_compact.translate(_CJK_FOLD)
@@ -302,42 +361,50 @@ def validate_diary_grounding(
     zh_quotes = [q for pat in _QUOTE_RES for q in pat.findall(zh)]
     for quote in [*ja_quotes, *zh_quotes]:
         qc = _SPACE_RE.sub("", unicodedata.normalize("NFKC", quote))
-        if not qc or qc not in source_compact:
+        if not qc or not any(qc in message for message in source_messages):
             return "ungrounded_quote", f"未出の引用「{quote[:24]}」"
 
     source_digits, source_ints = _extract_numbers(source_norm)
     ja_norm = unicodedata.normalize("NFKC", ja)
     zh_norm = unicodedata.normalize("NFKC", zh)
 
-    for m in _EXPLICIT_DATE_RE.finditer(ja_norm):
-        tok = m.group(1)
-        if tok == "一日":
-            continue
-        _, tok_ints = _extract_numbers(tok)
-        if tok not in source_compact and not (tok_ints and tok_ints.issubset(source_ints)):
-            return "ungrounded_date", f"未出の日付表現「{tok}」"
+    source_times = {
+        value
+        for piece in pieces
+        for value, _ in _temporal_expressions(unicodedata.normalize("NFKC", piece))
+    }
+    quantity_texts = []
+    for body in (ja_norm, zh_norm):
+        for value, token in _temporal_expressions(body):
+            if value in source_times:
+                continue
+            if value[0] == "date" and any(
+                source[0] == "date"
+                and all(want is None or want == have for want, have in zip(value[1:], source[1:]))
+                for source in source_times
+            ):
+                continue
+            return "ungrounded_date", f"未出の日時表現「{token}」"
+        quantity_texts.append(_CLOCK_RE.sub(" ", _DATE_RE.sub(" ", body)))
 
-    for m in _WEEKDAY_RE.finditer(ja_norm):
-        if not any(alias in source_lower for alias in _WEEKDAY_ALIASES.get(m.group(1), ())):
-            return "ungrounded_date", f"未出の曜日「{m.group(0)}」"
-
-    for d in [d for tn in (ja_norm, zh_norm) for d in _DIGIT_RE.findall(tn)]:
+    ja_quantities, zh_quantities = quantity_texts
+    for d in [d for tn in quantity_texts for d in _DIGIT_RE.findall(tn)]:
         if d not in source_digits and int(d) not in source_ints:
             return "ungrounded_number", f"未出の数字「{d}」"
 
-    for m in _KANJI_COUNTER_RE.finditer(ja_norm):
+    for m in _KANJI_COUNTER_RE.finditer(ja_quantities):
         full = m.group(0)
         val = _kanji_to_int(m.group(1))
         if (
             val is not None
             and val > 1
             and full not in _JA_IDIOMATIC_COUNTS
-            and not (full == "二度" and ja_norm[m.end() : m.end() + 1] == "と")
+            and not (full == "二度" and ja_quantities[m.end() : m.end() + 1] == "と")
             and val not in source_ints
         ):
             return "ungrounded_number", f"未出の数量「{full}」"
 
-    for m in _ZH_COUNTER_RE.finditer(zh_norm):
+    for m in _ZH_COUNTER_RE.finditer(zh_quantities):
         full = m.group(0)
         val = _kanji_to_int(m.group(1))
         if (
@@ -386,6 +453,7 @@ async def sync_conversation_diary_windows(
     identity_mode: str,
     worldline: str,
     conversation_id: str,
+    through_message_id: int | None = None,
     now: datetime | None = None,
 ) -> list[str]:
     mode = normalize_identity_mode(identity_mode)
@@ -415,8 +483,9 @@ async def sync_conversation_diary_windows(
                 WHERE m.session_id = ?
                   AND c.identity_mode = ?
                   AND c.id = ?
+                  AND (? IS NULL OR m.id <= ?)
                 ORDER BY m.id ASC""",
-            scope,
+            (*scope, through_message_id, through_message_id),
         )
         messages = await cur_msgs.fetchall()
         if not messages:
@@ -442,6 +511,7 @@ async def sync_conversation_diary_windows(
             and r["deleted_at"] is None
             and not int(r["has_job"] or 0)
             and str(r["due_at"]) > now_iso
+            and (through_message_id is None or int(r["last_message_id"]) <= through_message_id)
         ]
         extendable_ids = {x["diary_id"] for x in extendable}
         fixed = [r for r in existing if r["diary_id"] not in extendable_ids]
@@ -852,6 +922,8 @@ async def process_diary_job(
             return await finish("cancelled", MemoryJobErrorCode.SOURCE_MISSING.value)
         if window["state"] == "written":
             return await finish("completed")
+        if int(job["attempt_count"] or 0) > DIARY_MAX_ATTEMPTS:
+            return await finish("failed", MemoryJobErrorCode.PROVIDER_UNAVAILABLE.value)
 
         source_rows = await load_diary_source(worldline=worldline, window=window)
         if not source_rows:
