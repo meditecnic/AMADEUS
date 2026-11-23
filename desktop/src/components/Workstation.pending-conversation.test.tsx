@@ -280,6 +280,32 @@ it('withdraws a queued message by task ID and keeps it out of the transcript', a
   expect(screen.getByLabelText('输入消息')).toBeEnabled();
 });
 
+it('restores the saved user line when the queued reply runs in the foreground', async () => {
+  rows = [oldRow, newRow];
+  await startOld(false);
+  await clickHistory('new');
+  sendText('排队后开始这句');
+  act(() => {
+    latest().emit({ type: 'turn.accepted', conversation_id: 'new', task_id: 'queued-id', queued: true });
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: ['queued-id'] });
+  });
+  expect(screen.queryByText('排队后开始这句')).not.toBeInTheDocument();
+  wireHistory.set('new', [
+    { id: 14, role: 'user', turn_id: 'queued-id', content: '排队后开始这句' },
+    { id: 15, role: 'assistant', turn_id: 'queued-id', content: '今は返事できるわ。', translation: '现在可以回了。' },
+  ]);
+  act(() => {
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: true, queued: [] });
+    latest().emit({ type: 'turn.started', conversation_id: 'new', turn_id: 'queued-id', generation: 2 });
+    latest().emit({ type: 'segment.ready', conversation_id: 'new', turn_id: 'queued-id', generation: 2,
+      segment_id: 0, ja: '今は返事できるわ。', zh: '现在可以回了。', emotion: 'neutral' });
+    latest().emit({ type: 'turn.completed', conversation_id: 'new', turn_id: 'queued-id', generation: 2 });
+  });
+  await flush(100);
+  expect(screen.getAllByText('排队后开始这句')).toHaveLength(1);
+  expect(screen.getAllByText('今は返事できるわ。')).toHaveLength(1);
+});
+
 it.each([false, true])('reconciles a full reply after returning, completion before ACK=%s', async (beforeAck) => {
   rows = [oldRow, newRow];
   await startOld(false);

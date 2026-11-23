@@ -78,7 +78,7 @@ export interface UseAmadeusWSParams {
     message?: string;
   }) => void;
   onTurnStarted?: (conversationId?: string | null) => void;
-  onTurnCompleted?: () => void;
+  onTurnCompleted?: (reconcileHistory?: boolean) => void;
   onTurnHistorySaved?: (conversationId: string) => void;
   onBackgroundHistorySaved?: (conversationId: string) => void;
   /** Decorative cue after this client actually writes chat.send, never on history/ACK. */
@@ -472,6 +472,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     };
 
     let activeAssistantMessageId = '';
+    let activeTurnNeedsHistory = false;
 
     ws.onmessage = (event) => {
       if (wsRef.current !== ws) return;
@@ -661,6 +662,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               activeConversationIdRef.current = msg.conversation_id;
             }
             const pendingSend = pendingSendRef.current;
+            activeTurnNeedsHistory = !pendingSend;
             pendingSendRef.current = null;
             paramsRef.current.onTurnStarted?.(msg.conversation_id || null);
             activeTurnIdRef.current = msg.turn_id;
@@ -837,7 +839,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             setMessages((prev) => prev.map((message) =>
               message.id === activeAssistantMessageId ? { ...message, streaming: false } : message
             ));
-            paramsRef.current.onTurnCompleted?.();
+            paramsRef.current.onTurnCompleted?.(activeTurnNeedsHistory);
             break;
 
           case 'turn.history_saved':

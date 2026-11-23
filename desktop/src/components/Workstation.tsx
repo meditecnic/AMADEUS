@@ -975,10 +975,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       // Keep audioError untouched so a concurrent TTS failure is not overwritten.
       setSessionError({ kind: 'worldline', code });
     },
-    onTurnCompleted: () => {
+    onTurnCompleted: (reconcileHistory) => {
       setLocalSend(null);
       const conversationId = activeConversationIdRef.current;
-      if (conversationId) refreshMessageIds(conversationId, true);
+      if (conversationId) refreshMessageIds(conversationId, reconcileHistory);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
     },
     onTurnHistorySaved: refreshMessageIds,
@@ -1554,7 +1554,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         if (Array.isArray(rows) && readId === messageHistoryReadRef.current
           && entryEpoch === conversationEpochRef.current
           && activeConversationIdRef.current === conversationId && latestWorldlineRef.current === wl) {
-          hydrateMessageIdsRef.current?.(rows, reconcile);
+          if (reconcile) hydrateMessageIdsRef.current?.(rows, true);
+          else hydrateMessageIdsRef.current?.(rows);
         }
       })
       .catch(() => undefined);
