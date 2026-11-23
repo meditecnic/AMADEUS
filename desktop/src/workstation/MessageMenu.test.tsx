@@ -8,6 +8,8 @@ import { deriveFactReadingArchive } from '../memory-space/readingDetails';
 
 const wsMock = vi.hoisted(() => ({
   messages: [] as Message[], isPlaying: false,
+  onSendRejected: undefined as ((code?: string) => void) | undefined,
+  onTurnSettled: undefined as ((reason: 'cancelled' | 'error', code?: string) => void) | undefined,
   sendChat: vi.fn<(content: string) => boolean>(() => true),
   canSendChat: vi.fn<(content: string) => boolean>(() => true),
   stopVoice: vi.fn(), cancelTurn: vi.fn(), sendDebugTts: vi.fn(), updateConfig: vi.fn(),
@@ -18,7 +20,13 @@ const wsMock = vi.hoisted(() => ({
 
 vi.mock('../hooks/useAmadeusWS', () => ({
   getOrCreateAmadeusSessionId: () => 'session-288',
-  useAmadeusWS: (params: { onConversationSwitched?: (d: { conversationId: string; worldline?: 'steins_gate' | 'beta'; requestEpoch?: number }) => boolean | void }) => {
+  useAmadeusWS: (params: {
+    onConversationSwitched?: (d: { conversationId: string; worldline?: 'steins_gate' | 'beta'; requestEpoch?: number }) => boolean | void;
+    onSendRejected?: (code?: string) => void;
+    onTurnSettled?: (reason: 'cancelled' | 'error', code?: string) => void;
+  }) => {
+    wsMock.onSendRejected = params.onSendRejected;
+    wsMock.onTurnSettled = params.onTurnSettled;
     wsMock.switchConversation.mockImplementation((conversationId: string, _history: Message[], requestEpoch?: number) => {
       params.onConversationSwitched?.({ conversationId, worldline: 'steins_gate', requestEpoch });
       return true;
@@ -201,5 +209,88 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     }, []);
     expect(model.revisionSummary).toBe('2 个版本 · 已在回退对话后恢复到早期说法');
     expect(model.historyVersions[1].changeKindHuman).toBe('回退对话后恢复（沿用第 1 版）');
+  });
+
+  it('queues replay behind active foreground playback without calling stopAll and Stop only cancels replay', async () => {
+    wsMock.isPlaying = true;
+    const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '测试会话' }));
+    await waitFor(() => expect(wsMock.switchConversation).toHaveBeenCalled());
+    wsMock.stopAll.mockClear();
+    wsMock.playBase64.mockClear();
+
+    // 1) Click replay while foreground is playing: must NOT call stopAll or play yet.
+    const trigger = screen.getByTestId('message-menu-trigger-a1');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '重播' }));
+    await waitFor(() => expect(screen.getByTestId('replay-status-bar')).toHaveTextContent('等本轮语音说完后重播…'));
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
+    expect(wsMock.playBase64).not.toHaveBeenCalled();
+
+    // 2) Clicking Stop on the queued replay bar cancels replay ONLY (does NOT stop foreground).
+    fireEvent.click(screen.getByTestId('replay-status-bar').querySelector('button')!);
+    expect(screen.queryByTestId('replay-status-bar')).not.toBeInTheDocument();
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
+
+    // 3) Queue replay again, then foreground finishes -> queued replay starts automatically without stopAll.
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '重播' }));
+    await waitFor(() => expect(screen.getByTestId('replay-status-bar')).toHaveTextContent('等本轮语音说完后重播…'));
+    wsMock.isPlaying = false;
+    rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(wsMock.playBase64).toHaveBeenCalledWith('UklGRg==', expect.any(Function)));
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
+  });
+
+  it('closes confirm dialog and refreshes transcript on 409 conversation_changed', async () => {
+    truncateStatus = 409;
+    truncateBody = { detail: { code: 'conversation_changed' } };
+    await mountSelected();
+    const switchCountBefore = wsMock.switchConversation.mock.calls.length;
+    const trigger = screen.getByTestId('message-menu-trigger-a1');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '回到这里…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '确认回到这里' })).not.toBeInTheDocument());
+    expect(screen.getByTestId('message-action-toast')).toHaveTextContent('已刷新记录');
+    await waitFor(() => expect(wsMock.switchConversation.mock.calls.length).toBeGreaterThan(switchCountBefore));
+  });
+
+  it('blocks edit-and-resend over 8000 chars before truncating, and keeps draft on sendChat throw or WS reject', async () => {
+    await mountSelected();
+
+    // Case A: >8000 Japanese chars blocked BEFORE truncate.
+    const trigger = screen.getByTestId('message-menu-trigger-u2');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '改这句重发…' }));
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: 'あ'.repeat(8001) } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(screen.getByText(/缩短到 8000 字以内/)).toBeInTheDocument();
+    expect(callOrder.filter((c) => c.startsWith('truncate:'))).toHaveLength(0);
+
+    // Case B: sendChat throws after truncate -> draft restored to composer.
+    wsMock.sendChat.mockImplementationOnce(() => { throw new Error('ws write failed'); });
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '异常时的改写稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    await waitFor(() => expect(wsMock.applyTruncate).toHaveBeenCalledWith(12));
+    expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe('异常时的改写稿');
+
+    // Case C: sendChat returns true, then backend rejects via WS error before turn.started -> draft restored.
+    fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '' } });
+    wsMock.applyTruncate.mockClear();
+    wsMock.sendChat.mockReturnValueOnce(true);
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '改这句重发…' }));
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '后端拒收的改写稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    await waitFor(() => expect(wsMock.applyTruncate).toHaveBeenCalledWith(12));
+    expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe('');
+    wsMock.onSendRejected?.('message_too_long');
+    await waitFor(() => expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe('后端拒收的改写稿'));
   });
 });

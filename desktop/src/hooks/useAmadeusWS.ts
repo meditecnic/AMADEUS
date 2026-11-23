@@ -77,6 +77,10 @@ export interface UseAmadeusWSParams {
   }) => void;
   onTurnStarted?: (conversationId?: string | null) => void;
   onTurnCompleted?: () => void;
+  /** Fired when a turn ends via server cancellation or error after backend persistence settles. */
+  onTurnSettled?: (reason: 'cancelled' | 'error', code?: string) => void;
+  /** Fired when a local chat.send is rejected by the server (or socket closes) before turn.started. */
+  onSendRejected?: (code?: string) => void;
   /** Decorative cue after this client actually writes chat.send, never on history/ACK. */
   onLocalSend?: (messageId: string) => void;
   /** Backend-normalized config after config_update (e.g. reasoning_effort aliases). */
@@ -150,8 +154,8 @@ export interface UseAmadeusWSReturn {
   resetToDraft?: () => void;
   /** Remove failed-entry notices (conversationEntryError) once a runtime change reconnects the source conversation. */
   clearConversationEntryErrors?: () => void;
-  /** Attach backend numeric message IDs onto matching in-memory transcript rows without disrupting segments/marks. */
-  hydrateMessageIds?: (rows: ReadonlyArray<{ id?: number; role: string }>) => void;
+  /** Attach backend numeric message IDs onto matching in-memory transcript rows by verified turn identity. */
+  hydrateMessageIds?: (rows: ReadonlyArray<{ id?: number; role: string; content?: string; turn_id?: string | null }>) => void;
   /** Drop messages from the truncated point onward and restore emotion from the last retained assistant line. */
   applyTruncate?: (fromDbId: number) => void;
   switchConversation: (conversationId: string, history: Message[], requestEpoch?: number) => boolean;
@@ -212,6 +216,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const activeTurnIdRef = useRef<string>('');
   const activeGenerationRef = useRef<number>(-1);
   const activeConversationIdRef = useRef<string | null>(params.conversationId || null);
+  const pendingLocalUserMsgIdRef = useRef<string | null>(null);
+  const localUserMsgSeqRef = useRef<number>(0);
+  const userTurnIdByMsgIdRef = useRef<Map<string, string>>(new Map());
   const pendingConversationSwitchRef = useRef<{
     requestId: string;
     conversationId: string;
@@ -601,19 +608,26 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             audioDegradedV2Ref.current = { turnId: msg.turn_id, generation: msg.generation, notified: false };
             setIsThinking(true);
             setIsTurnActive(true);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: activeAssistantMessageId,
-                role: 'assistant',
-                content: '',
-                translation: '',
-                turnId: msg.turn_id,
-                segments: [],
-                streaming: true,
-                emotion: 'neutral',
-              },
-            ]);
+            {
+              const boundUserId = pendingLocalUserMsgIdRef.current;
+              pendingLocalUserMsgIdRef.current = null;
+              if (boundUserId && typeof msg.turn_id === 'string' && msg.turn_id) {
+                userTurnIdByMsgIdRef.current.set(boundUserId, msg.turn_id);
+              }
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: activeAssistantMessageId,
+                  role: 'assistant',
+                  content: '',
+                  translation: '',
+                  turnId: msg.turn_id,
+                  segments: [],
+                  streaming: true,
+                  emotion: 'neutral',
+                },
+              ]);
+            }
             break;
 
           case 'segment.ready': {
@@ -828,6 +842,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             } else if (msg.tts === 'idle') {
               setIsSynthesizing(false);
             }
+            if (msg.dsk === 'idle' && msg.state === 'cancelled') {
+              paramsRef.current.onTurnSettled?.('cancelled');
+            }
             break;
 
           case 'text_chunk':
@@ -929,6 +946,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               setSessionState('rejected');
               setRetry(null);
             }
+            const rejectedPendingSend = pendingLocalUserMsgIdRef.current !== null;
+            pendingLocalUserMsgIdRef.current = null;
             // Error clears watchdog
             clearWatchdog();
             setIsThinking(false);
@@ -951,6 +970,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
                 systemError: true,
               }
             ]);
+            if (rejectedPendingSend) {
+              paramsRef.current.onSendRejected?.(typeof msg.code === 'string' ? msg.code : undefined);
+            } else {
+              paramsRef.current.onTurnSettled?.('error', typeof msg.code === 'string' ? msg.code : undefined);
+            }
             break;
 
           default:
@@ -965,11 +989,16 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       if (wsRef.current !== ws) return;
       setSessionReady(false);
       const turnWasActive = Boolean(activeTurnIdRef.current);
+      const pendingSendLost = pendingLocalUserMsgIdRef.current !== null;
+      pendingLocalUserMsgIdRef.current = null;
       stopHeartbeat();
       clearWatchdog();
       wsRef.current = null;
       activeTurnIdRef.current = '';
       activeGenerationRef.current = -1;
+      if (pendingSendLost) {
+        paramsRef.current.onSendRejected?.('connection_closed');
+      }
       if (pendingConversationSwitchRef.current) {
         paramsRef.current.onConversationSwitchError?.({
           conversationId: pendingConversationSwitchRef.current.conversationId,
@@ -1066,7 +1095,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     audioDegradedNotifiedRef.current = false;
     
     // Add user message to state
-    const userMsgId = `user_${Date.now()}`;
+    const userMsgId = `user_${Date.now()}_${++localUserMsgSeqRef.current}`;
+    pendingLocalUserMsgIdRef.current = userMsgId;
     setMessages((prev) => [
       ...prev,
       { id: userMsgId, role: 'user', content: content.trim() }
@@ -1153,6 +1183,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
   const clearHistory = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    pendingLocalUserMsgIdRef.current = null;
+    userTurnIdByMsgIdRef.current.clear();
     wsRef.current.send(JSON.stringify({ type: 'clear_history' }));
     setMessages([]);
     setEmotion('neutral');
@@ -1163,6 +1195,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const resetToDraft = useCallback(() => {
     activeConversationIdRef.current = null;
     activeTurnIdRef.current = '';
+    pendingLocalUserMsgIdRef.current = null;
+    userTurnIdByMsgIdRef.current.clear();
     setIsTurnActive(false);
     messagesRef.current = [];
     setMessages([]);
@@ -1177,34 +1211,52 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setMessages((prev) => prev.filter((message) => !message.conversationEntryError));
   }, []);
 
-  /** Fill numeric dbId on live messages after turn.completed without recreating message keys or dropping marks. */
-  const hydrateMessageIds = useCallback((rows: ReadonlyArray<{ id?: number; role: string }>) => {
-    const persisted = rows.filter((row) => (
-      (row.role === 'user' || row.role === 'assistant')
-      && typeof row.id === 'number'
-      && row.id > 0
-    ));
-    if (!persisted.length) return;
+  /** Bind numeric dbId strictly by verified (role, turn_id) identity; unverified bubbles stay disabled. */
+  const hydrateMessageIds = useCallback((rows: ReadonlyArray<{
+    id?: number;
+    role: string;
+    content?: string;
+    turn_id?: string | null;
+  }>) => {
+    const byRoleAndTurn = new Map<string, { id: number; content?: string }>();
+    for (const row of rows) {
+      if (
+        (row.role === 'user' || row.role === 'assistant')
+        && typeof row.id === 'number'
+        && row.id > 0
+        && typeof row.turn_id === 'string'
+        && row.turn_id.length > 0
+      ) {
+        byRoleAndTurn.set(`${row.role}:${row.turn_id}`, { id: row.id, content: row.content });
+      }
+    }
+    if (!byRoleAndTurn.size) return;
     setMessages((prev) => {
-      let cursor = 0;
       let changed = false;
+      const claimed = new Set<number>();
+      for (const message of prev) {
+        if (typeof message.dbId === 'number' && message.dbId > 0) {
+          claimed.add(message.dbId);
+        }
+      }
       const next = prev.map((message) => {
-        if (message.systemError) return message;
-        if (message.dbId !== undefined) {
-          const hit = persisted.findIndex((row, index) => index >= cursor && row.id === message.dbId);
-          if (hit >= 0) cursor = hit + 1;
+        if (message.systemError || message.dbId !== undefined) return message;
+        const verifiedTurnId = message.role === 'user'
+          ? userTurnIdByMsgIdRef.current.get(message.id)
+          : message.turnId;
+        if (!verifiedTurnId) return message;
+        const hit = byRoleAndTurn.get(`${message.role}:${verifiedTurnId}`);
+        if (!hit || claimed.has(hit.id)) return message;
+        if (
+          message.role === 'user'
+          && typeof hit.content === 'string'
+          && hit.content.trim() !== message.content.trim()
+        ) {
           return message;
         }
-        while (cursor < persisted.length && persisted[cursor].role !== message.role) {
-          cursor += 1;
-        }
-        if (cursor < persisted.length) {
-          const id = persisted[cursor].id!;
-          cursor += 1;
-          changed = true;
-          return { ...message, dbId: id };
-        }
-        return message;
+        claimed.add(hit.id);
+        changed = true;
+        return { ...message, dbId: hit.id };
       });
       if (changed) messagesRef.current = next;
       return changed ? next : prev;
@@ -1213,9 +1265,15 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
   /** Remove truncated suffix messages (along with their in-memory marks) and refresh the portrait emotion. */
   const applyTruncate = useCallback((fromDbId: number) => {
+    pendingLocalUserMsgIdRef.current = null;
     setMessages((prev) => {
       const cutIndex = prev.findIndex((message) => message.dbId !== undefined && message.dbId >= fromDbId);
       const retained = cutIndex >= 0 ? prev.slice(0, cutIndex) : prev;
+      if (cutIndex >= 0) {
+        for (const dropped of prev.slice(cutIndex)) {
+          userTurnIdByMsgIdRef.current.delete(dropped.id);
+        }
+      }
       messagesRef.current = retained;
       setEmotion(resolveConversationEmotion(undefined, retained));
       return retained;
@@ -1235,6 +1293,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     clearWatchdog();
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
+    pendingLocalUserMsgIdRef.current = null;
+    userTurnIdByMsgIdRef.current.clear();
     voiceStoppedRef.current = false;
     pendingWorldlineSwitchRef.current = null;
     pendingConversationSwitchRef.current = {

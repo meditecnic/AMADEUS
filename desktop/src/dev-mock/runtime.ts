@@ -8,7 +8,7 @@ import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
 const RECORDED_DELAY_MS = 1500;
-type HistoryMessage = { id?: number; role: string; content: string; translation?: string };
+type HistoryMessage = { id?: number; role: string; content: string; translation?: string; turn_id?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
   provider_id: string; model_id: string; identity_mode: string; last_active_at: string; created_at: string;
@@ -402,11 +402,12 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
           conversationId = conversation.id;
         }
         const clientState = state(name, client);
+        const turnId = `mock-turn-${++counter}`;
         const userId = ++clientState.nextMessageId;
         const assistantId = ++clientState.nextMessageId;
-        const assistant: HistoryMessage = { id: assistantId, role: 'assistant', content: '', translation: '' };
-        conversation.messages.push({ id: userId, role: 'user', content: frame.content.trim() }, assistant);
-        activeTurn = { turn_id: `mock-turn-${++counter}`, generation: ++generation, conversation_id: conversationId };
+        const assistant: HistoryMessage = { id: assistantId, role: 'assistant', content: '', translation: '', turn_id: turnId };
+        conversation.messages.push({ id: userId, role: 'user', content: frame.content.trim(), turn_id: turnId }, assistant);
+        activeTurn = { turn_id: turnId, generation: ++generation, conversation_id: conversationId };
         const busyConvId = conversation.id;
         clientState.busyConversations.add(busyConvId);
         const turn = activeTurn;

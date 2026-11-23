@@ -2306,6 +2306,7 @@ async def processor_loop(
                                 expected_erasure=expected_erasure,
                                 segments=staged_segments,
                                 source="original",
+                                defer_eviction=True,
                             )
                         except Exception as exc:
                             logger.warning("[VoiceCache] archive failed (%s); chat continues", type(exc).__name__)
@@ -2478,6 +2479,23 @@ async def processor_loop(
             "message": _UPSTREAM_TIMEOUT_MESSAGE,
         }))
     except SearchEvidenceError as e:
+        if (
+            not aborted_turn_written
+            and isinstance(user_message_id, int)
+            and user_message_id > 0
+            and assistant_message_id is None
+            and conversation_id
+        ):
+            aborted_turn_written = True
+            await _persist_aborted_turn(
+                session=session,
+                worldline=turn_worldline,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                revision=epoch,
+                history_epoch=start_history_epoch,
+                expected_erasure=expected_erasure,
+            )
         if segment_pipeline is not None:
             await segment_pipeline.cancel(reason=None)
         if segment_pipeline is not None and diagnostic_observer is not None:
@@ -2492,6 +2510,23 @@ async def processor_loop(
     except Exception as e:
         # Broad on purpose: turn boundary. Any failure becomes the recoverable
         # turn_failed frame instead of killing the processor task.
+        if (
+            not aborted_turn_written
+            and isinstance(user_message_id, int)
+            and user_message_id > 0
+            and assistant_message_id is None
+            and conversation_id
+        ):
+            aborted_turn_written = True
+            await _persist_aborted_turn(
+                session=session,
+                worldline=turn_worldline,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                revision=epoch,
+                history_epoch=start_history_epoch,
+                expected_erasure=expected_erasure,
+            )
         if segment_pipeline is not None:
             await segment_pipeline.cancel(reason=None)
         if segment_pipeline is not None and diagnostic_observer is not None:

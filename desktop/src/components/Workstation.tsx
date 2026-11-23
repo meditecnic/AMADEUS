@@ -269,11 +269,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null);
   const replayAbortRef = useRef<AbortController | null>(null);
   const replayRunIdRef = useRef(0);
+  const replayPlayingRef = useRef(false);
+  const pendingReplayRef = useRef<{
+    runId: number;
+    messageId: string;
+    source?: 'original' | 'synthesized';
+    segments: string[];
+  } | null>(null);
+  const foregroundVoiceBusyRef = useRef(false);
+  const hydrateSeqRef = useRef(0);
+  const pendingEditResendRef = useRef<{ text: string; convId: string } | null>(null);
   const [truncateTarget, setTruncateTarget] = useState<TruncateTarget | null>(null);
   const [truncateBusy, setTruncateBusy] = useState(false);
   const [truncateError, setTruncateError] = useState<string | null>(null);
   const [messageNotice, setMessageNotice] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
-  const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<{ id?: number; role: string }>) => void) | undefined>(undefined);
+  const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<{ id?: number; role: string; content?: string; turn_id?: string | null }>) => void) | undefined>(undefined);
   const presentationScope = `${sessionId}:${worldline}:${activeConversationId ?? 'draft'}`;
   const presentationScopeRef = useRef<string | null>(presentationScope);
   useLayoutEffect(() => {
@@ -622,9 +632,53 @@ export const Workstation: React.FC<WorkstationProps> = ({
     replayRunIdRef.current += 1;
     replayAbortRef.current?.abort();
     replayAbortRef.current = null;
+    pendingReplayRef.current = null;
+    const wasReplayPlaying = replayPlayingRef.current;
+    replayPlayingRef.current = false;
     setReplayStatus(null);
-    if (stopPlayer) audioPlayer.stopAll();
+    if (stopPlayer && wasReplayPlaying) audioPlayer.stopAll();
   }, []);
+
+  const startReplayPlayback = useCallback((entry: {
+    runId: number;
+    messageId: string;
+    source?: 'original' | 'synthesized';
+    segments: string[];
+  }) => {
+    if (replayRunIdRef.current !== entry.runId) return;
+    if (replayPlayingRef.current) audioPlayer.stopAll();
+    replayPlayingRef.current = true;
+    setReplayStatus({ messageId: entry.messageId, phase: 'playing', source: entry.source });
+    entry.segments.forEach((seg, index) => {
+      void audioPlayer.playBase64(seg, index === entry.segments.length - 1 ? () => {
+        if (replayRunIdRef.current === entry.runId) {
+          replayPlayingRef.current = false;
+          setReplayStatus(null);
+        }
+      } : undefined);
+    });
+  }, []);
+
+  const hydrateConversationMessages = useCallback((convId: string | null) => {
+    if (!convId) return;
+    const seq = ++hydrateSeqRef.current;
+    const wl = latestWorldlineRef.current;
+    void apiFetch(
+      `/api/conversations/${encodeURIComponent(convId)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(wl)}`,
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((rows) => {
+        if (
+          seq === hydrateSeqRef.current
+          && Array.isArray(rows)
+          && activeConversationIdRef.current === convId
+          && latestWorldlineRef.current === wl
+        ) {
+          hydrateMessageIdsRef.current?.(rows);
+        }
+      })
+      .catch(() => undefined);
+  }, [sessionId]);
 
   useEffect(() => () => {
     replayAbortRef.current?.abort();
@@ -866,6 +920,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setAudioError(reason);
     },
     onTurnStarted: (conversationId) => {
+      pendingEditResendRef.current = null;
+      hydrateSeqRef.current += 1;
       stopReplay(false);
       audioPlayer.stopAll();
       if (conversationId) {
@@ -936,6 +992,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setSessionError({ kind: 'session', code });
     },
     onWorldlineSwitched: ({ worldline: switchedWorldline, requestId }) => {
+      hydrateSeqRef.current += 1;
+      pendingEditResendRef.current = null;
       const run = shiftRef.current;
       if (run) {
         if (requestId) run.accept(requestId, switchedWorldline, 'success');
@@ -970,21 +1028,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
     },
     onTurnCompleted: () => {
       setLocalSend(null);
-      const completedConvId = activeConversationIdRef.current;
-      if (completedConvId) {
-        const wl = latestWorldlineRef.current;
-        void apiFetch(
-          `/api/conversations/${encodeURIComponent(completedConvId)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(wl)}`,
-        )
-          .then((res) => (res.ok ? res.json() : null))
-          .then((rows) => {
-            if (Array.isArray(rows) && activeConversationIdRef.current === completedConvId && latestWorldlineRef.current === wl) {
-              hydrateMessageIdsRef.current?.(rows);
-            }
-          })
-          .catch(() => undefined);
-      }
+      hydrateConversationMessages(activeConversationIdRef.current);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
+    },
+    onTurnSettled: () => {
+      setLocalSend(null);
+      hydrateConversationMessages(activeConversationIdRef.current);
+      window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
+    },
+    onSendRejected: () => {
+      const pendingEdit = pendingEditResendRef.current;
+      pendingEditResendRef.current = null;
+      if (pendingEdit && pendingEdit.convId === activeConversationIdRef.current) {
+        setInputText((current) => (current.trim() ? current : pendingEdit.text));
+        window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+        setMessageNotice({
+          text: '已回到这句之前，但消息未能发出，改好的话已留在输入框里。',
+          kind: 'error',
+        });
+      }
     },
     onLocalSend: (id) => setLocalSend({ id, scope: presentationScope }),
     onConfigApplied: ({ reasoningEffort: appliedEffort }) => {
@@ -1302,6 +1364,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [locked, relocating, activeProviderId, loadProviderModels]);
 
   const { isPlaying } = useAudioPlayer();
+  const foregroundVoiceBusy = Boolean(
+    turnActive || isSynthesizing || speakingId !== null || (isPlaying && !replayPlayingRef.current),
+  );
+  foregroundVoiceBusyRef.current = foregroundVoiceBusy;
+
+  useEffect(() => {
+    if (foregroundVoiceBusy || !pendingReplayRef.current) return;
+    const queued = pendingReplayRef.current;
+    pendingReplayRef.current = null;
+    startReplayPlayback(queued);
+  }, [foregroundVoiceBusy, startReplayPlayback]);
   // stopAll() drops queued chunks without their onEnded; after a quiet moment the speaking queue is stale.
   useEffect(() => {
     if (isPlaying) return;
@@ -1553,6 +1626,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // Stays null for network errors: a thrown fetch has no status code to show.
     let failedStatus: number | null = null;
     try {
+      hydrateSeqRef.current += 1;
+      pendingEditResendRef.current = null;
       stopReplay(false);
       audioPlayer.stopAll();
       const response = await apiFetch(
@@ -1568,6 +1643,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         role: string;
         content: string;
         translation?: string | null;
+        turn_id?: string | null;
       }>;
       const history: Message[] = rows
         .filter((row) => row.role === 'user' || row.role === 'assistant')
@@ -1576,6 +1652,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           return {
             id: `history_${conversation.id}_${index}`,
             ...(typeof row.id === 'number' && row.id > 0 ? { dbId: row.id } : {}),
+            ...(row.role === 'assistant' && typeof row.turn_id === 'string' && row.turn_id ? { turnId: row.turn_id } : {}),
             role: row.role as 'user' | 'assistant',
             content: row.role === 'assistant'
               ? row.content.replace(/[ \t]*(?:\[EMO:[^\]\r\n]{1,24}\][ \t]*)+/gi,
@@ -1881,6 +1958,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleStopVoice = () => {
     stopReplay(false);
+    speakingQueueRef.current = [];
+    setSpeakingId(null);
     audioPlayer.stopAll();
     stopVoice();
   };
@@ -1889,6 +1968,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setLocalSend(null);
     transcriptScroll.cancelPending();
     stopReplay(false);
+    speakingQueueRef.current = [];
+    setSpeakingId(null);
     audioPlayer.stopAll();
     cancelTurn();
   };
@@ -1904,9 +1985,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!convId || !message.dbId || relocating) return;
     const runId = ++replayRunIdRef.current;
     replayAbortRef.current?.abort();
+    pendingReplayRef.current = null;
+    if (replayPlayingRef.current) {
+      replayPlayingRef.current = false;
+      audioPlayer.stopAll();
+    }
     const controller = new AbortController();
     replayAbortRef.current = controller;
-    setReplayStatus({ messageId: message.id, phase: 'loading', waitingForeground: Boolean(isSynthesizing || (isPlaying && !replayStatus)) });
+    setReplayStatus({ messageId: message.id, phase: 'loading', waitingForeground: foregroundVoiceBusyRef.current });
     try {
       const response = await apiFetch(
         `/api/conversations/${encodeURIComponent(convId)}/messages/${message.dbId}/replay?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
@@ -1924,13 +2010,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (replayRunIdRef.current !== runId) return;
       const segments = Array.isArray(data.segments) ? data.segments.filter((s): s is string => typeof s === 'string' && s.length > 0) : [];
       if (!segments.length) { setReplayStatus(null); setMessageNotice({ text: '这条回复没有可播放的语音。', kind: 'info' }); return; }
-      audioPlayer.stopAll();
-      setReplayStatus({ messageId: message.id, phase: 'playing', source: data.source });
-      segments.forEach((seg, index) => {
-        void audioPlayer.playBase64(seg, index === segments.length - 1 ? () => {
-          if (replayRunIdRef.current === runId) setReplayStatus(null);
-        } : undefined);
-      });
+      const entry = { runId, messageId: message.id, source: data.source, segments };
+      if (foregroundVoiceBusyRef.current) {
+        pendingReplayRef.current = entry;
+        setReplayStatus({ messageId: message.id, phase: 'loading', source: data.source, waitingForeground: true });
+        return;
+      }
+      startReplayPlayback(entry);
     } catch (error) {
       if ((error as { name?: string })?.name === 'AbortError' || replayRunIdRef.current !== runId) return;
       setReplayStatus(null);
@@ -1938,7 +2024,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     } finally {
       if (replayAbortRef.current === controller) replayAbortRef.current = null;
     }
-  }, [flagIfRelocating, isPlaying, isSynthesizing, relocating, replayStatus, sessionId, worldline]);
+  }, [flagIfRelocating, relocating, sessionId, startReplayPlayback, worldline]);
 
   const handleSaveSettings = async (newSettings: {
     worldline: 'steins_gate' | 'beta';
@@ -2250,9 +2336,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const target = truncateTarget;
     const convId = activeConversationIdRef.current;
     if (!target || !convId || truncateBusy || relocating) return;
-    // Always stop playback before truncating.
+    if (target.mode === 'edit' && editedText && Array.from(editedText.trim()).length > MAX_USER_MESSAGE_LENGTH) {
+      setTruncateError(`消息太长了，请缩短到 ${MAX_USER_MESSAGE_LENGTH} 字以内再重发。`);
+      return;
+    }
+    // Always stop playback (replay and foreground) before truncating.
     stopReplay(true);
-    if (isPlaying || isSynthesizing) stopVoice();
+    if (isPlaying || isSynthesizing || speakingId !== null) {
+      speakingQueueRef.current = [];
+      setSpeakingId(null);
+      audioPlayer.stopAll();
+      stopVoice();
+    }
     setTruncateBusy(true);
     setTruncateError(null);
     try {
@@ -2271,13 +2366,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
         await flagIfRelocating(response);
         const body = await response.json().catch(() => null);
         const code = body?.detail?.code as string | undefined;
-        setTruncateError(formatTruncateError(code));
         if (code === 'conversation_changed') {
+          setTruncateTarget(null);
+          setTruncateError(null);
+          setMessageNotice({ text: '对话内容刚刚有更新，已刷新记录，请重新选择后再试。', kind: 'error' });
           const currentConv = conversations.find((row) => row.id === convId);
           if (currentConv) void selectConversation(currentConv, true);
+          return;
         }
+        setTruncateError(formatTruncateError(code));
         return;
       }
+      hydrateSeqRef.current += 1;
       applyTruncate?.(target.fromMessageId);
       setTruncateTarget(null);
       setTruncateError(null);
@@ -2293,7 +2393,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
           && !relocating
           && (!canSendChat || canSendChat(editedText))
         );
-        if (readyToSend && sendChat(editedText)) {
+        let sent = false;
+        if (readyToSend) {
+          try {
+            sent = Boolean(sendChat(editedText));
+          } catch {
+            sent = false;
+          }
+        }
+        if (sent) {
+          pendingEditResendRef.current = { text: editedText, convId };
           scrollTranscriptToLatest();
           composerHandoffUntil.current = Number.POSITIVE_INFINITY;
         } else {
@@ -3318,6 +3427,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           target={truncateTarget}
           busy={truncateBusy}
           error={truncateError}
+          maxLength={MAX_USER_MESSAGE_LENGTH}
           onConfirm={(editedText) => { void handleConfirmTruncate(editedText); }}
           onCancel={() => { if (!truncateBusy) { setTruncateTarget(null); setTruncateError(null); } }}
         />

@@ -22,23 +22,28 @@ export interface ReplayStatus {
   waitingForeground?: boolean;
 }
 
+export const MAX_EDIT_RESEND_LENGTH = 8000;
+
 /** Resolve the backend truncation point and affected turn count for one message action. */
 export function resolveTruncateTarget(messages: readonly Message[], targetId: string, mode: TruncateMode): TruncateTarget | null {
   const index = messages.findIndex((msg) => msg.id === targetId);
   if (index < 0) return null;
   const target = messages[index];
-  if (target.systemError || target.streaming) return null;
+  if (target.systemError || target.streaming || typeof target.dbId !== 'number' || target.dbId <= 0) return null;
   const expectedLastMessageId = messages.reduce(
     (max, msg) => (!msg.systemError && typeof msg.dbId === 'number' && msg.dbId > max ? msg.dbId : max),
     0,
   );
   if (!expectedLastMessageId) return null;
   const cutIndex = mode === 'edit'
-    ? (target.role === 'user' && target.dbId ? index : -1)
-    : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user');
+    ? (target.role === 'user' ? index : -1)
+    : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user' && typeof msg.dbId === 'number' && msg.dbId > 0);
   const fromMessageId = cutIndex >= 0 ? messages[cutIndex].dbId : undefined;
   if (!fromMessageId) return null;
-  const deletedTurns = messages.slice(cutIndex).filter((msg) => !msg.systemError && msg.role === 'user').length;
+  const deletedTurns = messages
+    .slice(cutIndex)
+    .filter((msg) => !msg.systemError && msg.role === 'user' && typeof msg.dbId === 'number' && msg.dbId > 0)
+    .length;
   return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
 }
 
@@ -142,9 +147,9 @@ export function MessageMenu({
 }
 
 export function TruncateConfirmDialog({
-  target, busy, error, onConfirm, onCancel,
+  target, busy, error, maxLength = MAX_EDIT_RESEND_LENGTH, onConfirm, onCancel,
 }: {
-  target: TruncateTarget; busy: boolean; error: string | null;
+  target: TruncateTarget; busy: boolean; error: string | null; maxLength?: number;
   onConfirm: (editedText?: string) => void; onCancel: () => void;
 }) {
   const isEdit = target.mode === 'edit';
@@ -163,6 +168,10 @@ export function TruncateConfirmDialog({
         if (busy) return;
         const trimmed = draft.trim();
         if (isEdit && !trimmed) { setLocalError('发送内容不能为空。'); return; }
+        if (isEdit && Array.from(trimmed).length > maxLength) {
+          setLocalError(`消息太长了，请缩短到 ${maxLength} 字以内再重发。`);
+          return;
+        }
         setLocalError(null);
         onConfirm(isEdit ? trimmed : undefined);
       }}

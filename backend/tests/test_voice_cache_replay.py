@@ -6,10 +6,14 @@ import asyncio
 import base64
 import io
 import json
+import os
+import stat
 import struct
+import threading
 import time
 import wave
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import AsyncMock
 from zipfile import ZipFile
 
@@ -512,3 +516,434 @@ def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
     assert replay.json()["source"] == "original"
     assert replay.json()["cached"] is True
     assert [base64.b64decode(s) for s in replay.json()["segments"]] == expected
+
+
+def test_chat_ws_mid_synthesis_voice_stop_and_tts_disabled_do_not_archive(
+    isolated_client,
+    isolated_provider_credentials,
+    monkeypatch,
+):
+    """Item 3: real chat_ws E2E for mid-synthesis voice.stop, pre-archive voice.stop, and enable_tts=False."""
+    from test_emotion_per_conversation import _ScriptedDeepSeek
+
+    from app.routers import chat_ws
+    from app.services.conversations import conversation_service
+    from app.services.memory_v11 import jobs
+
+    client = isolated_client
+    isolated_provider_credentials.set("deepseek", "test-credential")
+    monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock())
+    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **kw: None)
+
+    # Case 1: mid-synthesis voice.stop cancels remaining segment -> no cache directory.
+    owner_stop = "vc-e2e-midstop"
+    cid_stop = _conv(client, owner_stop)
+    monkeypatch.setattr(
+        chat_ws,
+        "deepseek_service",
+        _ScriptedDeepSeek(["[EMO:intellectual] 一つ目の文よ。二つ目の文はまだ合成中よ。"]),
+    )
+    synth_count = {"n": 0}
+    seg2_entered = threading.Event()
+
+    async def slow_second_seg(*_a, **_kw) -> bytes:
+        synth_count["n"] += 1
+        if synth_count["n"] == 1:
+            return _wav(401, 80)
+        seg2_entered.set()
+        await asyncio.sleep(30)
+        return _wav(402, 80)
+
+    monkeypatch.setattr(tts_manager, "synthesize_async", slow_second_seg)
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner_stop}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "protocol_version": 2,
+                    "client": "desktop",
+                    "enable_tts": True,
+                    "conversation_mode": "history",
+                    "conversation_id": cid_stop,
+                }
+            )
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": "途中で止めるわよ"})
+            stopped = False
+            for _ in range(50):
+                frame = ws.receive_json()
+                assert frame["type"] != "error", frame
+                if not stopped and seg2_entered.is_set():
+                    ws.send_json({"type": "voice.stop"})
+                    stopped = True
+                if frame["type"] == "turn.completed":
+                    break
+            else:
+                pytest.fail("mid-stop turn did not complete")
+    finally:
+        chat_ws.sessions.pop(owner_stop, None)
+
+    rows_stop = client.get(
+        f"/api/conversations/{cid_stop}/messages",
+        params={"session_id": owner_stop},
+    ).json()
+    aid_stop = [r for r in rows_stop if r["role"] == "assistant"][-1]["id"]
+    assert not voice_cache.message_cache_dir(cid_stop, aid_stop).exists()
+
+    # Case 2: voice.stop arrives after segment.audio finished (no segment.audio_error)
+    # but before archive_audio -> voice_stopped flag alone blocks archival.
+    owner_flag = "vc-e2e-flag"
+    cid_flag = _conv(client, owner_flag)
+    monkeypatch.setattr(
+        chat_ws,
+        "deepseek_service",
+        _ScriptedDeepSeek(["[EMO:neutral] 確認できたわ。"]),
+    )
+    monkeypatch.setattr(tts_manager, "synthesize_async", AsyncMock(return_value=_wav(403, 80)))
+    orig_save_message = models.save_message
+    assistant_save_reached = threading.Event()
+    release_assistant_save = threading.Event()
+
+    async def gated_save_message(session_id, role, content, *args, **kwargs):
+        if session_id == owner_flag and role == "assistant":
+            assistant_save_reached.set()
+            await asyncio.to_thread(release_assistant_save.wait, 5.0)
+        return await orig_save_message(session_id, role, content, *args, **kwargs)
+
+    monkeypatch.setattr(models, "save_message", gated_save_message)
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner_flag}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "protocol_version": 2,
+                    "client": "desktop",
+                    "enable_tts": True,
+                    "conversation_mode": "history",
+                    "conversation_id": cid_flag,
+                }
+            )
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": "止めるタイミングテスト"})
+            sent_stop = False
+            for _ in range(50):
+                frame = ws.receive_json()
+                assert frame["type"] != "error", frame
+                if not sent_stop and frame["type"] == "segment.audio":
+                    assert assistant_save_reached.wait(2.0)
+                    ws.send_json({"type": "voice.stop"})
+                    sent_stop = True
+                if frame["type"] == "status" and frame.get("state") == "voice_stopped":
+                    release_assistant_save.set()
+                if frame["type"] == "turn.completed":
+                    break
+            else:
+                pytest.fail("flag-stop turn did not complete")
+    finally:
+        release_assistant_save.set()
+        chat_ws.sessions.pop(owner_flag, None)
+
+    monkeypatch.setattr(models, "save_message", orig_save_message)
+    rows_flag = client.get(
+        f"/api/conversations/{cid_flag}/messages",
+        params={"session_id": owner_flag},
+    ).json()
+    aid_flag = [r for r in rows_flag if r["role"] == "assistant"][-1]["id"]
+    assert not voice_cache.message_cache_dir(cid_flag, aid_flag).exists()
+
+    # Case 3: enable_tts=False -> no cache directory created; first replay synthesizes once.
+    owner_off = "vc-e2e-ttsoff"
+    cid_off = _conv(client, owner_off)
+    monkeypatch.setattr(
+        chat_ws,
+        "deepseek_service",
+        _ScriptedDeepSeek(["[EMO:neutral] 音声オフのテストよ。"]),
+    )
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner_off}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "protocol_version": 2,
+                    "client": "desktop",
+                    "enable_tts": False,
+                    "conversation_mode": "history",
+                    "conversation_id": cid_off,
+                }
+            )
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": "静音テスト"})
+            for _ in range(40):
+                frame = ws.receive_json()
+                assert frame["type"] != "error", frame
+                if frame["type"] == "turn.completed":
+                    break
+            else:
+                pytest.fail("tts-off turn did not complete")
+    finally:
+        chat_ws.sessions.pop(owner_off, None)
+
+    rows_off = client.get(
+        f"/api/conversations/{cid_off}/messages",
+        params={"session_id": owner_off},
+    ).json()
+    aid_off = [r for r in rows_off if r["role"] == "assistant"][-1]["id"]
+    assert not voice_cache.message_cache_dir(cid_off, aid_off).exists()
+
+
+def test_archive_cancel_during_staging_waits_for_thread_and_cleans_tmp_dir(
+    isolated_client,
+    monkeypatch,
+):
+    """Item 4: cancelling archive_audio mid-write waits for staging thread and removes .tmp-* WAVs."""
+    client = isolated_client
+    owner = "vc-item4"
+    cid = _conv(client, owner)
+    u1 = _save(owner, cid, "user", "cancel during write")
+    a1 = _save(owner, cid, "assistant", "[EMO:neutral] 書き出し中よ。")
+    cur = asyncio.run(history_erasure_cursor("steins_gate", owner, cid))
+
+    written_evt = threading.Event()
+    release_thread = threading.Event()
+    orig_stage = voice_cache._stage_entry_dir
+
+    def slow_stage(conv_dir, tmp_dir, segments, source, cancel_event):
+        result = orig_stage(conv_dir, tmp_dir, segments, source, threading.Event())
+        written_evt.set()
+        release_thread.wait(5.0)
+        return result
+
+    monkeypatch.setattr(voice_cache, "_stage_entry_dir", slow_stage)
+
+    async def _run() -> None:
+        task = asyncio.create_task(
+            voice_cache.archive_audio(
+                worldline="steins_gate",
+                session_id=owner,
+                conversation_id=cid,
+                message_id=a1,
+                expected_erasure=cur,
+                segments=[_wav(501, 160)],
+                source="original",
+            )
+        )
+        await asyncio.to_thread(written_evt.wait, 5.0)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        # Task must still be waiting for the staging thread before exiting.
+        assert not task.done()
+        release_thread.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+    res_cut = client.post(
+        f"/api/conversations/{cid}/truncate",
+        params={"session_id": owner},
+        json={"from_message_id": u1, "expected_last_message_id": a1},
+    )
+    assert res_cut.status_code == 200
+    assert not voice_cache.message_cache_dir(cid, a1).exists()
+    assert not list(voice_cache.voice_cache_root().rglob(".tmp-*"))
+    assert not list(voice_cache.voice_cache_root().rglob("*.wav"))
+
+
+def test_reparse_point_and_symlink_skipped_by_cleanup_eviction_and_removal(
+    isolated_client,
+    monkeypatch,
+):
+    """Item 6: NTFS junctions (FILE_ATTRIBUTE_REPARSE_POINT) and symlinks are never traversed or deleted."""
+    outside = db.get_data_root() / "outside-victim"
+    outside_msg = outside / "999"
+    outside_msg.mkdir(parents=True, exist_ok=True)
+    victim_wav = outside_msg / "000.wav"
+    victim_wav.write_bytes(_wav(601, 120))
+    (outside_msg / "manifest.json").write_text(
+        json.dumps({"version": 1, "source": "original", "segments": ["000.wav"], "last_played_at": 1.0}),
+        encoding="utf-8",
+    )
+
+    root = voice_cache.voice_cache_root()
+    root.mkdir(parents=True, exist_ok=True)
+    # 1) Real symlink inside voice_cache pointing outside.
+    sym_conv = root / "sym-conv"
+    sym_conv.symlink_to(outside, target_is_directory=True)
+
+    # 2) Simulated Windows NTFS junction (is_symlink()=False, st_file_attributes & 0x400 != 0).
+    junction_conv = root / "junction-conv"
+    junction_msg = junction_conv / "888"
+    junction_msg.mkdir(parents=True, exist_ok=True)
+    junction_wav = junction_msg / "000.wav"
+    junction_wav.write_bytes(_wav(602, 120))
+    (junction_msg / "manifest.json").write_text(
+        json.dumps({"version": 1, "source": "original", "segments": ["000.wav"], "last_played_at": 1.0}),
+        encoding="utf-8",
+    )
+
+    orig_is_link = voice_cache.is_link
+
+    def fake_is_link(path: Path) -> bool:
+        if path == junction_conv:
+            return True
+        return orig_is_link(path)
+
+    monkeypatch.setattr(voice_cache, "is_link", fake_is_link)
+
+    asyncio.run(voice_cache.cleanup_orphan_voice_cache())
+    voice_cache.enforce_cache_limit(max_bytes=1)
+    asyncio.run(voice_cache.remove_conversation_audio("sym-conv", [999]))
+    asyncio.run(voice_cache.remove_conversation_audio("junction-conv", [888]))
+
+    assert victim_wav.is_file()
+    assert junction_wav.is_file()
+    assert sym_conv.is_symlink()
+
+
+def test_chat_ws_turn_completed_not_blocked_by_cache_eviction(
+    isolated_client,
+    isolated_provider_credentials,
+    monkeypatch,
+):
+    """Item 7: cache eviction runs off the turn.completed critical path and tolerates disappearing dirs."""
+    from test_emotion_per_conversation import _ScriptedDeepSeek
+
+    from app.routers import chat_ws
+    from app.services.conversations import conversation_service
+    from app.services.memory_v11 import jobs
+
+    client = isolated_client
+    owner = "vc-item7"
+    isolated_provider_credentials.set("deepseek", "test-credential")
+    cid = _conv(client, owner)
+    monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock())
+    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        chat_ws,
+        "deepseek_service",
+        _ScriptedDeepSeek(["[EMO:neutral] 退避は裏で走るわ。"]),
+    )
+    monkeypatch.setattr(tts_manager, "synthesize_async", AsyncMock(return_value=_wav(701, 80)))
+
+    evict_started = threading.Event()
+    release_evict = threading.Event()
+    evict_finished = threading.Event()
+    orig_enforce = voice_cache.enforce_cache_limit
+
+    def blocking_enforce(*args, **kwargs):
+        evict_started.set()
+        release_evict.wait(5.0)
+        try:
+            return orig_enforce(*args, **kwargs)
+        finally:
+            evict_finished.set()
+
+    monkeypatch.setattr(voice_cache, "enforce_cache_limit", blocking_enforce)
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "protocol_version": 2,
+                    "client": "desktop",
+                    "enable_tts": True,
+                    "conversation_mode": "history",
+                    "conversation_id": cid,
+                }
+            )
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": "非同期退避テスト"})
+            for _ in range(40):
+                frame = ws.receive_json()
+                assert frame["type"] != "error", frame
+                if frame["type"] == "turn.completed":
+                    break
+            else:
+                pytest.fail("turn.completed was blocked by eviction")
+            # turn.completed arrived while eviction is still blocked on release_evict.
+            assert not release_evict.is_set()
+            assert not evict_finished.is_set()
+    finally:
+        release_evict.set()
+        evict_finished.wait(5.0)
+        chat_ws.sessions.pop(owner, None)
+
+    assert evict_started.is_set()
+
+    # Concurrent deletion during enforce_cache_limit must skip vanished entries without raising.
+    m_keep = _save(owner, cid, "assistant", "[EMO:neutral] 残るわ。")
+    m_vanish = _save(owner, cid, "assistant", "[EMO:neutral] 途中で消えるわ。")
+    wav = _wav(702, 200)
+    monkeypatch.setattr(voice_cache, "enforce_cache_limit", orig_enforce)
+    assert _archive(owner, cid, m_keep, [wav])
+    assert _archive(owner, cid, m_vanish, [wav])
+    orig_scandir = os.scandir
+    vanish_dir = voice_cache.message_cache_dir(cid, m_vanish)
+
+    def flaky_scandir(path):
+        if Path(path) == vanish_dir:
+            raise FileNotFoundError(str(path))
+        return orig_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", flaky_scandir)
+    assert voice_cache.enforce_cache_limit(max_bytes=1) >= 1
+
+
+def test_chat_ws_error_turn_persists_aborted_notice_before_error_frame(
+    isolated_client,
+    isolated_provider_credentials,
+    monkeypatch,
+):
+    """Item 2 (backend): when a turn errors after user save, aborted notice is persisted before WS error frame."""
+    from app.routers import chat_ws
+    from app.services.conversations import conversation_service
+    from app.services.memory_v11 import jobs
+
+    class _FailingProvider:
+        provider_id = "deepseek"
+        model_id = "deepseek-chat"
+
+        async def stream_chat_raw(self, *_a, **_kw):
+            raise RuntimeError("simulated upstream failure")
+            yield ""  # pragma: no cover
+
+    client = isolated_client
+    owner = "vc-item2-err"
+    isolated_provider_credentials.set("deepseek", "test-credential")
+    cid = _conv(client, owner)
+    monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock())
+    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **kw: None)
+    monkeypatch.setattr(chat_ws, "deepseek_service", _FailingProvider())
+
+    started_turn_id = None
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "protocol_version": 2,
+                    "client": "desktop",
+                    "enable_tts": False,
+                    "conversation_mode": "history",
+                    "conversation_id": cid,
+                }
+            )
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": "エラー時の永続化確認"})
+            for _ in range(30):
+                frame = ws.receive_json()
+                if frame["type"] == "turn.started":
+                    started_turn_id = frame["turn_id"]
+                if frame["type"] == "error":
+                    # Immediately on receiving the error frame, both messages must already be in DB.
+                    rows = client.get(
+                        f"/api/conversations/{cid}/messages",
+                        params={"session_id": owner},
+                    ).json()
+                    assert started_turn_id
+                    assert [r["role"] for r in rows] == ["user", "assistant"]
+                    assert all(r["turn_id"] == started_turn_id for r in rows)
+                    break
+            else:
+                pytest.fail("did not receive error frame")
+    finally:
+        chat_ws.sessions.pop(owner, None)

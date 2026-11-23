@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import re
-import shutil
+import stat
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +22,7 @@ from app.domain.segments import IncrementalJapaneseSegmenter
 from app.domain.segments import prepare_tts_text
 from app.services.conversation_admission import conversation_admission
 from app.services.conversation_erasure import history_erasure_cursor
+from app.services.data_location import is_link
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ _VALID_EMOTIONS = frozenset({
     "sad",
 })
 _message_locks: WeakValueDictionary[tuple[str, int], asyncio.Lock] = WeakValueDictionary()
+_background_evict_tasks: set[asyncio.Task[int]] = set()
 
 
 class ReplayError(Exception):
@@ -56,6 +59,16 @@ def voice_cache_root() -> Path:
     return db.get_data_root() / "voice_cache"
 
 
+def _is_reparse_or_link(path: Path) -> bool:
+    """Detect symlinks and Windows NTFS junctions/reparse points via data_location.is_link."""
+    try:
+        return is_link(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
 def _safe_conversation_dir(conversation_id: str) -> Path:
     if (
         not conversation_id
@@ -64,22 +77,31 @@ def _safe_conversation_dir(conversation_id: str) -> Path:
         or ".." in conversation_id
     ):
         raise ValueError("invalid conversation_id for voice cache")
-    root = voice_cache_root().resolve()
-    target = (root / conversation_id).resolve()
-    if not target.is_relative_to(root) or target == root:
+    root = voice_cache_root()
+    candidate = root / conversation_id
+    if _is_reparse_or_link(candidate):
+        raise ValueError("conversation_id resolves to a link or reparse point")
+    root_resolved = root.resolve()
+    target_resolved = candidate.resolve()
+    if not target_resolved.is_relative_to(root_resolved) or target_resolved == root_resolved:
         raise ValueError("conversation_id escapes voice cache root")
-    return target
+    return candidate
 
 
 def message_cache_dir(conversation_id: str, message_id: int) -> Path:
     if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
         raise ValueError("invalid message_id for voice cache")
-    return _safe_conversation_dir(conversation_id) / str(message_id)
+    target = _safe_conversation_dir(conversation_id) / str(message_id)
+    if _is_reparse_or_link(target):
+        raise ValueError("message cache entry is a link or reparse point")
+    return target
 
 
 def _read_manifest(entry_dir: Path) -> dict[str, Any] | None:
+    if _is_reparse_or_link(entry_dir):
+        return None
     manifest_path = entry_dir / _MANIFEST_NAME
-    if not manifest_path.is_file():
+    if _is_reparse_or_link(manifest_path) or not manifest_path.is_file():
         return None
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -94,7 +116,13 @@ def _read_manifest(entry_dir: Path) -> dict[str, Any] | None:
         if not isinstance(name, str) or not name.endswith(".wav") or "/" in name or "\\" in name:
             return None
         wav_path = entry_dir / name
-        if not wav_path.is_file() or wav_path.stat().st_size <= 0:
+        try:
+            if _is_reparse_or_link(wav_path):
+                return None
+            info = wav_path.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
             return None
     return data
 
@@ -110,13 +138,60 @@ def _write_manifest_atomic(entry_dir: Path, manifest: dict[str, Any]) -> None:
 
 
 def _remove_tree_best_effort(path: Path) -> bool:
-    if not path.exists():
-        return True
+    """Remove regular files and real subdirectories without traversing or deleting links/junctions."""
     try:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
+        info = path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        logger.warning(
+            "[VoiceCache] could not inspect %s (%s); deferred to startup sweep",
+            path.name,
+            type(exc).__name__,
+        )
+        return False
+
+    if _is_reparse_or_link(path):
+        logger.warning("[VoiceCache] skipping link/reparse point during cleanup: %s", path.name)
+        return False
+
+    if not stat.S_ISDIR(info.st_mode):
+        try:
             path.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            logger.warning(
+                "[VoiceCache] could not remove %s (%s); deferred to startup sweep",
+                path.name,
+                type(exc).__name__,
+            )
+            return False
+
+    complete = True
+    try:
+        with os.scandir(path) as entries:
+            children = [Path(entry.path) for entry in entries]
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        logger.warning(
+            "[VoiceCache] could not scan %s (%s); deferred to startup sweep",
+            path.name,
+            type(exc).__name__,
+        )
+        return False
+
+    for child in children:
+        if not _remove_tree_best_effort(child):
+            complete = False
+
+    if not complete:
+        return False
+
+    try:
+        path.rmdir()
+        return True
+    except FileNotFoundError:
         return True
     except OSError as exc:
         logger.warning(
@@ -129,6 +204,8 @@ def _remove_tree_best_effort(path: Path) -> bool:
 
 def _prune_empty_dir(path: Path) -> None:
     try:
+        if _is_reparse_or_link(path):
+            return
         if path.is_dir() and not any(path.iterdir()):
             path.rmdir()
     except OSError:
@@ -137,21 +214,29 @@ def _prune_empty_dir(path: Path) -> None:
 
 def _stage_entry_dir(
     conv_dir: Path,
-    message_id: int,
+    tmp_dir: Path,
     segments: list[bytes],
     source: str,
+    cancel_event: threading.Event,
 ) -> Path:
+    if cancel_event.is_set():
+        return tmp_dir
     conv_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = conv_dir / f"{_TMP_PREFIX}{message_id}-{uuid.uuid4().hex}"
+    if _is_reparse_or_link(conv_dir):
+        raise ValueError("conversation voice cache directory is a link or reparse point")
     tmp_dir.mkdir(parents=False, exist_ok=False)
     try:
         names: list[str] = []
         for idx, wav_bytes in enumerate(segments):
+            if cancel_event.is_set():
+                return tmp_dir
             name = f"{idx:03d}.wav"
             with (tmp_dir / name).open("wb") as handle:
                 handle.write(wav_bytes)
                 handle.flush()
             names.append(name)
+        if cancel_event.is_set():
+            return tmp_dir
         manifest = {
             "version": 1,
             "source": source,
@@ -166,6 +251,19 @@ def _stage_entry_dir(
     except BaseException:
         _remove_tree_best_effort(tmp_dir)
         raise
+
+
+async def _await_task_uninterruptible(task: asyncio.Task[Any]) -> asyncio.CancelledError | None:
+    """Wait until a thread-backed task finishes, returning any CancelledError to re-raise after cleanup."""
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except BaseException:
+            break
+    return cancelled
 
 
 async def _message_exists(
@@ -186,6 +284,28 @@ async def _message_exists(
         await conn.close()
 
 
+def _dir_regular_bytes(msg_path: Path) -> int | None:
+    """Sum regular non-link file sizes inside one message directory, returning None if it vanished."""
+    total = 0
+    try:
+        with os.scandir(msg_path) as items:
+            for item in items:
+                item_path = Path(item.path)
+                if _is_reparse_or_link(item_path):
+                    continue
+                try:
+                    info = item.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    total += info.st_size
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        return None
+    return total
+
+
 def enforce_cache_limit(
     *,
     protect: tuple[str, int] | None = None,
@@ -195,36 +315,64 @@ def enforce_cache_limit(
     root = voice_cache_root()
     if not root.is_dir():
         return 0
-    entries: list[tuple[float, int, str, int, Path]] = []
+    scanned: list[tuple[int, str, int, Path]] = []
     total_bytes = 0
-    for conv in os.scandir(root):
-        if conv.is_symlink() or not conv.is_dir(follow_symlinks=False) or conv.name.startswith(_TMP_PREFIX):
+    try:
+        with os.scandir(root) as conv_entries:
+            conv_list = list(conv_entries)
+    except OSError:
+        return 0
+
+    for conv in conv_list:
+        conv_path = Path(conv.path)
+        if conv.name.startswith(_TMP_PREFIX) or _is_reparse_or_link(conv_path):
             continue
-        for msg in os.scandir(conv.path):
+        try:
+            if not conv.is_dir(follow_symlinks=False):
+                continue
+            with os.scandir(conv_path) as msg_entries:
+                msg_list = list(msg_entries)
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            continue
+        for msg in msg_list:
+            msg_path = Path(msg.path)
             if (
-                msg.is_symlink()
-                or not msg.is_dir(follow_symlinks=False)
-                or msg.name.startswith(_TMP_PREFIX)
+                msg.name.startswith(_TMP_PREFIX)
                 or not msg.name.isdigit()
+                or _is_reparse_or_link(msg_path)
             ):
                 continue
-            msg_path = Path(msg.path)
-            size = 0
-            for item in os.scandir(msg_path):
-                if item.is_file(follow_symlinks=False):
-                    size += item.stat(follow_symlinks=False).st_size
+            try:
+                if not msg.is_dir(follow_symlinks=False):
+                    continue
+            except (FileNotFoundError, OSError):
+                continue
+            size = _dir_regular_bytes(msg_path)
+            if size is None:
+                continue
             total_bytes += size
-            manifest = _read_manifest(msg_path)
-            if manifest and isinstance(manifest.get("last_played_at"), (int, float)):
-                ts = float(manifest["last_played_at"])
-            else:
-                ts = msg.stat(follow_symlinks=False).st_mtime
-            entries.append((ts, size, conv.name, int(msg.name), msg_path))
+            scanned.append((size, conv.name, int(msg.name), msg_path))
+
     if total_bytes <= limit:
         return 0
-    entries.sort(key=lambda item: (item[0], item[2], item[3]))
+
+    ranked: list[tuple[float, int, str, int, Path]] = []
+    for size, conv_id, msg_id, msg_path in scanned:
+        if _is_reparse_or_link(msg_path):
+            continue
+        manifest = _read_manifest(msg_path)
+        if manifest and isinstance(manifest.get("last_played_at"), (int, float)):
+            ts = float(manifest["last_played_at"])
+        else:
+            try:
+                ts = msg_path.lstat().st_mtime
+            except OSError:
+                continue
+        ranked.append((ts, size, conv_id, msg_id, msg_path))
+
+    ranked.sort(key=lambda item: (item[0], item[2], item[3]))
     evicted = 0
-    for _, size, conv_id, msg_id, msg_path in entries:
+    for _, size, conv_id, msg_id, msg_path in ranked:
         if total_bytes <= limit:
             break
         if protect is not None and (conv_id, msg_id) == protect:
@@ -236,8 +384,31 @@ def enforce_cache_limit(
     return evicted
 
 
+def schedule_cache_eviction(*, protect: tuple[str, int] | None = None) -> asyncio.Task[int]:
+    """Run LRU cache eviction off the turn.completed / replay response path."""
+
+    async def _run() -> int:
+        try:
+            return await asyncio.to_thread(enforce_cache_limit, protect=protect)
+        except Exception as exc:
+            logger.warning("[VoiceCache] background eviction failed (%s)", type(exc).__name__)
+            return 0
+
+    task = asyncio.create_task(_run())
+    _background_evict_tasks.add(task)
+    task.add_done_callback(_background_evict_tasks.discard)
+    return task
+
+
+async def drain_background_evictions() -> None:
+    loop = asyncio.get_running_loop()
+    pending = [task for task in list(_background_evict_tasks) if task.get_loop() is loop]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 class TurnAudioRecorder:
-    """In-memory per-turn staging for foreground segment.audio payloads before DB persistence."""
+    """In-memory per-turn staging for foreground completely-emitted segment.audio payloads."""
 
     def __init__(self, *, foreground: bool = True) -> None:
         self.foreground = foreground
@@ -279,6 +450,7 @@ async def archive_audio(
     expected_erasure: int,
     segments: list[bytes],
     source: str,
+    defer_eviction: bool = False,
 ) -> bool:
     """Write temp audio files off-lock, then verify message + erasure cursor inside admission lock before renaming."""
     if not segments:
@@ -286,29 +458,80 @@ async def archive_audio(
     wl = db.normalize_worldline(worldline)
     conv_dir = _safe_conversation_dir(conversation_id)
     target_dir = message_cache_dir(conversation_id, message_id)
-    tmp_dir = await asyncio.to_thread(_stage_entry_dir, conv_dir, message_id, segments, source)
+    tmp_dir = conv_dir / f"{_TMP_PREFIX}{message_id}-{uuid.uuid4().hex}"
+    cancel_event = threading.Event()
+    stage_task = asyncio.create_task(
+        asyncio.to_thread(_stage_entry_dir, conv_dir, tmp_dir, segments, source, cancel_event)
+    )
     published = False
+    pending_cancel: asyncio.CancelledError | None = None
     try:
+        try:
+            await asyncio.shield(stage_task)
+        except asyncio.CancelledError as exc:
+            cancel_event.set()
+            pending_cancel = exc
+            nested_cancel = await _await_task_uninterruptible(stage_task)
+            if nested_cancel is not None:
+                pending_cancel = nested_cancel
+            raise pending_cancel
+
         async with conversation_admission(wl, session_id, conversation_id):
             cursor = await history_erasure_cursor(wl, session_id, conversation_id)
             exists = await _message_exists(wl, session_id, conversation_id, message_id)
             if cursor != expected_erasure or not exists:
                 return False
             if target_dir.exists():
+                if _is_reparse_or_link(target_dir):
+                    return False
                 if _read_manifest(target_dir) is not None:
                     return True
-                await asyncio.to_thread(_remove_tree_best_effort, target_dir)
-            await asyncio.to_thread(os.replace, tmp_dir, target_dir)
+                remove_task = asyncio.create_task(
+                    asyncio.to_thread(_remove_tree_best_effort, target_dir)
+                )
+                nested_cancel = await _await_task_uninterruptible(remove_task)
+                if nested_cancel is not None:
+                    pending_cancel = nested_cancel
+                    raise pending_cancel
+            # Complete the final rename before releasing conversation_admission.
+            replace_task = asyncio.create_task(
+                asyncio.to_thread(os.replace, tmp_dir, target_dir)
+            )
+            nested_cancel = await _await_task_uninterruptible(replace_task)
+            if replace_task.exception() is not None:
+                raise replace_task.exception()
             published = True
+            if nested_cancel is not None:
+                pending_cancel = nested_cancel
     finally:
         if not published:
-            await asyncio.to_thread(_remove_tree_best_effort, tmp_dir)
-    await asyncio.to_thread(enforce_cache_limit, protect=(conversation_id, message_id))
+            cancel_event.set()
+            if not stage_task.done():
+                nested_cancel = await _await_task_uninterruptible(stage_task)
+                if nested_cancel is not None and pending_cancel is None:
+                    pending_cancel = nested_cancel
+            def _cleanup_tmp() -> None:
+                _remove_tree_best_effort(tmp_dir)
+                _prune_empty_dir(conv_dir)
+
+            cleanup_task = asyncio.create_task(asyncio.to_thread(_cleanup_tmp))
+            await _await_task_uninterruptible(cleanup_task)
+
+    if pending_cancel is not None:
+        raise pending_cancel
+
+    if defer_eviction:
+        schedule_cache_eviction(protect=(conversation_id, message_id))
+    else:
+        await asyncio.to_thread(enforce_cache_limit, protect=(conversation_id, message_id))
     return True
 
 
 def _load_cached_sync(conversation_id: str, message_id: int) -> tuple[str, list[bytes]] | None:
-    entry_dir = message_cache_dir(conversation_id, message_id)
+    try:
+        entry_dir = message_cache_dir(conversation_id, message_id)
+    except ValueError:
+        return None
     manifest = _read_manifest(entry_dir)
     if manifest is None:
         return None
@@ -338,13 +561,15 @@ def _remove_audio_sync(conversation_id: str, message_ids: list[int]) -> int:
         conv_dir = _safe_conversation_dir(conversation_id)
     except ValueError:
         return 0
-    if not conv_dir.is_dir():
+    if _is_reparse_or_link(conv_dir) or not conv_dir.is_dir():
         return 0
     removed = 0
     for mid in message_ids:
         if not isinstance(mid, int) or isinstance(mid, bool) or mid <= 0:
             continue
         target = conv_dir / str(mid)
+        if _is_reparse_or_link(target):
+            continue
         if target.exists() and _remove_tree_best_effort(target):
             removed += 1
     _prune_empty_dir(conv_dir)
@@ -374,21 +599,40 @@ async def cleanup_orphan_voice_cache() -> dict[str, int]:
     def _sweep() -> dict[str, int]:
         removed_entries = 0
         removed_temp = 0
-        for conv in os.scandir(root):
-            if conv.is_symlink():
-                continue
+        try:
+            with os.scandir(root) as conv_entries:
+                conv_list = list(conv_entries)
+        except OSError:
+            return {"removed_entries": 0, "removed_temp": 0}
+
+        for conv in conv_list:
             conv_path = Path(conv.path)
-            if conv.name.startswith(_TMP_PREFIX) or not conv.is_dir(follow_symlinks=False):
+            if _is_reparse_or_link(conv_path):
+                continue
+            try:
+                is_dir = conv.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if conv.name.startswith(_TMP_PREFIX) or not is_dir:
                 removed_temp += int(_remove_tree_best_effort(conv_path))
                 continue
-            for child in os.scandir(conv_path):
-                if child.is_symlink():
-                    continue
+            try:
+                with os.scandir(conv_path) as child_entries:
+                    children = list(child_entries)
+            except (FileNotFoundError, NotADirectoryError, PermissionError):
+                continue
+            for child in children:
                 child_path = Path(child.path)
+                if _is_reparse_or_link(child_path):
+                    continue
+                try:
+                    child_is_dir = child.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
                 if child.name.startswith(_TMP_PREFIX):
                     removed_temp += int(_remove_tree_best_effort(child_path))
                 elif (
-                    not child.is_dir(follow_symlinks=False)
+                    not child_is_dir
                     or not child.name.isdigit()
                     or (conv.name, int(child.name)) not in live
                     or _read_manifest(child_path) is None
@@ -491,6 +735,7 @@ async def replay_message_audio(
             expected_erasure=expected_erasure,
             segments=synthesized,
             source="synthesized",
+            defer_eviction=True,
         )
         if not archived:
             raise ReplayError("message_erased", 409)
