@@ -1503,6 +1503,38 @@ async def test_10_truncate_re_enqueue_avoids_unique_cursor_conflict_and_guards_i
             ["改天再聊"], "また話すのね。", "下周一再聊。", "ungrounded_date",
             id="ungrounded-next-monday",
         ),
+        pytest.param(
+            ["提到坐地铁"], "無事に帰れたのね。", "你坐一号线回家。", None,
+            id="line-number",
+        ),
+        pytest.param(
+            ["提到坐地铁"], "無事に帰れたのね。", "你坐地铁一号线回家了。", None,
+            id="subway-line-number",
+        ),
+        pytest.param(
+            ["聊到住处"], "住まいの話をしたわね。", "你住在三号楼。", None,
+            id="building-number",
+        ),
+        pytest.param(
+            ["聊到旅行"], "旅の話をしたわね。", "在二號房休息，稍後坐三號車。", None,
+            id="room-and-vehicle-numbers",
+        ),
+        pytest.param(
+            ["最近辛苦了"], "お疲れさま。", "这一年你辛苦了。", None,
+            id="this-year-chinese",
+        ),
+        pytest.param(
+            ["最近辛苦了"], "この一年、お疲れさま。", "辛苦了。", None,
+            id="this-year-japanese",
+        ),
+        pytest.param(
+            ["五月四日聊过"], "話したわね。", "五月三号聊过。", "ungrounded_date",
+            id="ungrounded-month-and-day",
+        ),
+        pytest.param(
+            ["五月三日聊过"], "五月三日に話したわね。", "五月三号聊过。", None,
+            id="grounded-month-and-day",
+        ),
     ],
 )
 def test_diary_grounding_checks_complete_dates_times_and_message_quotes(sources, ja, zh, error):

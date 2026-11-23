@@ -103,11 +103,12 @@ _ZH_COUNTER_RE = re.compile(
     r"|道|题|步|层|楼|间|家|座|台|辆|部|支|根|块|元|岁|年|周|天|晚|夜|点|分|秒|人|个)"
 )
 _TEMPORAL_NUMBER = r"(?:[0-9]{1,4}|[〇零一二三四五六七八九十百千万两兩]+)"
+_DATE_DAY_SUFFIX = r"(?:日|[号號](?![线線车車楼樓房]))"
 _DATE_RE = re.compile(
     rf"(?:(?:{_TEMPORAL_NUMBER})年[ \t]*)?"
-    rf"{_TEMPORAL_NUMBER}月(?:[ \t]*{_TEMPORAL_NUMBER}[日号號])?"
+    rf"{_TEMPORAL_NUMBER}月(?:[ \t]*{_TEMPORAL_NUMBER}{_DATE_DAY_SUFFIX})?"
     r"|(?:[0-9]{4}|[〇零一二三四五六七八九]{4}|[一二三四五六七八九]千[零一二三四五六七八九十百]*)年"
-    rf"|{_TEMPORAL_NUMBER}[日号號](?!間)"
+    rf"|{_TEMPORAL_NUMBER}{_DATE_DAY_SUFFIX}(?!間)"
     r"|(?<![\d/])(?:\d{4}/)?\d{1,2}/\d{1,2}(?![\d/])"
     r"|(?<![\d-])\d{4}-\d{1,2}-\d{1,2}(?![\d-])"
 )
