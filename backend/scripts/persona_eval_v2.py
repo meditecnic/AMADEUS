@@ -671,6 +671,43 @@ def load_scenarios(path, selected):
     return [case for case in cases if not selected or case["id"] in selected]
 
 
+def has_chinese_only_hanzi(text):
+    # Use GB2312 as positive evidence and accept kanji from any of the Japanese repertoires.
+    return any(
+        unicodedata.name(char, "").startswith("CJK UNIFIED IDEOGRAPH-")
+        and char.encode("gb2312", errors="ignore")
+        and not any(char.encode(codec, errors="ignore") for codec in ("euc_jis_2004", "euc_jp", "cp932"))
+        for char in text
+    )
+
+
+def chinese_hanzi_metrics(rows):
+    body_turns = hits = 0
+    first_by_scene, examples = {}, []
+    for row in rows:
+        scene = row["id"]
+        first_by_scene[scene] = None
+        for index, turn in enumerate(row["turns"], 1):
+            text = body(turn["ja"])
+            if not text:
+                continue
+            body_turns += 1
+            if not has_chinese_only_hanzi(text):
+                continue
+            hits += 1
+            if first_by_scene[scene] is None:
+                first_by_scene[scene] = index
+            if len(examples) < 3:
+                examples.append({"scene": scene, "turn": index, "ja": text})
+    return {
+        "reply_body_turns": body_turns,
+        "chinese_only_hanzi_count": hits,
+        "chinese_only_hanzi_rate": ratio(hits, body_turns),
+        "first_chinese_only_hanzi_turn_by_scene": first_by_scene,
+        "chinese_only_hanzi_examples": examples,
+    }
+
+
 def sim_metrics(rows):
     turns = [turn for row in rows for turn in row["turns"]]
     native = sum(turn["native_body"] for turn in turns)
@@ -678,6 +715,7 @@ def sim_metrics(rows):
     rewrite_times = [turn["rewrite_ms"] for turn in turns if turn["rewrites"]]
     return {
         **persona_metrics(row["turns"] for row in rows),
+        **chinese_hanzi_metrics(rows),
         "turns": len(turns), "failed_replies": sum(turn["failed"] for turn in turns),
         "native_body_turns": native, "native_drift_count": drift, "native_drift_rate": ratio(drift, native),
         "first_native_drift_turn_by_scene": {
