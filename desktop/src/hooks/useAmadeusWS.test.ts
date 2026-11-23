@@ -140,6 +140,35 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('invokes sendChat onRejected on server error or close before turn.started, and not after acceptance', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.onopen?.());
+    act(() => socket.emit({ type: 'session.ready', conversation_id: 'conversation-one', worldline: 'steins_gate', generation: 1 }));
+
+    const onAcceptedErr = vi.fn();
+    const onRejectedErr = vi.fn();
+    act(() => result.current.sendChat('rejected-by-server', onAcceptedErr, onRejectedErr));
+    act(() => socket.emit({ type: 'error', code: 'busy', recoverable: true, message: 'busy' }));
+    expect(onRejectedErr).toHaveBeenCalledOnce();
+    expect(onAcceptedErr).not.toHaveBeenCalled();
+
+    const onAcceptedOk = vi.fn();
+    const onRejectedOk = vi.fn();
+    act(() => result.current.sendChat('accepted-turn', onAcceptedOk, onRejectedOk));
+    act(() => socket.emit({ type: 'turn.started', conversation_id: 'conversation-one', turn_id: 'ok-1', generation: 2 }));
+    act(() => socket.emit({ type: 'error', code: 'turn_failed', recoverable: true, message: 'boom' }));
+    expect(onAcceptedOk).toHaveBeenCalledOnce();
+    expect(onRejectedOk).not.toHaveBeenCalled();
+
+    const onRejectedClose = vi.fn();
+    act(() => result.current.sendChat('dropped-before-start', undefined, onRejectedClose));
+    act(() => socket.onclose?.({ code: 1006 }));
+    expect(onRejectedClose).toHaveBeenCalledOnce();
+    unmount();
+  });
+
   it('authenticates a fresh workstation in draft mode without activating history', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));

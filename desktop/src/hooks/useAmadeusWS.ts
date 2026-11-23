@@ -143,7 +143,7 @@ export interface UseAmadeusWSReturn {
   activeNotice: string | null;
   emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
-  sendChat: (content: string, onAccepted?: () => void) => boolean;
+  sendChat: (content: string, onAccepted?: () => void, onRejected?: () => void) => boolean;
   /** Same gate sendChat uses, without side effects. Optional so existing test doubles keep compiling. */
   canSendChat?: (content: string) => boolean;
   stopVoice: () => void;
@@ -220,7 +220,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   messagesRef.current = messages;
 
   const lastSentenceIdRef = useRef<number>(-1);
-  const pendingSendRef = useRef<{ id: string; onAccepted?: () => void; cancelled?: true } | null>(null);
+  const pendingSendRef = useRef<{ id: string; onAccepted?: () => void; onRejected?: () => void; cancelled?: true } | null>(null);
   const activeTurnIdRef = useRef<string>('');
   const activeGenerationRef = useRef<number>(-1);
   const activeConversationIdRef = useRef<string | null>(params.conversationId || null);
@@ -828,7 +828,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           }
 
           case 'status':
-            if (msg.state === 'cancelled' && pendingSendRef.current?.cancelled) pendingSendRef.current = null;
+            if (msg.state === 'cancelled' && pendingSendRef.current?.cancelled) {
+              const cancelledSend = pendingSendRef.current;
+              pendingSendRef.current = null;
+              cancelledSend.onRejected?.();
+            }
             if (msg.notice) {
               setActiveNotice(msg.notice);
               clearWatchdog();
@@ -934,8 +938,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             });
             break;
 
-          case 'error':
+          case 'error': {
+            const rejectedSend = pendingSendRef.current;
             pendingSendRef.current = null;
+            rejectedSend?.onRejected?.();
             if (authTarget && sessionStateRef.current !== 'ready') {
               const code = msg.code || (msg.message === '请求的会话不存在或不属于当前世界线。'
                 ? 'conversation_not_found' : 'switch_failed');
@@ -985,6 +991,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               }
             ]);
             break;
+          }
 
           default:
             break;
@@ -997,7 +1004,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       setSessionReady(false);
+      const droppedSend = pendingSendRef.current;
       pendingSendRef.current = null;
+      droppedSend?.onRejected?.();
       const turnWasActive = Boolean(activeTurnIdRef.current);
       stopHeartbeat();
       clearWatchdog();
@@ -1089,14 +1098,14 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     return true;
   }, []);
 
-  const sendChat = useCallback((content: string, onAccepted?: () => void) => {
+  const sendChat = useCallback((content: string, onAccepted?: () => void, onRejected?: () => void) => {
     const ws = wsRef.current;
     if (!canSendChat(content) || !ws) return false;
 
     const text = content.trim();
     ws.send(JSON.stringify({ type: 'chat.send', content: text }));
     const id = createRequestId('user');
-    pendingSendRef.current = { id, onAccepted };
+    pendingSendRef.current = { id, onAccepted, onRejected };
     setMessages((prev) => [...prev, { id, role: 'user', content: text }]);
     setIsThinking(true);
     startWatchdog();
