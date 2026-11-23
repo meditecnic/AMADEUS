@@ -244,6 +244,10 @@ export class AudioPlayerManager {
     this.animFrameId = requestAnimationFrame(track);
   }
 
+  hasPendingPlayback(): boolean {
+    return this.isPlaying || this.encodedBacklog.length > 0 || this.nextDecodeSequence !== this.decodeSequence;
+  }
+
   stopAll() {
     this.currentPlayId++;
     if (this.currentSource) {

@@ -19,7 +19,6 @@ export interface ReplayStatus {
   messageId: string;
   phase: 'loading' | 'playing';
   source?: 'original' | 'synthesized';
-  waitingForeground?: boolean;
 }
 
 /** Resolve the backend truncation point and affected turn count for one message action. */
@@ -27,7 +26,7 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
   const index = messages.findIndex((msg) => msg.id === targetId);
   if (index < 0) return null;
   const target = messages[index];
-  if (target.systemError || target.streaming) return null;
+  if (target.systemError || target.streaming || !target.dbId) return null;
   const expectedLastMessageId = messages.reduce(
     (max, msg) => (!msg.systemError && typeof msg.dbId === 'number' && msg.dbId > max ? msg.dbId : max),
     0,
@@ -35,10 +34,10 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
   if (!expectedLastMessageId) return null;
   const cutIndex = mode === 'edit'
     ? (target.role === 'user' && target.dbId ? index : -1)
-    : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user');
+    : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user' && !!msg.dbId);
   const fromMessageId = cutIndex >= 0 ? messages[cutIndex].dbId : undefined;
   if (!fromMessageId) return null;
-  const deletedTurns = messages.slice(cutIndex).filter((msg) => !msg.systemError && msg.role === 'user').length;
+  const deletedTurns = messages.slice(cutIndex).filter((msg) => !msg.systemError && msg.role === 'user' && !!msg.dbId).length;
   return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
 }
 

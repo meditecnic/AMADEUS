@@ -8,7 +8,7 @@ import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
 const RECORDED_DELAY_MS = 1500;
-type HistoryMessage = { id?: number; role: string; content: string; translation?: string };
+type HistoryMessage = { id?: number; turn_id?: string; role: string; content: string; translation?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
   provider_id: string; model_id: string; identity_mode: string; last_active_at: string; created_at: string;
@@ -323,6 +323,7 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
           state(name, client).busyConversations.delete(activeTurn.conversation_id);
         }
         emit({ type: 'turn.cancelled', ...activeTurn });
+        emit({ type: 'turn.history_saved', ...activeTurn });
       }
       activeTurn = null;
     };
@@ -404,9 +405,10 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
         const clientState = state(name, client);
         const userId = ++clientState.nextMessageId;
         const assistantId = ++clientState.nextMessageId;
-        const assistant: HistoryMessage = { id: assistantId, role: 'assistant', content: '', translation: '' };
-        conversation.messages.push({ id: userId, role: 'user', content: frame.content.trim() }, assistant);
-        activeTurn = { turn_id: `mock-turn-${++counter}`, generation: ++generation, conversation_id: conversationId };
+        const turnId = `mock-turn-${++counter}`;
+        const assistant: HistoryMessage = { id: assistantId, turn_id: turnId, role: 'assistant', content: '', translation: '' };
+        conversation.messages.push({ id: userId, turn_id: turnId, role: 'user', content: frame.content.trim() }, assistant);
+        activeTurn = { turn_id: turnId, generation: ++generation, conversation_id: conversationId };
         const busyConvId = conversation.id;
         clientState.busyConversations.add(busyConvId);
         const turn = activeTurn;

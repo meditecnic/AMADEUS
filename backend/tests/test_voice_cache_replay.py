@@ -10,6 +10,8 @@ import struct
 import time
 import wave
 from io import BytesIO
+from pathlib import Path
+from threading import Event
 from unittest.mock import AsyncMock
 from zipfile import ZipFile
 
@@ -84,7 +86,7 @@ def _archive(
     )
 
 
-def test_foreground_complete_turn_archives_byte_identical_segments_and_replays_from_cache(
+def test_fully_sent_turn_archives_byte_identical_segments_and_replays_from_cache(
     isolated_client, monkeypatch
 ):
     client, owner = isolated_client, "vc-ac1"
@@ -153,9 +155,7 @@ def test_foreground_complete_turn_archives_byte_identical_segments_and_replays_f
     spy.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "reason", ["background", "voice_stopped", "tts_disabled", "legacy"]
-)
+@pytest.mark.parametrize("reason", ["background", "legacy"])
 def test_incomplete_or_legacy_turns_synthesize_once_then_hit_cache(
     isolated_client, monkeypatch, reason
 ):
@@ -171,17 +171,6 @@ def test_incomplete_or_legacy_turns_synthesize_once_then_hit_cache(
         rec = voice_cache.TurnAudioRecorder(foreground=False)
         rec.on_event({"type": "segment.audio", "segment_id": 0, "data": _wav(10)})
         assert rec.complete_segments() == []
-    elif reason == "voice_stopped":
-        rec = voice_cache.TurnAudioRecorder(foreground=True)
-        rec.on_event({"type": "segment.audio", "segment_id": 0, "data": _wav(10)})
-        rec.on_event(
-            {"type": "segment.audio_error", "segment_id": 1, "reason": "voice_stopped"}
-        )
-        assert rec.complete_segments(voice_stopped=True) == []
-    elif reason == "tts_disabled":
-        rec = voice_cache.TurnAudioRecorder(foreground=True)
-        rec.on_event({"type": "segment.audio", "segment_id": 0, "data": _wav(10)})
-        assert rec.complete_segments(tts_enabled=False) == []
 
     wav, calls = _wav(777, 96), []
 
@@ -515,15 +504,16 @@ def test_replay_reports_tts_unavailable_cleanly(isolated_client, monkeypatch):
     )
 
 
-def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
-    isolated_client, isolated_provider_credentials, monkeypatch
+@pytest.mark.parametrize("mode", ["fully_sent", "voice_stopped", "tts_disabled"])
+def test_chat_ws_archives_only_fully_sent_audio(
+    isolated_client, isolated_provider_credentials, monkeypatch, mode
 ):
     from test_emotion_per_conversation import _ScriptedDeepSeek
     from app.routers import chat_ws
     from app.services.conversations import conversation_service
     from app.services.memory_v11 import jobs
 
-    client, owner = isolated_client, "vc-ws-e2e"
+    client, owner = isolated_client, f"vc-ws-{mode}"
     isolated_provider_credentials.set("deepseek", "test-credential")
     cid = _conv(client, owner)
     monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock())
@@ -537,13 +527,28 @@ def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
             ["[EMO:intellectual] 実験の結果は良好よ。次へ進みましょう。"]
         ),
     )
-    wavs, idx = [_wav(301, 100), _wav(302, 140)], {"i": 0}
+    second_started = Event()
+    wavs = [_wav(301, 100), _wav(302, 140)]
+    synth_calls = []
 
     async def fake_fg(*_a, **_kw) -> bytes:
-        w = wavs[idx["i"] % len(wavs)]
-        idx["i"] += 1
-        return w
+        i = len(synth_calls)
+        synth_calls.append(i)
+        if i == 1 and mode == "voice_stopped":
+            second_started.set()
+            await asyncio.Future()
+        return wavs[i]
 
+    complete_segments = voice_cache.TurnAudioRecorder.complete_segments
+    recorded_stops = []
+
+    def record_gate(recorder, *, voice_stopped, tts_enabled):
+        recorded_stops.append(voice_stopped)
+        return complete_segments(
+            recorder, voice_stopped=voice_stopped, tts_enabled=tts_enabled
+        )
+
+    monkeypatch.setattr(voice_cache.TurnAudioRecorder, "complete_segments", record_gate)
     monkeypatch.setattr(tts_manager, "synthesize_async", fake_fg)
     monkeypatch.setattr(
         tts_manager,
@@ -559,7 +564,7 @@ def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
                     "type": "auth",
                     "protocol_version": 2,
                     "client": "desktop",
-                    "enable_tts": True,
+                    "enable_tts": mode != "tts_disabled",
                     "conversation_mode": "history",
                     "conversation_id": cid,
                 }
@@ -573,7 +578,17 @@ def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
                     emitted.append(
                         (int(frame["segment_id"]), base64.b64decode(frame["data"]))
                     )
+                    if mode == "voice_stopped":
+                        assert second_started.wait(5)
+                        ws.send_json({"type": "voice.stop"})
                 if frame["type"] == "turn.completed":
+                    if mode == "fully_sent":
+                        ws.send_json({"type": "voice.stop"})
+                        for _ in range(10):
+                            if ws.receive_json().get("state") == "voice_stopped":
+                                break
+                        else:
+                            pytest.fail("voice.stop was not acknowledged")
                     break
             else:
                 pytest.fail("turn did not complete")
@@ -581,6 +596,16 @@ def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
         chat_ws.sessions.pop(owner, None)
 
     expected = [data for _, data in sorted(emitted, key=lambda item: item[0])]
+    if mode != "fully_sent":
+        assert not (voice_cache.voice_cache_root() / cid).exists()
+        if mode == "voice_stopped":
+            assert expected == wavs[:1]
+            assert recorded_stops == [True]
+        else:
+            assert not expected and not synth_calls
+        return
+
+    assert expected == wavs
     assistant_row = [
         r
         for r in client.get(
@@ -598,3 +623,248 @@ def test_chat_ws_foreground_turn_archives_exact_emitted_audio_bytes(
         and replay.json()["cached"] is True
     )
     assert [base64.b64decode(s) for s in replay.json()["segments"]] == expected
+
+
+def test_cancelled_staging_cleans_temporary_wav_before_truncate(
+    isolated_client, monkeypatch
+):
+    client, owner = isolated_client, "vc-cancel-stage"
+    cid = _conv(client, owner)
+    first = _save(owner, cid, "user", "cut")
+    reply = _save(owner, cid, "assistant", "Remove this reply.")
+    original = voice_cache._stage_entry_dir
+    release = Event()
+
+    async def exercise():
+        entered = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def delayed_stage(*args):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+            return original(*args)
+
+        monkeypatch.setattr(voice_cache, "_stage_entry_dir", delayed_stage)
+        task = asyncio.create_task(
+            voice_cache.archive_audio(
+                worldline="steins_gate",
+                session_id=owner,
+                conversation_id=cid,
+                message_id=reply,
+                expected_erasure=0,
+                segments=[_wav(10)],
+                source="original",
+            )
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=0.2)
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not done
+
+    asyncio.run(exercise())
+    response = client.post(
+        f"/api/conversations/{cid}/truncate",
+        params={"session_id": owner},
+        json={"from_message_id": first, "expected_last_message_id": reply},
+    )
+    assert response.status_code == 200
+    assert not list(voice_cache.voice_cache_root().rglob("*.wav"))
+
+
+def test_eviction_does_not_block_archive_or_fail_for_disappearing_directory(
+    isolated_client, monkeypatch
+):
+    client, owner = isolated_client, "vc-eviction"
+    cid = _conv(client, owner)
+    reply = _save(owner, cid, "assistant", "こんにちは。")
+    release = Event()
+    started = Event()
+    enforce = voice_cache.enforce_cache_limit
+
+    def slow_sweep(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return enforce(*args, **kwargs)
+
+    monkeypatch.setattr(voice_cache, "enforce_cache_limit", slow_sweep)
+
+    async def exercise():
+        try:
+            assert await asyncio.wait_for(
+                voice_cache.archive_audio(
+                    worldline="steins_gate",
+                    session_id=owner,
+                    conversation_id=cid,
+                    message_id=reply,
+                    expected_erasure=0,
+                    segments=[_wav(11)],
+                    source="original",
+                ),
+                timeout=2,
+            )
+            assert await asyncio.to_thread(started.wait, 2)
+            assert voice_cache.message_cache_dir(cid, reply).is_dir()
+        finally:
+            release.set()
+
+    asyncio.run(exercise())
+    original_scan = voice_cache.os.scandir
+
+    def disappearing_scan(path):
+        if Path(path) == voice_cache.message_cache_dir(cid, reply):
+            raise FileNotFoundError(path)
+        return original_scan(path)
+
+    monkeypatch.setattr(voice_cache.os, "scandir", disappearing_scan)
+    assert enforce(max_bytes=0) == 0
+
+
+def test_cache_sweeps_and_erasure_skip_windows_junction(isolated_client):
+    winapi = pytest.importorskip("_winapi")
+
+    client, owner = isolated_client, "vc-junction"
+    cid = _conv(client, owner)
+    first = _save(owner, cid, "user", "cut")
+    reply = _save(owner, cid, "assistant", "こんにちは。")
+    root = voice_cache.voice_cache_root()
+    sibling = root.parent / "probe-other-data"
+    outside = sibling / str(reply)
+    outside.mkdir(parents=True)
+    marker = outside / "000.wav"
+    marker.write_bytes(_wav(12))
+    root.mkdir()
+    junction = root / cid
+    winapi.CreateJunction(str(sibling), str(junction))
+    try:
+        assert (
+            asyncio.run(voice_cache.cleanup_orphan_voice_cache())["removed_entries"]
+            == 0
+        )
+        assert voice_cache.enforce_cache_limit(max_bytes=0) == 0
+        resp = client.post(
+            f"/api/conversations/{cid}/truncate",
+            params={"session_id": owner},
+            json={"from_message_id": first, "expected_last_message_id": reply},
+        )
+        assert resp.status_code == 200
+        assert junction.is_dir() and marker.read_bytes() == _wav(12)
+    finally:
+        junction.rmdir()
+
+
+@pytest.mark.parametrize("termination", ["cancel", "error"])
+def test_ws_history_saved_follows_interruption_notice_persistence(
+    isolated_client, isolated_provider_credentials, monkeypatch, termination
+):
+    from test_emotion_per_conversation import _ScriptedDeepSeek
+
+    from app.routers import chat_ws
+    from app.services.conversations import conversation_service
+    from app.services.memory_v11 import jobs
+
+    client, owner = isolated_client, f"vc-history-{termination}"
+    isolated_provider_credentials.set("deepseek", "test-credential")
+    cid = _conv(client, owner)
+    monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock())
+    monkeypatch.setattr(
+        conversation_service, "schedule_auto_title", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        chat_ws,
+        "deepseek_service",
+        _ScriptedDeepSeek(["[EMO:neutral] まだ話しているわ。"]),
+    )
+    release_notice = Event()
+    persist_notice = chat_ws._persist_aborted_turn
+
+    async def delayed_notice(**kwargs):
+        assert await asyncio.to_thread(release_notice.wait, 8)
+        await persist_notice(**kwargs)
+
+    monkeypatch.setattr(chat_ws, "_persist_aborted_turn", delayed_notice)
+    save = models.save_message
+    fail_assistant = termination == "error"
+
+    async def save_or_fail(session_id, role, content, **kwargs):
+        nonlocal fail_assistant
+        if role == "assistant" and fail_assistant:
+            fail_assistant = False
+            raise RuntimeError("test persistence error")
+        return await save(session_id, role, content, **kwargs)
+
+    monkeypatch.setattr(models, "save_message", save_or_fail)
+
+    async def pending_audio(*_a, **_kw):
+        await asyncio.Future()
+
+    monkeypatch.setattr(tts_manager, "synthesize_async", pending_audio)
+    history_url = f"/api/conversations/{cid}/messages"
+
+    try:
+        with client.websocket_connect(f"/ws/chat?session_id={owner}") as ws:
+            try:
+                ws.send_json(
+                    {
+                        "type": "auth",
+                        "protocol_version": 2,
+                        "client": "desktop",
+                        "enable_tts": termination == "cancel",
+                        "conversation_mode": "history",
+                        "conversation_id": cid,
+                    }
+                )
+                assert ws.receive_json()["type"] == "session.ready"
+                ws.send_json({"type": "chat.send", "content": "停止前の質問"})
+                turn_id = None
+                for _ in range(40):
+                    frame = ws.receive_json()
+                    if frame["type"] == "turn.started":
+                        turn_id = frame["turn_id"]
+                    if termination == "cancel" and frame["type"] == "segment.ready":
+                        ws.send_json({"type": "turn.cancel"})
+                    if frame["type"] == (
+                        "turn.cancelled" if termination == "cancel" else "error"
+                    ):
+                        break
+                else:
+                    pytest.fail("missing terminal frame")
+                pending_history = client.get(
+                    history_url, params={"session_id": owner}
+                ).json()
+                assert turn_id and [
+                    (row["role"], row["turn_id"]) for row in pending_history
+                ] == [("user", turn_id)]
+                release_notice.set()
+                for _ in range(10):
+                    frame = ws.receive_json()
+                    if frame["type"] == "turn.history_saved":
+                        assert (
+                            frame["turn_id"] == turn_id
+                            and frame["conversation_id"] == cid
+                        )
+                        break
+                else:
+                    pytest.fail("missing persisted-history notification")
+                rows = client.get(history_url, params={"session_id": owner}).json()
+                assert [(row["role"], row["turn_id"]) for row in rows] == [
+                    ("user", turn_id),
+                    ("assistant", turn_id),
+                ]
+                cut = client.post(
+                    f"/api/conversations/{cid}/truncate",
+                    params={"session_id": owner},
+                    json={
+                        "from_message_id": rows[0]["id"],
+                        "expected_last_message_id": rows[1]["id"],
+                    },
+                )
+                assert cut.status_code == 200
+            finally:
+                release_notice.set()
+    finally:
+        chat_ws.sessions.pop(owner, None)

@@ -8,9 +8,9 @@ import json
 import logging
 import os
 import re
-import shutil
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Any
 from weakref import WeakValueDictionary
@@ -23,6 +23,8 @@ from app.domain.segments import (
 )
 from app.services.conversation_admission import conversation_admission
 from app.services.conversation_erasure import history_erasure_cursor
+from app.services.data_location import is_link
+from app.services.data_relocation import submit_thread_work
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,10 @@ def _safe_conversation_dir(conversation_id: str) -> Path:
     ):
         raise ValueError("invalid conversation_id for voice cache")
     root = voice_cache_root().resolve()
-    target = (root / conversation_id).resolve()
+    candidate = root / conversation_id
+    if _linked(candidate):
+        raise ValueError("linked conversation cache directory")
+    target = candidate.resolve()
     if not target.is_relative_to(root) or target == root:
         raise ValueError("conversation_id escapes voice cache root")
     return target
@@ -84,9 +89,30 @@ def message_cache_dir(conversation_id: str, message_id: int) -> Path:
     return _safe_conversation_dir(conversation_id) / str(message_id)
 
 
+def _linked(path: Path) -> bool:
+    try:
+        return is_link(path)
+    except FileNotFoundError:
+        return False
+
+
+def _cache_children(path: Path):
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                child = Path(entry.path)
+                try:
+                    if not is_link(child):
+                        yield child
+                except FileNotFoundError:
+                    continue
+    except FileNotFoundError:
+        return
+
+
 def _read_manifest(entry_dir: Path) -> dict[str, Any] | None:
     manifest_path = entry_dir / _MANIFEST_NAME
-    if not manifest_path.is_file():
+    if _linked(entry_dir) or _linked(manifest_path) or not manifest_path.is_file():
         return None
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -109,7 +135,7 @@ def _read_manifest(entry_dir: Path) -> dict[str, Any] | None:
         return None
     for name in segments:
         wav_path = entry_dir / name
-        if not wav_path.is_file() or wav_path.stat().st_size <= 0:
+        if _linked(wav_path) or not wav_path.is_file() or wav_path.stat().st_size <= 0:
             return None
     return data
 
@@ -125,12 +151,20 @@ def _write_manifest_atomic(entry_dir: Path, manifest: dict[str, Any]) -> None:
 
 
 def _remove_tree_best_effort(path: Path) -> bool:
-    if not path.exists():
-        return True
     try:
-        shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink(
-            missing_ok=True
-        )
+        if is_link(path):
+            return False
+        if path.is_dir():
+            removed = True
+            for child in path.iterdir():
+                removed = _remove_tree_best_effort(child) and removed
+            if not removed:
+                return False
+            path.rmdir()
+        else:
+            path.unlink()
+        return True
+    except FileNotFoundError:
         return True
     except OSError as exc:
         logger.warning(
@@ -143,17 +177,14 @@ def _remove_tree_best_effort(path: Path) -> bool:
 
 def _prune_empty_dir(path: Path) -> None:
     try:
-        if path.is_dir() and not any(path.iterdir()):
+        if not _linked(path) and path.is_dir() and not any(path.iterdir()):
             path.rmdir()
     except OSError:
         pass
 
 
-def _stage_entry_dir(
-    conv_dir: Path, message_id: int, segments: list[bytes], source: str
-) -> Path:
-    conv_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = conv_dir / f"{_TMP_PREFIX}{message_id}-{uuid.uuid4().hex}"
+def _stage_entry_dir(tmp_dir: Path, segments: list[bytes], source: str) -> None:
+    tmp_dir.parent.mkdir(parents=True, exist_ok=True)
     tmp_dir.mkdir(parents=False, exist_ok=False)
     try:
         names: list[str] = []
@@ -172,7 +203,6 @@ def _stage_entry_dir(
         (tmp_dir / _MANIFEST_NAME).write_text(
             json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
         )
-        return tmp_dir
     except BaseException:
         _remove_tree_best_effort(tmp_dir)
         raise
@@ -203,35 +233,29 @@ def enforce_cache_limit(
         return 0
     entries: list[tuple[float, int, str, int, Path]] = []
     total_bytes = 0
-    for conv in os.scandir(root):
-        if (
-            conv.is_symlink()
-            or not conv.is_dir(follow_symlinks=False)
-            or conv.name.startswith(_TMP_PREFIX)
-        ):
+    for conv in _cache_children(root):
+        if not conv.is_dir() or conv.name.startswith(_TMP_PREFIX):
             continue
-        for msg in os.scandir(conv.path):
-            if (
-                msg.is_symlink()
-                or not msg.is_dir(follow_symlinks=False)
-                or msg.name.startswith(_TMP_PREFIX)
-                or not msg.name.isdigit()
-            ):
+        for msg in _cache_children(conv):
+            if not msg.is_dir() or not msg.name.isascii() or not msg.name.isdecimal():
                 continue
-            msg_path = Path(msg.path)
-            size = sum(
-                e.stat(follow_symlinks=False).st_size
-                for e in os.scandir(msg_path)
-                if e.is_file(follow_symlinks=False)
-            )
+            try:
+                size = sum(
+                    child.stat().st_size
+                    for child in _cache_children(msg)
+                    if child.is_file()
+                )
+                manifest = _read_manifest(msg)
+                last_played = manifest.get("last_played_at") if manifest else None
+                ts = (
+                    float(last_played)
+                    if isinstance(last_played, (int, float))
+                    else msg.stat().st_mtime
+                )
+            except FileNotFoundError:
+                continue
             total_bytes += size
-            manifest = _read_manifest(msg_path)
-            ts = (
-                float(manifest["last_played_at"])
-                if manifest and isinstance(manifest.get("last_played_at"), (int, float))
-                else msg.stat(follow_symlinks=False).st_mtime
-            )
-            entries.append((ts, size, conv.name, int(msg.name), msg_path))
+            entries.append((ts, size, conv.name, int(msg.name), msg))
     if total_bytes <= limit:
         return 0
     entries.sort(key=lambda item: (item[0], item[2], item[3]))
@@ -241,7 +265,7 @@ def enforce_cache_limit(
             break
         if protect is not None and (conv_id, msg_id) == protect:
             continue
-        if _remove_tree_best_effort(msg_path):
+        if not _linked(msg_path.parent) and _remove_tree_best_effort(msg_path):
             total_bytes -= size
             evicted += 1
             _prune_empty_dir(msg_path.parent)
@@ -249,7 +273,7 @@ def enforce_cache_limit(
 
 
 class TurnAudioRecorder:
-    """In-memory per-turn staging for foreground segment.audio payloads before DB persistence."""
+    """Record foreground WAV segments for turns whose audio is fully sent."""
 
     def __init__(self, *, foreground: bool = True) -> None:
         self.foreground = foreground
@@ -279,6 +303,20 @@ class TurnAudioRecorder:
         return [data for _, data in sorted(self._segments, key=lambda item: item[0])]
 
 
+async def _finish_file_operation(function, *args):
+    work = submit_thread_work(function, *args)
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        # The thread can still be using the temp directory or the admission lock.
+        while not work.done():
+            try:
+                await asyncio.wait({work})
+            except asyncio.CancelledError:
+                continue
+        raise
+
+
 async def archive_audio(
     *,
     worldline: str,
@@ -297,27 +335,33 @@ async def archive_audio(
         _safe_conversation_dir(conversation_id),
         message_cache_dir(conversation_id, message_id),
     )
-    tmp_dir = await asyncio.to_thread(
-        _stage_entry_dir, conv_dir, message_id, segments, source
-    )
+    tmp_dir = conv_dir / f"{_TMP_PREFIX}{message_id}-{uuid.uuid4().hex}"
     published = False
     try:
+        await _finish_file_operation(_stage_entry_dir, tmp_dir, segments, source)
         async with conversation_admission(wl, session_id, conversation_id):
             cursor = await history_erasure_cursor(wl, session_id, conversation_id)
             if cursor != expected_erasure or not await _message_exists(
                 wl, session_id, conversation_id, message_id
             ):
                 return False
+            if _linked(target_dir):
+                return False
             if target_dir.exists():
                 if _read_manifest(target_dir) is not None:
                     return True
-                await asyncio.to_thread(_remove_tree_best_effort, target_dir)
-            await asyncio.to_thread(os.replace, tmp_dir, target_dir)
+                if not await _finish_file_operation(
+                    _remove_tree_best_effort, target_dir
+                ):
+                    return False
+            await _finish_file_operation(os.replace, tmp_dir, target_dir)
             published = True
     finally:
         if not published:
-            await asyncio.to_thread(_remove_tree_best_effort, tmp_dir)
-    await asyncio.to_thread(enforce_cache_limit, protect=(conversation_id, message_id))
+            await _finish_file_operation(_remove_tree_best_effort, tmp_dir)
+    submit_thread_work(
+        partial(enforce_cache_limit, protect=(conversation_id, message_id))
+    )
     return True
 
 
@@ -325,7 +369,10 @@ def _load_cached_sync(
     conversation_id: str, message_id: int
 ) -> tuple[str, list[bytes]] | None:
     entry_dir = message_cache_dir(conversation_id, message_id)
-    manifest = _read_manifest(entry_dir)
+    try:
+        manifest = _read_manifest(entry_dir)
+    except FileNotFoundError:
+        return None
     if manifest is None:
         return None
     try:
@@ -392,31 +439,22 @@ async def cleanup_orphan_voice_cache() -> dict[str, int]:
 
     def _sweep() -> dict[str, int]:
         removed_entries = removed_temp = 0
-        for conv in os.scandir(root):
-            if conv.is_symlink():
+        for conv in _cache_children(root):
+            if conv.name.startswith(_TMP_PREFIX) or not conv.is_dir():
+                removed_temp += int(_remove_tree_best_effort(conv))
                 continue
-            conv_path = Path(conv.path)
-            if conv.name.startswith(_TMP_PREFIX) or not conv.is_dir(
-                follow_symlinks=False
-            ):
-                removed_temp += int(_remove_tree_best_effort(conv_path))
-                continue
-            for child in os.scandir(conv_path):
-                if child.is_symlink():
-                    continue
-                child_path = Path(child.path)
+            for child in _cache_children(conv):
                 if child.name.startswith(_TMP_PREFIX):
-                    removed_temp += int(_remove_tree_best_effort(child_path))
+                    removed_temp += int(_remove_tree_best_effort(child))
                 elif (
-                    not child.is_dir(follow_symlinks=False)
-                    or not child.name.isdigit()
-                    or (
-                        (conv.name, int(child.name)) not in live
-                        or _read_manifest(child_path) is None
-                    )
+                    not child.is_dir()
+                    or not child.name.isascii()
+                    or not child.name.isdecimal()
+                    or (conv.name, int(child.name)) not in live
+                    or _read_manifest(child) is None
                 ):
-                    removed_entries += int(_remove_tree_best_effort(child_path))
-            _prune_empty_dir(conv_path)
+                    removed_entries += int(_remove_tree_best_effort(child))
+            _prune_empty_dir(conv)
         return {"removed_entries": removed_entries, "removed_temp": removed_temp}
 
     return await asyncio.to_thread(_sweep)

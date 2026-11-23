@@ -1632,7 +1632,7 @@ async def processor_loop(
     history_translation = ""
     user_message_id = None
     assistant_message_id = None
-    aborted_turn_written = False
+    interrupted_history_settled = False
     needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
@@ -1653,6 +1653,25 @@ async def processor_loop(
         nonlocal deadline_handle, turn_deadline
         turn_deadline = turn_loop.time() + TURN_TIMEOUT_SECONDS
         deadline_handle = turn_loop.call_at(turn_deadline, expire_turn)
+
+    async def settle_interrupted_history() -> None:
+        if assistant_message_id is None:
+            await _persist_aborted_turn(
+                session=session,
+                worldline=turn_worldline,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                revision=epoch,
+                history_epoch=start_history_epoch,
+                expected_erasure=expected_erasure,
+            )
+        if segment_pipeline is not None:
+            await send_queue.put((epoch, {
+                "type": "turn.history_saved",
+                "conversation_id": conversation_id,
+                "turn_id": turn_id,
+                "generation": segment_pipeline.identity.generation,
+            }))
 
     pending_user = session._history[-1] if session._history else None
     if pending_user is not None and (
@@ -2281,7 +2300,7 @@ async def processor_loop(
                             translation=history_translation or None,
                         )
                 if assistant_message_id is None:
-                    aborted_turn_written = True
+                    interrupted_history_settled = True
                     if segment_pipeline is not None:
                         await segment_pipeline.cancel(reason="superseded_generation")
                     await send_queue.put((epoch, {"type": "status", "dsk": "idle", "state": "done", "tts": "idle"}))
@@ -2383,6 +2402,7 @@ async def processor_loop(
                     compiled_prompt, turn_record.sent_recall_fact_ids,
                 )
             await segment_pipeline.complete(segment_count=segment_count)
+            interrupted_history_settled = True
 
         if (
             needs_translation_repair
@@ -2444,24 +2464,15 @@ async def processor_loop(
         if deadline_expired:
             processor_task.uncancel()
         if (
-            not aborted_turn_written
+            not interrupted_history_settled
             and isinstance(user_message_id, int)
             and user_message_id > 0
-            and assistant_message_id is None
             and conversation_id
         ):
-            aborted_turn_written = True
+            interrupted_history_settled = True
             # Held by the session: if a second cancel interrupts the shield,
             # the notice keeps running and must not be garbage-collected.
-            notice = _schedule_background_task(session, _persist_aborted_turn(
-                session=session,
-                worldline=turn_worldline,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                revision=epoch,
-                history_epoch=start_history_epoch,
-                expected_erasure=expected_erasure,
-            ))
+            notice = _schedule_background_task(session, settle_interrupted_history())
             try:
                 await asyncio.shield(notice)
             except asyncio.CancelledError:
@@ -2512,21 +2523,12 @@ async def processor_loop(
             if deadline_handle is not None:
                 deadline_handle.cancel()
             if (
-                not aborted_turn_written
+                not interrupted_history_settled
                 and isinstance(user_message_id, int)
                 and user_message_id > 0
-                and assistant_message_id is None
                 and conversation_id
             ):
-                await _persist_aborted_turn(
-                    session=session,
-                    worldline=turn_worldline,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    revision=epoch,
-                    history_epoch=start_history_epoch,
-                    expected_erasure=expected_erasure,
-                )
+                await settle_interrupted_history()
             if session.active_segment_pipeline is segment_pipeline:
                 session.active_segment_pipeline = None
         finally:

@@ -30,6 +30,11 @@ export function parseLeadingEmotion(content: string): AmadeusEmotion | undefined
   return ALLOWED_EMOTIONS.has(tag) ? (tag as AmadeusEmotion) : undefined;
 }
 
+export function stripHistoryEmotionTags(content: string): string {
+  return content.replace(/[ \t]*(?:\[EMO:[^\]\r\n]{1,24}\][ \t]*)+/gi,
+    (tags) => tags.replace(/\[EMO:[^\]\r\n]{1,24}\]/gi, '') ? ' ' : '').trimStart();
+}
+
 export function resolveConversationEmotion(
   wireEmotion: unknown,
   history?: ReadonlyArray<{ role: 'user' | 'assistant'; emotion?: string; systemError?: boolean }>,

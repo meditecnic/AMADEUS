@@ -319,7 +319,7 @@ describe('dev mock protocol v2', () => {
     const length = frames.length;
     vi.runAllTimers();
     expect(frames).toHaveLength(length);
-    expect(frames.at(-1)?.type).toBe('turn.cancelled');
+    expect(frames.slice(-2).map((frame) => frame.type)).toEqual(['turn.cancelled', 'turn.history_saved']);
     slow.receive({ type: 'ping' });
     expect(frames.at(-1)?.type).toBe('pong');
     slow.close();
