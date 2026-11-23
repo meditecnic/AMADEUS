@@ -1939,13 +1939,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
       replayPlayingRef.current = true;
       setReplayStatus({ messageId: message.id, phase: 'playing', source: data.source });
+      const finishReplay = () => {
+        if (replayRunIdRef.current === runId) {
+          replayPlayingRef.current = false;
+          setReplayStatus(null);
+        }
+      };
       segments.forEach((seg, index) => {
-        void audioPlayer.playBase64(seg, index === segments.length - 1 ? () => {
-          if (replayRunIdRef.current === runId) {
-            replayPlayingRef.current = false;
-            setReplayStatus(null);
-          }
-        } : undefined);
+        const onSettled = index === segments.length - 1 ? finishReplay : undefined;
+        void audioPlayer.playBase64(seg, undefined, onSettled);
       });
     } catch (error) {
       if ((error as { name?: string })?.name === 'AbortError' || replayRunIdRef.current !== runId) return;

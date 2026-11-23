@@ -116,6 +116,30 @@ describe('useAmadeusWS v2', () => {
     h.unmount();
   });
 
+  it('leaves the assistant ID unset when two history rows share its turn and role', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+    const turn = { conversation_id: 'conversation-one', turn_id: 'ambiguous-turn', generation: 2 };
+    act(() => socket.onopen?.());
+    act(() => socket.emit({ type: 'session.ready', conversation_id: turn.conversation_id, worldline: 'steins_gate', generation: 1 }));
+    act(() => result.current.sendChat('one question'));
+    act(() => socket.emit({ type: 'turn.started', ...turn }));
+    act(() => socket.emit({ type: 'segment.ready', ...turn, segment_id: 0, ja: '答え。', zh: '' }));
+    act(() => socket.emit({ type: 'turn.completed', ...turn }));
+    act(() => result.current.hydrateMessageIds!([
+      { id: 1, role: 'user', turn_id: turn.turn_id, content: 'one question' },
+      { id: 2, role: 'assistant', turn_id: turn.turn_id, content: '答え。' },
+      { id: 3, role: 'assistant', turn_id: turn.turn_id, content: '別の答え。' },
+    ]));
+    expect(result.current.messages).toHaveLength(2);
+    const [user, assistant] = result.current.messages;
+    expect(user).toMatchObject({ role: 'user', dbId: 1, content: 'one question' });
+    expect(assistant.dbId).toBeUndefined();
+    expect(assistant).toMatchObject({ role: 'assistant', content: '答え。' });
+    unmount();
+  });
+
   it('authenticates a fresh workstation in draft mode without activating history', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));

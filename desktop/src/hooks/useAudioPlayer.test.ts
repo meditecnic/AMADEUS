@@ -150,6 +150,44 @@ describe('AudioPlayerManager', () => {
     expect(started).toEqual([1, 2]);
   });
 
+  it.each([false, true])('settles a final decode failure with preceding audio: %s', async (precedingAudio) => {
+    const source = {
+      buffer: null as AudioBuffer | null,
+      connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(),
+      onended: null as (() => void) | null,
+    };
+    class FakeAudioContext {
+      state = 'running';
+      currentTime = 0;
+      destination = {};
+      createGain() { return { connect: vi.fn(), gain: { setValueAtTime: vi.fn() } }; }
+      createAnalyser() { return { connect: vi.fn(), fftSize: 0, frequencyBinCount: 1, getByteTimeDomainData: vi.fn() }; }
+      createBufferSource() { return source; }
+      async decodeAudioData(encoded: ArrayBuffer) {
+        if (new Uint8Array(encoded)[0] === 2) throw new Error('bad final segment');
+        return {} as AudioBuffer;
+      }
+    }
+
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('requestAnimationFrame', () => 1);
+    const manager = new AudioPlayerManager();
+    const onSettled = vi.fn();
+    const onEnded = vi.fn();
+    if (precedingAudio) await manager.playBase64('AQ==');
+    await manager.playBase64('Ag==', onEnded, onSettled);
+
+    if (precedingAudio) {
+      expect(source.start).toHaveBeenCalledOnce();
+      expect(onSettled).not.toHaveBeenCalled();
+      source.onended?.();
+    }
+    expect(onEnded).not.toHaveBeenCalled();
+    expect(onSettled).toHaveBeenCalledOnce();
+    expect(manager.hasPendingPlayback()).toBe(false);
+    manager.stopAll();
+  });
+
   it('retains encoded audio while AudioContext is unavailable', async () => {
     vi.stubGlobal('AudioContext', undefined);
     const manager = new AudioPlayerManager();

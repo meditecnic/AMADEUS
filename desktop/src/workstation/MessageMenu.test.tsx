@@ -14,7 +14,9 @@ const wsMock = vi.hoisted(() => ({
   stopVoice: vi.fn(), cancelTurn: vi.fn(), sendDebugTts: vi.fn(), updateConfig: vi.fn(),
   reconnect: vi.fn(), applyTruncate: vi.fn(), hydrateMessageIds: vi.fn(),
   switchConversation: vi.fn(() => true), switchWorldline: vi.fn(() => true),
-  stopAll: vi.fn(), playBase64: vi.fn(async () => undefined), wsRef: { current: null },
+  stopAll: vi.fn(),
+  playBase64: vi.fn<(data: string, onEnded?: () => void, onSettled?: () => void) => Promise<void>>(async () => undefined),
+  wsRef: { current: null },
 }));
 
 vi.mock('../hooks/useAmadeusWS', () => ({
@@ -38,7 +40,7 @@ vi.mock('../hooks/useAmadeusWS', () => ({
 vi.mock('../hooks/useAudioPlayer', () => ({
   useAudioPlayer: () => ({ currentVolume: 0, isPlaying: wsMock.isPlaying }),
   audioPlayer: {
-    init: vi.fn(), hasPendingPlayback: () => wsMock.isPlaying, playBase64: (...a: unknown[]) => wsMock.playBase64(...(a as [])),
+    init: vi.fn(), hasPendingPlayback: () => wsMock.isPlaying, playBase64: (...args: Parameters<typeof wsMock.playBase64>) => wsMock.playBase64(...args),
     stopAll: (...a: unknown[]) => wsMock.stopAll(...(a as [])), setVoiceVolume: vi.fn(), setMuted: vi.fn(),
   },
 }));
@@ -220,6 +222,23 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     await act(async () => finish(Response.json({ source: 'original', segments: ['UklGRg=='] })));
     expect(wsMock.playBase64).not.toHaveBeenCalled();
     expect(screen.queryByTestId('replay-status-bar')).not.toBeInTheDocument();
+  });
+
+  it('clears replay after the final segment fails and protects subsequent foreground audio', async () => {
+    await mountSelected();
+    openAction('a1', '重播');
+    await waitFor(() => expect(screen.getByTestId('replay-status-bar')).toHaveTextContent('正在重播'));
+    const onSettled = wsMock.playBase64.mock.calls.at(-1)?.[2];
+    expect(onSettled).toBeTypeOf('function');
+    act(() => onSettled?.());
+    expect(screen.queryByTestId('replay-status-bar')).not.toBeInTheDocument();
+
+    wsMock.isPlaying = true;
+    wsMock.stopAll.mockClear();
+    openAction('a1', '重播');
+    expect(await screen.findByTestId('message-action-toast')).toHaveTextContent('等这轮语音结束后再重播');
+    expect(wsMock.playBase64).toHaveBeenCalledOnce();
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
   });
 
   it('ignores an older history response after a newer refresh', async () => {
