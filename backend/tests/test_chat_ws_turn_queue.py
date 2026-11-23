@@ -31,6 +31,7 @@ class ReplyGate:
     history: list = field(default_factory=list)
     model: str = ""
     key: str = ""
+    system_prompt: str = ""
     prefix: str = ""
 
 
@@ -47,6 +48,7 @@ class Provider:
         gate = self.replies[user_text]
         gate.history = active_history
         gate.model, gate.key = model, api_key
+        gate.system_prompt = kwargs.get("system_prompt", "")
         gate.started.set()
         async with usage_call("deepseek", model) as usage:
             usage.started = True
@@ -372,3 +374,29 @@ def test_truncate_returns_busy_for_hidden_and_queued_conversations(chat):
             )
             assert result.status_code == 409
             assert result.json()["detail"]["code"] == "conversation_busy"
+
+
+def test_cancel_before_start_does_not_write_the_user_line(chat, monkeypatch):
+    client, owner, provider, *_ = chat
+    a = conv(client, owner)
+    gate = provider.gate("開始前に止める文")
+    entered, release = Event(), Event()
+    original = chat_ws.ChatTurnQueue.snapshot
+
+    async def pause_snapshot(queue, turn, record):
+        entered.set()
+        while not release.is_set():
+            await asyncio.sleep(0.005)
+        return await original(queue, turn, record)
+
+    monkeypatch.setattr(chat_ws.ChatTurnQueue, "snapshot", pause_snapshot)
+    with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
+        ws = auth(socket, a)
+        submit(ws, "開始前に止める文")
+        assert entered.wait(5)
+        ws.send_json({"type": "turn.cancel"})
+        receive(ws, "status", state="cancelled")
+        release.set()
+        receive(ws, "conversation.turn_state", conversation_id=a, running=False, queued=[])
+        assert not gate.started.is_set()
+        assert history(client, owner, a) == []

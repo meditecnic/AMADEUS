@@ -2853,6 +2853,9 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
                     observer = diagnostic_runtime.find_turn_observer(turn_id, generation)
                 try:
                     await websocket.send_json(payload)
+                except asyncio.CancelledError:
+                    eligible = False
+                    raise
                 except WebSocketDisconnect:
                     eligible = False
                     if observer is not None:
@@ -3189,6 +3192,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 
             if frame_type == "turn.cancel":
                 active = turn_queue.active()
+                if active is None:
+                    turn_queue.cancel_pending_start()
                 turn_state = active.state if active is not None else session
                 pipeline = turn_state.active_segment_pipeline
                 if pipeline is not None:
@@ -3487,6 +3492,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 active = turn_queue.active()
                 if active is not None:
                     await turn_queue.cancel(active)
+                else:
+                    turn_queue.cancel_pending_start()
                 await cancel_inflight(session)
                 tts_manager.cancel_pending(session.tts_key)
                 session.current_epoch += 1

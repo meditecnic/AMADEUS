@@ -69,6 +69,13 @@ class ChatTurnQueue:
             and not turn.task.done() and turn.conversation_id == self.view.conversation_id
         ), None)
 
+    def cancel_pending_start(self) -> None:
+        for turn in self.turns(self.view.worldline):
+            if (not turn.queued and turn.task is None and turn.owner == self.owner
+                    and turn.conversation_id == self.view.conversation_id):
+                turn.cancelled = True
+                return
+
     def busy(self, worldline: str, conversation_id: str) -> bool:
         return any(turn.conversation_id == conversation_id for turn in self.turns(worldline))
 
@@ -200,7 +207,7 @@ class ChatTurnQueue:
                 async with lock:
                     if turn not in lane:
                         continue
-                    if turn.owner != self.owner:
+                    if turn.cancelled or turn.owner != self.owner:
                         self.remove(turn)
                         continue
                     try:
@@ -220,7 +227,7 @@ class ChatTurnQueue:
                             await turn.put((view.current_epoch, {"type": "error", "message": "Server error"}))
                         self.remove(turn)
                         continue
-                    if turn.owner != self.owner or turn not in lane:
+                    if turn.cancelled or turn.owner != self.owner or turn not in lane:
                         self.remove(turn)
                         continue
                     turn.hidden |= (
