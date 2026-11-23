@@ -418,7 +418,7 @@ async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
     )
     # Persona and examples are never cut, so the budget leaves room for a
     # few whole experiences, fewer than the episodic section alone allows.
-    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6000)
+    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6400)
 
     prompt = await compile_for_session(_session_obj(session_id), "秋葉原")
     survivors = [marker for marker, _ in seeded if marker in prompt]
@@ -460,7 +460,7 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
         "token_counter",
         lambda text: int(real_counter(text) * 1.5),
     )
-    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6000)
+    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6400)
 
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     survivors = [marker for marker, _ in seeded if marker in prompt]
