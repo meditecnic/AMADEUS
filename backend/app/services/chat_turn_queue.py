@@ -63,16 +63,26 @@ class ChatTurnQueue:
         return [turn for lane in self.lanes.values() for turn in lane]
 
     def active(self) -> ChatTurn | None:
-        return next((
-            turn for turn in self.turns(self.view.worldline)
-            if turn.owner == self.owner and turn.task is not None
-            and not turn.task.done() and turn.conversation_id == self.view.conversation_id
-        ), None)
+        return next(
+            (
+                turn
+                for turn in self.turns(self.view.worldline)
+                if turn.owner == self.owner
+                and turn.task is not None
+                and not turn.task.done()
+                and turn.conversation_id == self.view.conversation_id
+            ),
+            None,
+        )
 
     def cancel_pending_start(self) -> None:
         for turn in self.turns(self.view.worldline):
-            if (not turn.queued and turn.task is None and turn.owner == self.owner
-                    and turn.conversation_id == self.view.conversation_id):
+            if (
+                not turn.queued
+                and turn.task is None
+                and turn.owner == self.owner
+                and turn.conversation_id == self.view.conversation_id
+            ):
                 turn.cancelled = True
                 return
 
@@ -81,27 +91,44 @@ class ChatTurnQueue:
 
     def emit(self, turn: ChatTurn, frame: dict) -> None:
         if turn.owner == self.owner and turn.protocol >= 2:
-            turn.outbox.put_nowait((None, {
-                **frame, "conversation_id": turn.conversation_id, "worldline": turn.worldline,
-            }))
+            turn.outbox.put_nowait(
+                (
+                    None,
+                    {
+                        **frame,
+                        "conversation_id": turn.conversation_id,
+                        "worldline": turn.worldline,
+                    },
+                )
+            )
 
     def publish(self, turn: ChatTurn) -> None:
         matching = [
-            other for other in self.turns(turn.worldline)
+            other
+            for other in self.turns(turn.worldline)
             if other.owner == turn.owner and other.conversation_id == turn.conversation_id
         ]
-        self.emit(turn, {
-            "type": "conversation.turn_state",
-            "running": any(other.task is not None for other in matching),
-            "queued": [other.id for other in matching if other.task is None],
-        })
+        self.emit(
+            turn,
+            {
+                "type": "conversation.turn_state",
+                "running": any(other.task is not None for other in matching),
+                "queued": [other.id for other in matching if other.task is None],
+            },
+        )
 
     def enqueue(self, owner: str, content: str, outbox: asyncio.Queue) -> None:
         view = self.view
         lane = self.lanes.setdefault(view.worldline, [])
         turn = ChatTurn(
-            str(uuid4()), owner, view.worldline, view.conversation_id,
-            content, outbox, view.protocol_version, queued=bool(lane),
+            str(uuid4()),
+            owner,
+            view.worldline,
+            view.conversation_id,
+            content,
+            outbox,
+            view.protocol_version,
+            queued=bool(lane),
         )
         lane.append(turn)
         self.emit(turn, {"type": "turn.accepted", "task_id": turn.id, "queued": turn.queued})
@@ -119,7 +146,9 @@ class ChatTurnQueue:
     async def withdraw(self, owner: str, task_id: str) -> None:
         for turn in self.turns():
             if turn.owner == owner and turn.id == task_id:
-                async with conversation_admission(turn.worldline, self.view.session_id, turn.conversation_id):
+                async with conversation_admission(
+                    turn.worldline, self.view.session_id, turn.conversation_id
+                ):
                     if turn.task is None:
                         self.remove(turn)
                 return
@@ -152,7 +181,9 @@ class ChatTurnQueue:
         # Cancel active turns across worldlines before waiting on their writes.
         await asyncio.gather(*(self.cancel(turn) for turn in owned if turn.task is not None))
         for turn in owned:
-            async with conversation_admission(turn.worldline, self.view.session_id, turn.conversation_id):
+            async with conversation_admission(
+                turn.worldline, self.view.session_id, turn.conversation_id
+            ):
                 self.remove(turn)
         return bool(owned)
 
@@ -188,7 +219,9 @@ class ChatTurnQueue:
             state.compressing = False
         state.api_key = credentials.credential_store.get(state.provider_id) or ""
         epoch = await models.get_conversation_content_epoch(
-            state.session_id, turn.worldline, turn.conversation_id,
+            state.session_id,
+            turn.worldline,
+            turn.conversation_id,
         )
         if turn.queued or turn.hidden or state.content_epoch != epoch:
             await state.reload_history()
@@ -212,39 +245,54 @@ class ChatTurnQueue:
                         continue
                     try:
                         record = await conversation_service.require_owned(
-                            turn.conversation_id, view.session_id, worldline,
+                            turn.conversation_id,
+                            view.session_id,
+                            worldline,
                         )
                         turn.hidden = (view.worldline, view.conversation_id) != (
-                            worldline, turn.conversation_id,
+                            worldline,
+                            turn.conversation_id,
                         )
                         state = await self.snapshot(turn, record)
                     except ConversationNotFound:
                         self.remove(turn)
                         continue
                     except Exception as exc:
-                        logger.warning("[Turn] could not prepare queued turn (%s)", type(exc).__name__)
+                        logger.warning(
+                            "[Turn] could not prepare queued turn (%s)", type(exc).__name__
+                        )
                         if turn.owner == self.owner and not turn.hidden:
-                            await turn.put((view.current_epoch, {"type": "error", "message": "Server error"}))
+                            await turn.put(
+                                (view.current_epoch, {"type": "error", "message": "Server error"})
+                            )
                         self.remove(turn)
                         continue
                     if turn.cancelled or turn.owner != self.owner or turn not in lane:
                         self.remove(turn)
                         continue
-                    turn.hidden |= (
-                        view.current_epoch != state.current_epoch
-                        or (view.worldline, view.conversation_id) != (worldline, turn.conversation_id)
-                    )
+                    turn.hidden |= view.current_epoch != state.current_epoch or (
+                        view.worldline,
+                        view.conversation_id,
+                    ) != (worldline, turn.conversation_id)
                     turn.state = state
-                    turn.task = state.active_task = asyncio.create_task(process_queued_turn(
-                        state, turn.content, turn, state.current_epoch, state.history_epoch,
-                    ))
+                    turn.task = state.active_task = asyncio.create_task(
+                        process_queued_turn(
+                            state,
+                            turn.content,
+                            turn,
+                            state.current_epoch,
+                            state.history_epoch,
+                        )
+                    )
                     self.publish(turn)
                 await asyncio.gather(turn.task, return_exceptions=True)
                 async with lock:
                     if (
-                        not state.erasure_pending and turn.owner == self.owner
+                        not state.erasure_pending
+                        and turn.owner == self.owner
                         and (turn.hidden or view.history_epoch == state.history_epoch)
-                        and (view.worldline, view.conversation_id) == (worldline, turn.conversation_id)
+                        and (view.worldline, view.conversation_id)
+                        == (worldline, turn.conversation_id)
                     ):
                         view.history = state.history
                         view.memory_summary = state.memory_summary
@@ -252,7 +300,9 @@ class ChatTurnQueue:
                         view.last_assistant_emotion = state.last_assistant_emotion
                         view.consecutive_no_emo_tags = state.consecutive_no_emo_tags
                         if turn.provider is not None:
-                            await schedule_history_compression(view, turn.provider, turn_state=state)
+                            await schedule_history_compression(
+                                view, turn.provider, turn_state=state
+                            )
                     self.remove(turn)
         finally:
             self.runners.pop(worldline, None)

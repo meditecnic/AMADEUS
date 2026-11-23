@@ -44,7 +44,9 @@ class Provider:
         return self.replies.setdefault(text, ReplyGate())
 
     async def get_chat_stream(self, active_history, model, api_key, **kwargs):
-        user_text = [message["content"] for message in active_history if message["role"] == "user"][-1]
+        user_text = [message["content"] for message in active_history if message["role"] == "user"][
+            -1
+        ]
         gate = self.replies[user_text]
         gate.history = active_history
         gate.model, gate.key = model, api_key
@@ -84,7 +86,9 @@ def chat(app_client, monkeypatch):
 
 
 def conv(client, owner, worldline=SG, **fields):
-    response = client.post("/api/conversations", json={"session_id": owner, "worldline": worldline, **fields})
+    response = client.post(
+        "/api/conversations", json={"session_id": owner, "worldline": worldline, **fields}
+    )
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
@@ -108,7 +112,9 @@ def receive(ws, kind, **fields):
                 frame = json.loads(message["text"])
                 assert frame["type"] != "error", frame
                 frames.append(frame)
-                if frame["type"] == kind and all(frame.get(key) == value for key, value in fields.items()):
+                if frame["type"] == kind and all(
+                    frame.get(key) == value for key, value in fields.items()
+                ):
                     return frames
 
     frames = []
@@ -116,10 +122,17 @@ def receive(ws, kind, **fields):
 
 
 def auth(ws, cid, *, tts=False):
-    ws.send_json({
-        "type": "auth", "protocol_version": 2, "client": "desktop",
-        "conversation_id": cid, "conversation_mode": "history", "enable_tts": tts, "worldline": SG,
-    })
+    ws.send_json(
+        {
+            "type": "auth",
+            "protocol_version": 2,
+            "client": "desktop",
+            "conversation_id": cid,
+            "conversation_mode": "history",
+            "enable_tts": tts,
+            "worldline": SG,
+        }
+    )
     receive(ws, "session.ready", conversation_id=cid)
     return ws
 
@@ -130,7 +143,9 @@ def select(ws, cid):
 
 
 def shift(ws, worldline):
-    ws.send_json({"type": "worldline.switch", "target_worldline": worldline, "conversation_mode": "draft"})
+    ws.send_json(
+        {"type": "worldline.switch", "target_worldline": worldline, "conversation_mode": "draft"}
+    )
     return receive(ws, "worldline.switched", worldline=worldline)
 
 
@@ -165,7 +180,9 @@ def test_background_saves_reply_and_followups_without_audio(chat):
 def test_same_worldline_fifo_withdraws_only_the_requested_turn(chat):
     client, owner, provider, *_ = chat
     a, b, c, d = [conv(client, owner) for _ in range(4)]
-    first, second, third, withdrawn = map(provider.gate, ("一問目", "二問目", "三問目", "撤回する文"))
+    first, second, third, withdrawn = map(
+        provider.gate, ("一問目", "二問目", "三問目", "撤回する文")
+    )
     with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
         ws = auth(socket, a)
         submit(ws, "一問目")
@@ -221,10 +238,14 @@ def test_replacing_socket_cancels_both_worldlines_and_all_queued_turns(chat):
     client, owner, provider, *_ = chat
     a, c = conv(client, owner), conv(client, owner)
     b, d = conv(client, owner, BETA), conv(client, owner, BETA)
-    active_a, active_b, queued_a, queued_b, newest = map(provider.gate, ("甲", "乙", "丙", "丁", "次の質問"))
+    active_a, active_b, queued_a, queued_b, newest = map(
+        provider.gate, ("甲", "乙", "丙", "丁", "次の質問")
+    )
     with ExitStack() as sockets:
         old_socket = sockets.enter_context(ExitStack())
-        old = auth(old_socket.enter_context(client.websocket_connect(f"/ws/chat?session_id={owner}")), a)
+        old = auth(
+            old_socket.enter_context(client.websocket_connect(f"/ws/chat?session_id={owner}")), a
+        )
         submit(old, "甲")
         assert active_a.started.wait(5)
         select(old, c)
@@ -236,7 +257,9 @@ def test_replacing_socket_cancels_both_worldlines_and_all_queued_turns(chat):
         select(old, d)
         submit(old, "丁", queued=True)
 
-        new = auth(sockets.enter_context(client.websocket_connect(f"/ws/chat?session_id={owner}")), c)
+        new = auth(
+            sockets.enter_context(client.websocket_connect(f"/ws/chat?session_id={owner}")), c
+        )
         assert active_a.cancelled.wait(5) and active_b.cancelled.wait(5)
         submit(new, "次の質問")
         assert newest.started.wait(5)
@@ -246,7 +269,9 @@ def test_replacing_socket_cancels_both_worldlines_and_all_queued_turns(chat):
         assert not newest.cancelled.is_set()
         assert not queued_a.started.is_set() and not queued_b.started.is_set()
         assert history(client, owner, d, BETA) == []
-        assert [row["content"] for row in history(client, owner, c) if row["role"] == "user"] == ["次の質問"]
+        assert [row["content"] for row in history(client, owner, c) if row["role"] == "user"] == [
+            "次の質問"
+        ]
 
 
 def test_worldlines_generate_concurrently(chat):
@@ -307,16 +332,25 @@ def test_erase_cancels_target_running_and_queued_turns(chat, operation):
             assert result.status_code == 204
             assert client.get(f"{target}/messages", params=params(owner)).status_code == 404
         else:
-            result = client.post(f"{target}/forget", params=params(owner), json={"forget_long_term": True})
+            result = client.post(
+                f"{target}/forget", params=params(owner), json={"forget_long_term": True}
+            )
             assert result.status_code == 200, result.text
         assert running.cancelled.wait(5) and not queued.started.is_set()
         with closing(sqlite3.connect(db._resolve_path(SG, "history"))) as database:
-            assert database.execute("SELECT COUNT(*) FROM messages WHERE conversation_id = ?", (a,)).fetchone() == (0,)
+            assert database.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?", (a,)
+            ).fetchone() == (0,)
 
 
-def test_running_turn_freezes_model_and_credentials_until_translation_finishes(chat, isolated_provider_credentials):
+def test_running_turn_freezes_model_and_credentials_until_translation_finishes(
+    chat, isolated_provider_credentials
+):
     client, owner, provider, *_ = chat
-    a, b = conv(client, owner, model_id="deepseek-flash"), conv(client, owner, model_id="deepseek-v4-pro")
+    a, b = (
+        conv(client, owner, model_id="deepseek-flash"),
+        conv(client, owner, model_id="deepseek-v4-pro"),
+    )
     first, second = provider.gate("最初の設定"), provider.gate("次の設定")
     isolated_provider_credentials.set("deepseek", "old-stub")
     with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
@@ -369,7 +403,8 @@ def test_truncate_returns_busy_for_hidden_and_queued_conversations(chat):
         active_row = history(client, owner, a)[0]["id"]
         for cid, cut in ((a, active_row), (b, first)):
             result = client.post(
-                f"/api/conversations/{cid}/truncate", params=params(owner),
+                f"/api/conversations/{cid}/truncate",
+                params=params(owner),
                 json={"from_message_id": cut, "expected_last_message_id": cut},
             )
             assert result.status_code == 409

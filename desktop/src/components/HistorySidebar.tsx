@@ -469,18 +469,20 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             const activity = activityLabel(conversationTurns?.[conversation.id]);
             const label = [conversation.title, activity, isNew(conversation) && '有新回复'].filter(Boolean).join(' · ');
             return (
-            <Tip key={conversation.id} label={`${conversationNo(numbers.get(conversation.id) ?? 0)}　${label}`} side="right">
-              <button
-                type="button"
-                style={{ '--i': index } as React.CSSProperties}
-                className={`history-sidebar-icon${conversation.id === shownActiveId ? ' active' : ''}${conversation.is_pinned ? ' pinned' : ''}${isNew(conversation) ? ' is-new' : ''}`}
-                aria-label={label}
-                onClick={() => select(conversation)}
-              >
-                {conversation.id === shownActiveId && <PencilRing seed={conversation.id} rx={8.5} ry={8} />}
-                {activity && <span className="conversation-rail-activity" data-running={conversationTurns?.[conversation.id]?.running} />}
-              </button>
-            </Tip>
+              <Tip key={conversation.id} label={`${conversationNo(numbers.get(conversation.id) ?? 0)}　${label}`} side="right">
+                <button
+                  type="button"
+                  style={{ '--i': index } as React.CSSProperties}
+                  className={`history-sidebar-icon${conversation.id === shownActiveId ? ' active' : ''}${conversation.is_pinned ? ' pinned' : ''}${isNew(conversation) ? ' is-new' : ''}`}
+                  aria-label={label}
+                  onClick={() => select(conversation)}
+                >
+                  {conversation.id === shownActiveId && <PencilRing seed={conversation.id} rx={8.5} ry={8} />}
+                  {activity && (
+                    <span className="conversation-rail-activity" data-running={conversationTurns?.[conversation.id]?.running} />
+                  )}
+                </button>
+              </Tip>
             );
           })}
           {visible.length > RAIL_NODES && (

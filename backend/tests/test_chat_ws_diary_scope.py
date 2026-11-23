@@ -12,7 +12,9 @@ from test_chat_ws_turn_queue import chat as chat
 
 
 @pytest.mark.timeout(40)
-def test_background_history_trim_recompiles_its_own_diaries_and_leaves_foreground_prompt(chat, monkeypatch):
+def test_background_history_trim_recompiles_its_own_diaries_and_leaves_foreground_prompt(
+    chat, monkeypatch
+):
     if not hasattr(prompt_compiler, "recompile_session_diaries"):
         pytest.skip("Requires the diary generation integration.")
     from app.services.memory_v11 import diary_generation
@@ -28,7 +30,8 @@ def test_background_history_trim_recompiles_its_own_diaries_and_leaves_foregroun
     async def seed():
         return [
             await models.save_message(
-                owner, "user" if index % 2 == 0 else "assistant",
+                owner,
+                "user" if index % 2 == 0 else "assistant",
                 "観測記録を確認してから実験する。" * 900,
                 conversation_id=a,
             )
@@ -42,7 +45,9 @@ def test_background_history_trim_recompiles_its_own_diaries_and_leaves_foregroun
         ids = set(context["sent_message_ids"])
         selected.append((scope, ids))
         if scope == origin_scope:
-            diary = "全部の記録に対応する手記。" if older_ids[0] in ids else "裁剪後にも残る赤い手記。"
+            diary = (
+                "全部の記録に対応する手記。" if older_ids[0] in ids else "裁剪後にも残る赤い手記。"
+            )
         else:
             diary = "前台で使う青い手記。"
         return [prompt_compiler.PromptDiary(diary, diary)]
@@ -84,8 +89,11 @@ def test_background_history_trim_recompiles_its_own_diaries_and_leaves_foregroun
         receive(ws, "turn.history_saved", conversation_id=a)
         saved_reply = history(client, owner, a)[-1]
         assert diary_sync.await_args.kwargs == {
-            "session_id": owner, "worldline": SG, "identity_mode": "self",
-            "conversation_id": a, "through_message_id": saved_reply["id"],
+            "session_id": owner,
+            "worldline": SG,
+            "identity_mode": "self",
+            "conversation_id": a,
+            "through_message_id": saved_reply["id"],
         }
         foreground.finish.set()
         receive(ws, "turn.completed", conversation_id=b)
