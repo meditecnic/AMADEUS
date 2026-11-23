@@ -956,6 +956,7 @@ async def _select_v11_prompt_diaries(
         return []
 
 
+_CALL_NAME_TOKEN = r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,12}"
 _RELAXED_SPEECH = re.compile(
     r"敬語(?:は不要|不要|は要らない|はいらない|なしで|抜きで|はやめて|をやめて|じゃなくていい)"
     r"|気楽に(?:話して|タメ口)"
@@ -963,23 +964,47 @@ _RELAXED_SPEECH = re.compile(
     r"|常体(?:で話|でいい|にして|を(?:希望|好む))"
     r"|(?:不用|不必|别|不要)(?:跟我|对我|和用户|跟用户|再)?(?:说|用|讲|端着)?(?:敬语|敬語)"
     r"|(?:说话|聊天|口吻|语气)(?:可以|不用那么拘谨，?)?(?:放松一点|随意一点|自然一点|像朋友一样)"
-    r"|(?:请|直接|以后|平时)?(?:叫我|称呼我(?:为)?)\s*"
-    r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}(?:就行|就好|就可以)"
-    r"|(?:请|直接|以后)(?:叫我|称呼我(?:为)?)\s*[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,8}吧"
-    r"|希望(?:你|红莉栖|紅莉栖|Amadeus)?(?:叫|称呼)(?:我|用户|他|她)(?:为)?\s*"
-    r"[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,10}"
-    r"|[A-Za-z0-9\u3040-\u30ff\u4e00-\u9fff_-]{1,12}(?:と|って)呼んで"
-    r"(?:ほしい|ね|くれ|ください|$|[。！!、])"
+    rf"|(?:请|直接|以后|平时|可以|干脆)(?:直接)?(?:叫|称呼)(?:我|用户)(?:为)?\s*{_CALL_NAME_TOKEN}"
+    r"(?:吧|就行|就好|就可以)?(?=$|[，。！？、,.!?\s])"
+    rf"|(?:叫|称呼)(?:我|用户)(?:为)?\s*{_CALL_NAME_TOKEN}(?:就行|就好|就可以|吧)"
+    rf"|希望(?:你|红莉栖|紅莉栖|Amadeus|对方|助手)?(?:直接|平时|以后)?(?:叫|称呼)"
+    rf"(?:我|用户|他|她)(?:为)?\s*{_CALL_NAME_TOKEN}"
+    rf"|{_CALL_NAME_TOKEN}(?:と|って)呼んで(?:ほしい|ね|くれ|ください|いい|もいい|$|[。！!、])"
 )
 _RELAXED_SPEECH_NEGATION = re.compile(
     r"不喜欢|讨厌|反感|不习惯|不希望|不接受|别人|他人|老板|上司|同事|同僚|父母|妈妈|爸爸"
-    r"|嫌い|苦手|怒られ"
+    r"|不要(?:再)?(?:叫|称呼)|别(?:再)?(?:叫|称呼)|嫌い|苦手|怒られ"
+)
+_PREF_SENTENCE_SPLIT_RE = re.compile(r"[。！？!?\n；;]+")
+_QUOTED_CALL_NAME_AFTER_RE = re.compile(
+    rf"((?:叫|称呼)(?:我|用户|他|她)(?:为)?\s*)[「『“\"‘]({_CALL_NAME_TOKEN})[」』”\"’]"
+)
+_QUOTED_CALL_NAME_BEFORE_RE = re.compile(
+    rf"[「『“\"‘]({_CALL_NAME_TOKEN})[」』”\"’]((?:と|って)呼んで)"
+)
+_QUOTED_SPAN_RE = re.compile(
+    r"「[^「」]*」|『[^『』]*』|“[^“”]*”|\"[^\"\r\n]*\"|‘[^‘’]*’"
 )
 
 
 def _has_relaxed_speech_preference(text: Any) -> bool:
-    s = str(text or "").strip()
-    return bool(s and _RELAXED_SPEECH.search(s) and not _RELAXED_SPEECH_NEGATION.search(s))
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    for sentence in _PREF_SENTENCE_SPLIT_RE.split(raw):
+        part = sentence.strip()
+        if not part:
+            continue
+        unwrapped = _QUOTED_CALL_NAME_AFTER_RE.sub(r"\1\2", part)
+        unwrapped = _QUOTED_CALL_NAME_BEFORE_RE.sub(r"\1\2", unwrapped)
+        cleaned = _QUOTED_SPAN_RE.sub(" ", unwrapped).strip()
+        if (
+            cleaned
+            and _RELAXED_SPEECH.search(cleaned)
+            and not _RELAXED_SPEECH_NEGATION.search(cleaned)
+        ):
+            return True
+    return False
 
 
 async def _self_familiarity(

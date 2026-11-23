@@ -102,23 +102,81 @@ _ZH_COUNTER_RE = re.compile(
     r"|次|回|遍|趟|杯|碗|瓶|罐|本|册|张|枚|件|条|份|篇|页|章|节"
     r"|道|题|步|层|楼|间|家|座|台|辆|部|支|根|块|元|岁|年|周|天|晚|夜|点|分|秒|人|个)"
 )
-_EXPLICIT_DATE_RE = re.compile(
-    r"([〇零一二三四五六七八九十百千\d]+年"
-    r"|[〇零一二三四五六七八九十\d]+月"
-    r"|[〇零一二三四五六七八九十\d]+日)"
+_DATE_RE = re.compile(
+    r"(?P<ymd_y>\d{4}|[〇零一二三四五六七八九]{4})年"
+    r"(?P<ymd_m>\d{1,2}|[〇零一二三四五六七八九十]{1,2})月"
+    r"(?P<ymd_d>\d{1,2}|[〇零一二三四五六七八九十]{1,3})(?:日|号|號)"
+    r"|(?<!\d)(?P<iso_y>\d{4})[./-](?P<iso_m>\d{1,2})[./-](?P<iso_d>\d{1,2})(?!\d)"
+    r"|(?<![ヶか个個〇零一二三四五六七八九十\d])"
+    r"(?P<md_m>\d{1,2}|[〇零一二三四五六七八九十]{1,2})月"
+    r"(?P<md_d>\d{1,2}|[〇零一二三四五六七八九十]{1,3})(?:日|号|號)"
+    r"|(?<![\d/])(?P<sl_m>\d{1,2})/(?P<sl_d>\d{1,2})(?![\d/])"
+    r"|(?P<ym_y>\d{4}|[〇零一二三四五六七八九]{4})年"
+    r"(?P<ym_m>\d{1,2}|[〇零一二三四五六七八九十]{1,2})月"
+    r"|(?<![〇零一二三四五六七八九十百千\d])"
+    r"(?P<y_only>\d{4}|[〇零一二三四五六七八九]{4}|[〇零一二三四五六七八九十百千\d]+)年"
+    r"|(?<![ヶか个個〇零一二三四五六七八九十\d])"
+    r"(?P<m_only>\d{1,2}|[〇零一二三四五六七八九十]{1,2})月(?![間间])"
+    r"|(?<![曜〇零一二三四五六七八九十\d])"
+    r"(?P<d_only>\d{1,2}|[〇零一二三四五六七八九十]{1,3})"
+    r"(?:日(?![間间])|(?<!第)[号號](?![线線车車楼樓房室口门門位码碼电電]))"
 )
-_WEEKDAY_RE = re.compile(r"([月火水木金土日])曜(?:日)?")
+_TIME_COLON_RE = re.compile(r"(?<!\d)(?P<h>\d{1,2}):(?P<m>\d{2})(?!\d)")
+_TIME_CJK_RE = re.compile(
+    r"(?P<period>午前|午後|深夜|未明|早朝|朝|昼|夕方|夜|晩|凌晨|半夜|午夜|夜里|夜裡"
+    r"|晚上|上午|下午|中午|早上)?"
+    r"(?<![小〇零一二三四五六七八九十两兩\d])"
+    r"(?P<h>\d{1,2}|[〇零一二三四五六七八九十两兩]{1,3})"
+    r"(?P<unit>時|点|點)"
+    r"(?:(?P<half>半)"
+    r"|(?P<m>\d{1,2}|[〇零一二三四五六七八九十]{1,3})分"
+    r"|(?P<q>[一三])刻"
+    r"|(?P<m_zh>零[一二三四五六七八九]|[一二三四五]十[一二三四五六七八九]?)"
+    r"|(?P<z>钟|鐘|整))?"
+    r"(?![間间])"
+)
+_PM_PERIODS = frozenset({"午後", "下午", "夕方", "夜", "晩", "晚上"})
+_ONE_OCLOCK_BEFORE_RE = re.compile(
+    r"(?:^|[，。！？、；：,\s]|"
+    r"(?:到|至|从|從|在|快|刚|剛|过|過|约|約|定在|改到|推到|聊到|忙到|睡到|等到|熬到|拖到|撑到|"
+    r"大概|大约|左右|今晚|今天|明天|昨天|明早))$"
+)
+_JA_WEEKDAY_RE = re.compile(r"([月火水木金土日])曜(?:日)?")
+_ZH_WEEKDAY_RE = re.compile(
+    r"(?<![〇零一二三四五六七八九十\d第])(?:星期|周|週|礼拜|禮拜)([一二三四五六日天])"
+)
+_ZH_TO_JA_WEEKDAY = {
+    "一": "月",
+    "二": "火",
+    "三": "水",
+    "四": "木",
+    "五": "金",
+    "六": "土",
+    "日": "日",
+    "天": "日",
+}
 _WEEKDAY_ALIASES = {
-    "月": ("月曜", "周一", "星期一", "monday"),
-    "火": ("火曜", "周二", "星期二", "tuesday"),
-    "水": ("水曜", "周三", "星期三", "wednesday"),
-    "木": ("木曜", "周四", "星期四", "thursday"),
-    "金": ("金曜", "周五", "星期五", "friday"),
-    "土": ("土曜", "周六", "星期六", "saturday"),
-    "日": ("日曜", "周日", "周天", "星期日", "星期天", "sunday"),
+    "月": ("月曜", "周一", "週一", "星期一", "礼拜一", "禮拜一", "monday"),
+    "火": ("火曜", "周二", "週二", "星期二", "礼拜二", "禮拜二", "tuesday"),
+    "水": ("水曜", "周三", "週三", "星期三", "礼拜三", "禮拜三", "wednesday"),
+    "木": ("木曜", "周四", "週四", "星期四", "礼拜四", "禮拜四", "thursday"),
+    "金": ("金曜", "周五", "週五", "星期五", "礼拜五", "禮拜五", "friday"),
+    "土": ("土曜", "周六", "週六", "星期六", "礼拜六", "禮拜六", "saturday"),
+    "日": (
+        "日曜",
+        "周日",
+        "週日",
+        "周天",
+        "週天",
+        "星期日",
+        "星期天",
+        "礼拜日",
+        "礼拜天",
+        "sunday",
+    ),
 }
 _PERSON_SUFFIX_RE = re.compile(
-    r"[おご]?([一-龥々ヶ]{1,6}|[ァ-ヴー]{2,12})(さん|くん|君|ちゃん|様|氏|先生|教授|先輩|博士)"
+    r"[おご]?([一-龥々ヶ]{1,6}|[ァ-ヴー]{2,12})(さん|くん|君|ちゃん|様|氏)"
 )
 _PLACE_SUFFIX_RE = re.compile(
     r"([一-龥々ヶ]{2,6}|[ァ-ヴー]{2,12})(駅|空港|大学|公園|神社|県|市|区)"
@@ -261,6 +319,147 @@ def _extract_numbers(text: str) -> tuple[set[str], set[int]]:
     return raw, ints
 
 
+def _parse_num(token: str | None) -> int | None:
+    if not token:
+        return None
+    return int(token) if token.isdigit() else _kanji_to_int(token)
+
+
+def _extract_dates(
+    text: str, *, expand_source: bool
+) -> list[tuple[tuple[Any, ...], str, int, int]]:
+    out: list[tuple[tuple[Any, ...], str, int, int]] = []
+    for m in _DATE_RE.finditer(text):
+        tok = m.group(0)
+        start, end = m.span()
+        if m.group("ymd_y") or m.group("iso_y"):
+            y = _parse_num(m.group("ymd_y") or m.group("iso_y"))
+            mo = _parse_num(m.group("ymd_m") or m.group("iso_m"))
+            d = _parse_num(m.group("ymd_d") or m.group("iso_d"))
+            if (
+                y is not None
+                and mo is not None
+                and d is not None
+                and 1 <= mo <= 12
+                and 1 <= d <= 31
+            ):
+                out.append((("ymd", y, mo, d), tok, start, end))
+                if expand_source:
+                    out.extend(
+                        [
+                            (("md", mo, d), tok, start, end),
+                            (("ym", y, mo), tok, start, end),
+                            (("y", y), tok, start, end),
+                            (("m", mo), tok, start, end),
+                            (("d", d), tok, start, end),
+                        ]
+                    )
+        elif m.group("md_m") or m.group("sl_m"):
+            mo = _parse_num(m.group("md_m") or m.group("sl_m"))
+            d = _parse_num(m.group("md_d") or m.group("sl_d"))
+            if mo is not None and d is not None and 1 <= mo <= 12 and 1 <= d <= 31:
+                out.append((("md", mo, d), tok, start, end))
+                if expand_source:
+                    out.append((("m", mo), tok, start, end))
+                    out.append((("d", d), tok, start, end))
+        elif m.group("ym_y"):
+            y = _parse_num(m.group("ym_y"))
+            mo = _parse_num(m.group("ym_m"))
+            if y is not None and mo is not None and 1 <= mo <= 12:
+                out.append((("ym", y, mo), tok, start, end))
+                if expand_source:
+                    out.append((("y", y), tok, start, end))
+                    out.append((("m", mo), tok, start, end))
+        elif m.group("y_only"):
+            y = _parse_num(m.group("y_only"))
+            if y is not None:
+                out.append((("y", y), tok, start, end))
+        elif m.group("m_only"):
+            mo = _parse_num(m.group("m_only"))
+            if mo is not None and 1 <= mo <= 12:
+                out.append((("m", mo), tok, start, end))
+        elif m.group("d_only"):
+            if not expand_source and tok == "一日":
+                continue
+            d = _parse_num(m.group("d_only"))
+            if d is not None and 1 <= d <= 31:
+                out.append((("d", d), tok, start, end))
+    return out
+
+
+def _extract_times(
+    text: str, *, expand_source: bool
+) -> list[tuple[tuple[Any, ...], str, int, int]]:
+    out: list[tuple[tuple[Any, ...], str, int, int]] = []
+
+    def emit(h: int, minute: int | None, period: str | None, tok: str, start: int, end: int):
+        hours = [h]
+        if expand_source:
+            if 13 <= h <= 23:
+                hours.append(h - 12)
+            elif period in _PM_PERIODS and 1 <= h <= 11:
+                hours.append(h + 12)
+        for hr in hours:
+            if minute is None:
+                out.append((("h", hr), tok, start, end))
+                if expand_source:
+                    out.append((("hm", hr, 0), tok, start, end))
+            else:
+                out.append((("hm", hr, minute), tok, start, end))
+                if expand_source and minute == 0:
+                    out.append((("h", hr), tok, start, end))
+
+    for m in _TIME_COLON_RE.finditer(text):
+        h, minute = int(m.group("h")), int(m.group("m"))
+        if 0 <= h <= 24 and 0 <= minute <= 59:
+            emit(h, minute, None, m.group(0), m.start(), m.end())
+
+    for m in _TIME_CJK_RE.finditer(text):
+        h_raw, unit, period = m.group("h"), m.group("unit"), m.group("period")
+        h = _parse_num(h_raw)
+        if h is None or not (0 <= h <= 24):
+            continue
+        has_detail = bool(
+            m.group("half")
+            or m.group("m")
+            or m.group("q")
+            or m.group("z")
+            or (unit in ("点", "點") and m.group("m_zh"))
+        )
+        start, end = m.span()
+        after = text[end : end + 1]
+        before = text[:start]
+        if not period and not has_detail:
+            if h_raw == "一" and unit == "時" and after in "的期帰停保避休":
+                continue
+            if h_raw == "一" and unit in ("点", "點"):
+                if after in "点點儿兒都也没沒不" or not _ONE_OCLOCK_BEFORE_RE.search(before):
+                    continue
+            if h_raw in ("两", "兩") and unit in ("点", "點") and before[-1:] in "这這那哪有几幾":
+                continue
+        minute: int | None = None
+        if m.group("half"):
+            minute = 30
+        elif m.group("q") == "一":
+            minute = 15
+        elif m.group("q") == "三":
+            minute = 45
+        elif m.group("m"):
+            parsed_m = _parse_num(m.group("m"))
+            if parsed_m is not None and 0 <= parsed_m <= 59:
+                minute = parsed_m
+        elif unit in ("点", "點") and m.group("m_zh"):
+            parsed_m = _parse_num(m.group("m_zh"))
+            if parsed_m is not None and 0 <= parsed_m <= 59:
+                minute = parsed_m
+        emit(h, minute, period, m.group(0), start, end)
+    return out
+
+
+def _in_spans(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(s <= start and end <= e for s, e in spans)
+
+
 def validate_diary_grounding(
     body_ja: str,
     body_zh: str,
@@ -287,13 +486,15 @@ def validate_diary_grounding(
     ):
         return "redacted_leak", "伏せ字または機密表現の混入"
 
-    pieces = [
-        _REDACTED_TAG_RE.sub(" ", str(item.get(f) or "")).strip()
+    message_pieces = [
+        unicodedata.normalize("NFKC", _REDACTED_TAG_RE.sub(" ", str(item.get(f) or "")).strip())
         for item in prepared_sources
         for f in ("text", "translation")
     ]
-    source_norm = unicodedata.normalize("NFKC", "\n".join(p for p in pieces if p))
-    source_compact = _SPACE_RE.sub("", source_norm)
+    message_pieces = [p for p in message_pieces if p]
+    message_compacts = [_SPACE_RE.sub("", p) for p in message_pieces]
+    source_norm = "\n".join(message_pieces)
+    source_compact = "\n".join(message_compacts)
     source_lower = source_norm.casefold()
     source_folded = source_compact.translate(_CJK_FOLD)
     self_names = {"岡部", "倫太郎"} if normalize_identity_mode(identity_mode) == "okabe" else set()
@@ -302,30 +503,44 @@ def validate_diary_grounding(
     zh_quotes = [q for pat in _QUOTE_RES for q in pat.findall(zh)]
     for quote in [*ja_quotes, *zh_quotes]:
         qc = _SPACE_RE.sub("", unicodedata.normalize("NFKC", quote))
-        if not qc or qc not in source_compact:
+        if not qc or not any(qc in mc for mc in message_compacts):
             return "ungrounded_quote", f"未出の引用「{quote[:24]}」"
 
     source_digits, source_ints = _extract_numbers(source_norm)
+    source_dates = {key for key, _, _, _ in _extract_dates(source_norm, expand_source=True)}
+    source_times = {key for key, _, _, _ in _extract_times(source_norm, expand_source=True)}
     ja_norm = unicodedata.normalize("NFKC", ja)
     zh_norm = unicodedata.normalize("NFKC", zh)
 
-    for m in _EXPLICIT_DATE_RE.finditer(ja_norm):
-        tok = m.group(1)
-        if tok == "一日":
-            continue
-        _, tok_ints = _extract_numbers(tok)
-        if tok not in source_compact and not (tok_ints and tok_ints.issubset(source_ints)):
-            return "ungrounded_date", f"未出の日付表現「{tok}」"
+    verified_spans: dict[str, list[tuple[int, int]]] = {"ja": [], "zh": []}
+    for lang, text in (("ja", ja_norm), ("zh", zh_norm)):
+        for key, tok, start, end in _extract_dates(text, expand_source=False):
+            if key not in source_dates:
+                return "ungrounded_date", f"未出の日付表現「{tok}」"
+            verified_spans[lang].append((start, end))
+        for key, tok, start, end in _extract_times(text, expand_source=False):
+            if key not in source_times:
+                return "ungrounded_date", f"未出の時刻「{tok}」"
+            verified_spans[lang].append((start, end))
+        for m in _JA_WEEKDAY_RE.finditer(text):
+            if not any(alias in source_lower for alias in _WEEKDAY_ALIASES.get(m.group(1), ())):
+                return "ungrounded_date", f"未出の曜日「{m.group(0)}」"
+        for m in _ZH_WEEKDAY_RE.finditer(text):
+            canon = _ZH_TO_JA_WEEKDAY.get(m.group(1), "")
+            if not any(alias in source_lower for alias in _WEEKDAY_ALIASES.get(canon, ())):
+                return "ungrounded_date", f"未出の曜日「{m.group(0)}」"
 
-    for m in _WEEKDAY_RE.finditer(ja_norm):
-        if not any(alias in source_lower for alias in _WEEKDAY_ALIASES.get(m.group(1), ())):
-            return "ungrounded_date", f"未出の曜日「{m.group(0)}」"
-
-    for d in [d for tn in (ja_norm, zh_norm) for d in _DIGIT_RE.findall(tn)]:
-        if d not in source_digits and int(d) not in source_ints:
-            return "ungrounded_number", f"未出の数字「{d}」"
+    for lang, text in (("ja", ja_norm), ("zh", zh_norm)):
+        for m in _DIGIT_RE.finditer(text):
+            if _in_spans(m.start(), m.end(), verified_spans[lang]):
+                continue
+            d = m.group(0)
+            if d not in source_digits and int(d) not in source_ints:
+                return "ungrounded_number", f"未出の数字「{d}」"
 
     for m in _KANJI_COUNTER_RE.finditer(ja_norm):
+        if _in_spans(m.start(), m.end(), verified_spans["ja"]):
+            continue
         full = m.group(0)
         val = _kanji_to_int(m.group(1))
         if (
@@ -338,6 +553,8 @@ def validate_diary_grounding(
             return "ungrounded_number", f"未出の数量「{full}」"
 
     for m in _ZH_COUNTER_RE.finditer(zh_norm):
+        if _in_spans(m.start(), m.end(), verified_spans["zh"]):
+            continue
         full = m.group(0)
         val = _kanji_to_int(m.group(1))
         if (
@@ -351,7 +568,9 @@ def validate_diary_grounding(
     for canonical, aliases in _KNOWN_ENTITY_ALIASES.items():
         if canonical in self_names:
             continue
-        if canonical in ja_norm and not any(a.casefold() in source_lower for a in aliases):
+        if any(a.casefold() in source_lower for a in aliases):
+            continue
+        if canonical in ja_norm or any(a in zh_norm for a in aliases if not a.isascii()):
             return "ungrounded_entity", f"未出の固有名詞「{canonical}」"
 
     for m in _PERSON_SUFFIX_RE.finditer(ja_norm):
@@ -387,6 +606,7 @@ async def sync_conversation_diary_windows(
     worldline: str,
     conversation_id: str,
     now: datetime | None = None,
+    max_message_id: int | None = None,
 ) -> list[str]:
     mode = normalize_identity_mode(identity_mode)
     wl = normalize_worldline(worldline)
@@ -396,28 +616,30 @@ async def sync_conversation_diary_windows(
     touched: list[str] = []
 
     async with _write_window(wl) as (db, history):
-        cur_msgs = await history.execute(
-            """SELECT m.id,
-                      m.role,
-                      m.content,
-                      m.translation,
-                      m.turn_id,
-                      m.revision,
-                      m.created_at,
-                      COALESCE(e.epoch, 0) AS content_epoch
-                 FROM messages m
-                 JOIN conversations c
-                   ON c.id = m.conversation_id
-                  AND c.session_id = m.session_id
-                 LEFT JOIN conversation_content_epochs e
-                   ON e.session_id = m.session_id
-                  AND e.conversation_id = c.id
-                WHERE m.session_id = ?
-                  AND c.identity_mode = ?
-                  AND c.id = ?
-                ORDER BY m.id ASC""",
-            scope,
-        )
+        msg_sql = """SELECT m.id,
+                            m.role,
+                            m.content,
+                            m.translation,
+                            m.turn_id,
+                            m.revision,
+                            m.created_at,
+                            COALESCE(e.epoch, 0) AS content_epoch
+                       FROM messages m
+                       JOIN conversations c
+                         ON c.id = m.conversation_id
+                        AND c.session_id = m.session_id
+                       LEFT JOIN conversation_content_epochs e
+                         ON e.session_id = m.session_id
+                        AND e.conversation_id = c.id
+                      WHERE m.session_id = ?
+                        AND c.identity_mode = ?
+                        AND c.id = ?"""
+        msg_params: tuple[Any, ...] = scope
+        if max_message_id is not None:
+            msg_sql += "\n                        AND m.id <= ?"
+            msg_params = (*scope, int(max_message_id))
+        msg_sql += "\n                      ORDER BY m.id ASC"
+        cur_msgs = await history.execute(msg_sql, msg_params)
         messages = await cur_msgs.fetchall()
         if not messages:
             return []
@@ -501,7 +723,10 @@ async def sync_conversation_diary_windows(
             fp = _fingerprint(chunk)
             epoch = int(chunk[0]["content_epoch"])
             last_dt = _parse_utc(chunk[-1]["created_at"], fallback=now_dt)
-            if user_count >= DIARY_IMMEDIATE_USER_TURNS:
+            is_immediate = (
+                user_count >= DIARY_IMMEDIATE_USER_TURNS and chunk[-1]["role"] == "assistant"
+            )
+            if is_immediate:
                 due_dt = now_dt
             else:
                 base_dt = max(last_dt, now_dt) if now is not None else last_dt
@@ -519,13 +744,15 @@ async def sync_conversation_diary_windows(
             )
             if matched is not None:
                 used_ext.add(matched["diary_id"])
+                if max_message_id is not None and int(matched["last_message_id"]) > last_id:
+                    continue
                 same_window = (
                     int(matched["first_message_id"]),
                     int(matched["last_message_id"]),
                     matched["source_fingerprint"],
                     int(matched["content_epoch"]),
                 ) == (first_id, last_id, fp, epoch)
-                if same_window and user_count < DIARY_IMMEDIATE_USER_TURNS:
+                if same_window and not is_immediate:
                     touched.append(str(matched["diary_id"]))
                     continue
                 cur = await db.execute(
@@ -852,6 +1079,8 @@ async def process_diary_job(
             return await finish("cancelled", MemoryJobErrorCode.SOURCE_MISSING.value)
         if window["state"] == "written":
             return await finish("completed")
+        if int(job["attempt_count"] or 0) > DIARY_MAX_ATTEMPTS:
+            return await finish("failed", MemoryJobErrorCode.TIMEOUT.value)
 
         source_rows = await load_diary_source(worldline=worldline, window=window)
         if not source_rows:

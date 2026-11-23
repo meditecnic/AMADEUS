@@ -2350,6 +2350,7 @@ async def processor_loop(
                             identity_mode=getattr(session, "identity_mode", "okabe"),
                             worldline=session.worldline,
                             conversation_id=conversation_id,
+                            max_message_id=int(assistant_message_id),
                         )
                     except Exception as exc:
                         logger.warning(

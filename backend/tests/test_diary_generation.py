@@ -38,6 +38,7 @@ from app.services.memory_v11.jobs import (
     enqueue_memory_job,
     get_memory_job,
     process_due_jobs_once,
+    process_memory_job,
 )
 from app.services.memory_v11.repository import create_stable_fact
 from app.services.prompt_compiler import (
@@ -778,7 +779,10 @@ async def test_6_source_grounding_rewrites_once_then_discards_with_reason():
             },
         ]
 
-    e_num, e_ent, e_quo = "ungrounded_number", "ungrounded_entity", "ungrounded_quote"
+    e_num = "ungrounded_number"
+    e_date = "ungrounded_date"
+    e_ent = "ungrounded_entity"
+    e_quo = "ungrounded_quote"
     for u_zh, ja, zh, expected in [
         ("我们聊了很久", "二人で長く話して落ち着いたわ。", "两个人聊了很久。", None),
         ("我们聊了很久", "三人で長く話して落ち着いたわ。", "聊了很久。", e_num),
@@ -813,10 +817,37 @@ async def test_6_source_grounding_rewrites_once_then_discards_with_reason():
             "没想「你根本不在乎我」。",
             None,
         ),
-        ("今晚继续整理数据", "今夜は十一時まで作業する気ね。", "今晚继续整理数据。", e_num),
+        ("今晚继续整理数据", "今夜は十一時まで作業する気ね。", "今晚继续整理数据。", e_date),
         ("今晚整理数据到十一点", "今夜は十一時まで作業する気ね。", "今晚忙到十一点。", None),
+        ("昨天喝三杯茶，开了五次会", "五月三日に話したわね。", "五月三日聊过。", e_date),
+        ("昨天喝三杯茶，开了五次会", "また話したわね。", "5月3日聊过。", e_date),
+        ("5/3去公园", "五月三日に公園へ行ったのね。", "5月3日去了公园。", None),
+        ("五月三日去公园", "5月3日に公園へ行ったのね。", "5/3去了公园。", None),
+        ("晚点再聊", "一時にまた話すのね。", "一点再聊。", e_date),
+        ("晚点再聊", "また話すのね。", "一点再聊。", e_date),
+        ("一点再聊", "一時にまた話すのね。", "一点再聊。", None),
+        ("有点累", "一時的な疲れみたいね。", "晚一点再聊，放松一点。", None),
+        ("晚点再聊", "また話すのね。", "星期四再聊。", e_date),
+        ("周四见", "木曜日に会うのね。", "星期四见面。", None),
+        (
+            "今天和高校老师聊了研究",
+            "大学教授と研究の話をしたのね。",
+            "今天和高校老师聊了研究。",
+            None,
+        ),
+        ("今天和同事聊了研究", "レスキネン教授の話が出たわね。", "聊了研究。", e_ent),
+        ("今天聊了散步", "散歩の話をしたわ。", "和真由理散步。", e_ent),
     ]:
         assert validate_diary_grounding(ja, zh, zh_src(u_zh))[0] == expected, (u_zh, ja, zh)
+
+    split_sources = [
+        {"role": "user", "text": "先做", "translation": ""},
+        {"role": "user", "text": "完再说", "translation": ""},
+    ]
+    assert (
+        validate_diary_grounding("「做完」と言っていたわね。", "说过「做完」。", split_sources)[0]
+        == e_quo
+    )
 
     okabe_ja = "実験記録を片付けたのは立派ね、岡部。倫太郎らしい粘り強さだわ。"
     okabe_src = zh_src("今天把实验记录整理完了")
@@ -1132,6 +1163,10 @@ async def test_8_cross_window_self_familiarity_counts_worldline_utterances_and_d
         "同僚に呼び捨てにされるのが嫌い",
         "上司に敬語を使わないと怒られる",
         "用户在学日语的平语和敬语区别",
+        "用户在学日语，课文里写着「タメ口でいい」",
+        "教材里写着“请叫我阿哲”",
+        "朋友对我说「不用敬语」",
+        "别叫我阿哲吧",
     ]
     for idx, text in enumerate(neg_texts):
         await create_stable_fact(
@@ -1146,6 +1181,29 @@ async def test_8_cross_window_self_familiarity_counts_worldline_utterances_and_d
     neg_state.worldline, neg_state.identity_mode = "steins_gate", "self"
     neg_prompt = await compile_for_session(neg_state, "こんにちは")
     assert "対等な「です・ます」で話す。" in neg_prompt and neg_prompt.count("<example>") == 2
+
+    pos_texts = [
+        "请叫我阿哲",
+        "请叫我「阿哲」",
+        "叫我「阿哲」就行",
+        "「アキラ」って呼んで",
+        "不用敬语。之前老板和我谈过日语学习。",
+    ]
+    for idx, text in enumerate(pos_texts):
+        pos_session = f"s8-pos-{idx}-{uuid4().hex[:8]}"
+        await create_stable_fact(
+            session_id=pos_session,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text=text,
+            semantic_json={"subject": "user", "predicate": "preference", "object": f"pos_{idx}"},
+            confidence=0.92,
+        )
+        pos_state = chat_ws.SessionState(pos_session)
+        pos_state.worldline, pos_state.identity_mode = "steins_gate", "self"
+        pos_prompt = await compile_for_session(pos_state, "你好")
+        assert "自然な友人の口調で話す。" in pos_prompt, text
+        assert pos_prompt.count("<example>") == 6, text
 
 
 @pytest.mark.asyncio
@@ -1421,3 +1479,366 @@ async def _cursor_bump_and_return(session_id: str, cid: str, cutoff_id: int) -> 
         (f"v17:{uuid4()}", session_id, "self", cid, T0.isoformat(), cutoff_id),
     )
     return {"body_ja": "境界後の静かな雑談だったわ。", "body_zh": "边界后的安静闲聊。"}
+
+
+@pytest.mark.asyncio
+async def test_11_window_boundary_sync_respects_reply_upper_bound_and_out_of_order_syncs(
+    monkeypatch,
+):
+    # Timing 1: turn 7's sync runs after user8 is saved but before reply8 is saved.
+    session_id, cid1 = await _new_conv("s11-t1")
+    ids7 = await _append_turns(
+        session_id,
+        cid1,
+        [(f"雨の話{i}", f"[EMO:neutral] 静かな雨ね{i}。") for i in range(7)],
+        start=T0,
+    )
+    reply7 = ids7[-1]
+    user8 = int(
+        await models.save_message(
+            session_id, "user", "続きがあるよ。", worldline="steins_gate", conversation_id=cid1
+        )
+    )
+    t_sync7 = T0 + timedelta(minutes=20)
+    [d1] = await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid1,
+        now=t_sync7,
+        max_message_id=reply7,
+    )
+    [win7] = await _sql(
+        "steins_gate",
+        "memory",
+        "SELECT first_message_id, last_message_id, due_at FROM memory_diaries WHERE diary_id = ?",
+        (d1,),
+    )
+    assert win7["last_message_id"] == reply7
+    assert win7["due_at"] > t_sync7.isoformat()
+
+    reply8 = int(
+        await models.save_message(
+            session_id,
+            "assistant",
+            "[EMO:neutral] 続きを聞いたわ。",
+            worldline="steins_gate",
+            conversation_id=cid1,
+        )
+    )
+    t_sync8 = t_sync7 + timedelta(seconds=2)
+    assert await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid1,
+        now=t_sync8,
+        max_message_id=reply8,
+    ) == [d1]
+    assert await promote_due_diary_windows(worldline="steins_gate", now=t_sync8) == [d1]
+    captured_ids: list[int] = []
+
+    async def capture_pair(**kw):
+        captured_ids.extend(msg["id"] for msg in kw["messages"])
+        return {"body_ja": "静かな雨の話だったわ。", "body_zh": "聊了安静的雨。"}
+
+    res = await process_memory_job(
+        job_id=d1, worldline="steins_gate", lease_owner="w11", diary_completion=capture_pair
+    )
+    assert res["state"] == "completed"
+    assert user8 in captured_ids and reply8 in captured_ids
+
+    # Timing 2a: turn 8 finishes and syncs before delayed turn 7 sync runs; also 6 before 5.
+    cid2 = (await conversation_service.create(session_id, "steins_gate", identity_mode="self"))[
+        "id"
+    ]
+    ids_six = await _append_turns(
+        session_id,
+        cid2,
+        [(f"順不同{i}", f"[EMO:neutral] 返事{i}です。") for i in range(6)],
+        start=T0,
+    )
+    reply5, reply6 = ids_six[9], ids_six[11]
+    [d2] = await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid2,
+        now=T0 + timedelta(minutes=15),
+        max_message_id=reply6,
+    )
+    await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid2,
+        now=T0 + timedelta(minutes=15, seconds=1),
+        max_message_id=reply5,
+    )
+    [win6] = await _sql(
+        "steins_gate",
+        "memory",
+        "SELECT last_message_id FROM memory_diaries WHERE diary_id = ?",
+        (d2,),
+    )
+    assert win6["last_message_id"] == reply6
+
+    ids_rest = await _append_turns(
+        session_id,
+        cid2,
+        [(f"追加{i}", f"[EMO:neutral] 追加返事{i}です。") for i in range(2)],
+        start=T0 + timedelta(minutes=16),
+    )
+    reply7_b, reply8_b = ids_rest[1], ids_rest[3]
+    assert await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid2,
+        now=T0 + timedelta(minutes=20),
+        max_message_id=reply8_b,
+    ) == [d2]
+    assert (
+        await sync_conversation_diary_windows(
+            session_id=session_id,
+            identity_mode="self",
+            worldline="steins_gate",
+            conversation_id=cid2,
+            now=T0 + timedelta(minutes=20, seconds=1),
+            max_message_id=reply7_b,
+        )
+        == []
+    )
+    [win8] = await _sql(
+        "steins_gate",
+        "memory",
+        "SELECT last_message_id FROM memory_diaries WHERE diary_id = ?",
+        (d2,),
+    )
+    assert win8["last_message_id"] == reply8_b
+
+    # Timing 2b: max_message_id=None (truncate/direct path) does not lock out reply8.
+    cid3 = (await conversation_service.create(session_id, "steins_gate", identity_mode="self"))[
+        "id"
+    ]
+    await _append_turns(
+        session_id,
+        cid3,
+        [(f"直接{i}", f"[EMO:neutral] 直接返事{i}です。") for i in range(7)],
+        start=T0,
+    )
+    u8_c = int(
+        await models.save_message(
+            session_id, "user", "まだ返事待ちだよ。", worldline="steins_gate", conversation_id=cid3
+        )
+    )
+    [d3] = await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid3,
+        now=T0 + timedelta(minutes=20),
+    )
+    r8_c = int(
+        await models.save_message(
+            session_id,
+            "assistant",
+            "[EMO:neutral] 返事したわ。",
+            worldline="steins_gate",
+            conversation_id=cid3,
+        )
+    )
+    assert await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid3,
+        now=T0 + timedelta(minutes=20, seconds=1),
+    ) == [d3]
+    [win3] = await _sql(
+        "steins_gate",
+        "memory",
+        "SELECT last_message_id FROM memory_diaries WHERE diary_id = ?",
+        (d3,),
+    )
+    assert win3["last_message_id"] == r8_c and u8_c < r8_c
+
+    # Verify chat_ws passes assistant_message_id as max_message_id.
+    from app.services.memory_v11 import diary_generation as dg_mod
+
+    seen_upper: list[int | None] = []
+    orig_sync = dg_mod.sync_conversation_diary_windows
+
+    async def spy_sync(**kw):
+        seen_upper.append(kw.get("max_message_id"))
+        return await orig_sync(**kw)
+
+    monkeypatch.setattr(dg_mod, "sync_conversation_diary_windows", spy_sync)
+    adapter = OpenAICompatibleAdapter(
+        provider_id="custom",
+        base_url="http://localhost:18083/v1",
+        default_model="sync-bound",
+        message_builder=deepseek_service.build_persona_messages,
+        credential_required=False,
+        transport=httpx.MockTransport(
+            lambda _req: httpx.Response(
+                200,
+                text=(
+                    'data: {"choices":[{"delta":{"content":"[EMO:neutral] 確認したわ。"}}]}\n\n'
+                    "data: [DONE]\n\n"
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        type(provider_registry),
+        "snapshot",
+        staticmethod(
+            lambda pid, mid=None, **_kw: ProviderSnapshot(
+                provider_id=pid,
+                model_id=mid or "sync-bound",
+                capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT})),
+                adapter=adapter,
+                credential_required=False,
+            )
+        ),
+    )
+    ws_sid = f"s11-ws-{uuid4().hex[:8]}"
+    ws_conv = await conversation_service.create_and_select(
+        ws_sid, "steins_gate", provider_id="custom", model_id="sync-bound", identity_mode="self"
+    )
+    ws_session = chat_ws.SessionState(ws_sid)
+    ws_session.worldline = "steins_gate"
+    ws_session.provider_id = "custom"
+    ws_session.model = "sync-bound"
+    ws_session.enable_tts = False
+    await ws_session.load_from_db()
+    await chat_ws.process_queued_turn(
+        ws_session,
+        "境界テスト",
+        asyncio.Queue(),
+        ws_session.current_epoch,
+        ws_session.history_epoch,
+    )
+    if ws_session.background_tasks:
+        await asyncio.gather(*list(ws_session.background_tasks))
+    ws_msgs = await models.get_session_messages(
+        ws_sid, "steins_gate", conversation_id=ws_conv["id"]
+    )
+    assert seen_upper == [int(ws_msgs[-1]["id"])]
+
+
+@pytest.mark.asyncio
+async def test_12_lease_expiry_recovery_enforces_two_attempt_cap_without_third_llm_call():
+    session_id, cid = await _new_conv("s12")
+    await _append_turns(
+        session_id,
+        cid,
+        [(f"再起動{i}", f"[EMO:neutral] 応答{i}です。") for i in range(8)],
+        start=T0,
+    )
+    [diary_id] = await sync_conversation_diary_windows(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid,
+        now=T0 + timedelta(minutes=20),
+    )
+    assert await promote_due_diary_windows(
+        worldline="steins_gate", now=T0 + timedelta(minutes=20)
+    ) == [diary_id]
+
+    calls: list[int] = []
+
+    async def crash_worker(**_):
+        calls.append(1)
+        raise asyncio.CancelledError
+
+    expired_ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    for attempt in (1, 2):
+        with pytest.raises(asyncio.CancelledError):
+            await process_memory_job(
+                job_id=diary_id,
+                worldline="steins_gate",
+                lease_owner=f"shutdown-{attempt}",
+                diary_completion=crash_worker,
+            )
+        stuck = await get_memory_job(diary_id, worldline="steins_gate")
+        assert stuck is not None and (stuck["state"], stuck["attempt_count"]) == (
+            "processing",
+            attempt,
+        )
+        await _sql(
+            "steins_gate",
+            "memory",
+            "UPDATE memory_ingest_jobs SET lease_expires_at = ? WHERE job_id = ?",
+            (expired_ts, diary_id),
+        )
+
+    async def should_not_run(**_):
+        calls.append(1)
+        return {"body_ja": "呼ばれてはいけない手記よ。", "body_zh": "不应被调用。"}
+
+    recovered = await process_memory_job(
+        job_id=diary_id,
+        worldline="steins_gate",
+        lease_owner="restart-worker",
+        diary_completion=should_not_run,
+    )
+    assert len(calls) == 2
+    assert recovered["state"] == "failed"
+    assert recovered["last_error_code"] == "timeout"
+
+    # Already-written window still completes without calling LLM even after 2 expired leases.
+    cid_written = (
+        await conversation_service.create(session_id, "steins_gate", identity_mode="self")
+    )["id"]
+    ids_w = await _append_turns(
+        session_id,
+        cid_written,
+        [(f"済{i}", f"[EMO:neutral] 済返答{i}です。") for i in range(4)],
+        start=T0,
+    )
+    dw = await register_diary_window(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        conversation_id=cid_written,
+        first_message_id=ids_w[0],
+        last_message_id=ids_w[-1],
+        due_at=T0,
+    )
+    assert dw and await promote_due_diary_windows(worldline="steins_gate", now=T0) == [dw]
+    assert await claim_memory_job(job_id=dw, lease_owner="w-1", worldline="steins_gate")
+    await _sql(
+        "steins_gate",
+        "memory",
+        "UPDATE memory_ingest_jobs SET lease_expires_at = ? WHERE job_id = ?",
+        (expired_ts, dw),
+    )
+    assert await claim_memory_job(job_id=dw, lease_owner="w-2", worldline="steins_gate")
+    assert await commit_diary(
+        session_id=session_id,
+        identity_mode="self",
+        worldline="steins_gate",
+        diary_id=dw,
+        body_ja="二回目で書き終えた手記よ。",
+        body_zh="第二次尝试已写完的手记。",
+        verified_phrases=[],
+        lease_owner="w-2",
+    )
+    await _sql(
+        "steins_gate",
+        "memory",
+        "UPDATE memory_ingest_jobs SET lease_expires_at = ? WHERE job_id = ?",
+        (expired_ts, dw),
+    )
+    res_w = await process_memory_job(
+        job_id=dw,
+        worldline="steins_gate",
+        lease_owner="w-3",
+        diary_completion=should_not_run,
+    )
+    assert res_w["state"] == "completed"
+    assert len(calls) == 2
