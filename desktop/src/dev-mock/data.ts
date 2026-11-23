@@ -32,7 +32,7 @@ const fail = (status: number, code: string): Reply => ok({ detail: { code } }, s
 
 const ROOT = 'C:\\Users\\lab\\AppData\\Roaming\\Amadeus';
 const MOCK_DISK_CATEGORIES = {
-  conversations_memory: 19_293_184, voice_models: 431_947_776, speech_models: 0, embedding_models: 0,
+  conversations_memory: 19_293_184, voice_models: 431_947_776, voice_cache: 12_582_912, speech_models: 0, embedding_models: 0,
   asset_pack: 1_395_864_371, pi_components: 0, logs: 3_250_585, backups: 70_778_880, other: 412_160,
 };
 const MOCK_TOTAL_BYTES = Object.values(MOCK_DISK_CATEGORIES).reduce((a, b) => a + b, 0);

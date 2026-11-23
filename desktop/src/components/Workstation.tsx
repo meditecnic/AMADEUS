@@ -61,6 +61,15 @@ import { conversationNo, conversationNumbers } from '../workstation/numbering';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
+import {
+  MessageMenu,
+  TruncateConfirmDialog,
+  copyText,
+  formatReplayError,
+  formatTruncateError,
+  type ReplayStatus,
+  type TruncateTarget,
+} from '../workstation/MessageMenu';
 import { hearKeystroke } from '../workstation/voiceEnvelope';
 import { wsTransition } from '../workstation/motionTokens';
 import { MotionConfig, animate } from 'motion/react';
@@ -255,6 +264,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [conversationListFailed, setConversationListFailed] = useState(false);
   const [conversationListWorldline, setConversationListWorldline] = useState<typeof worldline | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+  activeConversationIdRef.current = activeConversationId;
+  const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null);
+  const replayAbortRef = useRef<AbortController | null>(null);
+  const replayRunIdRef = useRef(0);
+  const [truncateTarget, setTruncateTarget] = useState<TruncateTarget | null>(null);
+  const [truncateBusy, setTruncateBusy] = useState(false);
+  const [truncateError, setTruncateError] = useState<string | null>(null);
+  const [messageNotice, setMessageNotice] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
+  const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<{ id?: number; role: string }>) => void) | undefined>(undefined);
   const presentationScope = `${sessionId}:${worldline}:${activeConversationId ?? 'draft'}`;
   const presentationScopeRef = useRef<string | null>(presentationScope);
   useLayoutEffect(() => {
@@ -593,6 +612,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [assetPackNotice]);
 
   useEffect(() => {
+    if (messageNotice) {
+      const timer = window.setTimeout(() => setMessageNotice(null), 5000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [messageNotice]);
+
+  const stopReplay = useCallback((stopPlayer = true) => {
+    replayRunIdRef.current += 1;
+    replayAbortRef.current?.abort();
+    replayAbortRef.current = null;
+    setReplayStatus(null);
+    if (stopPlayer) audioPlayer.stopAll();
+  }, []);
+
+  useEffect(() => () => {
+    replayAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
     // A failed worldline jump stays until dismissed or the next jump; it is easy to miss behind the shift overlay.
     if (sessionError && sessionError.kind !== 'worldline') {
       const timer = window.setTimeout(() => setSessionError(null), 5000);
@@ -791,6 +829,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     reconnectStopReason,
     resetToDraft,
     clearConversationEntryErrors,
+    hydrateMessageIds,
+    applyTruncate,
     switchConversation,
     switchWorldline,
   } = useAmadeusWS({
@@ -826,8 +866,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setAudioError(reason);
     },
     onTurnStarted: (conversationId) => {
+      stopReplay(false);
       audioPlayer.stopAll();
       if (conversationId) {
+        activeConversationIdRef.current = conversationId;
         // Materializing this draft continues the same local send, unlike a history switch.
         setLocalSend(current => current?.scope === presentationScope
           ? { ...current, scope: `${sessionId}:${worldline}:${conversationId}` } : current);
@@ -928,6 +970,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
     },
     onTurnCompleted: () => {
       setLocalSend(null);
+      const completedConvId = activeConversationIdRef.current;
+      if (completedConvId) {
+        const wl = latestWorldlineRef.current;
+        void apiFetch(
+          `/api/conversations/${encodeURIComponent(completedConvId)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(wl)}`,
+        )
+          .then((res) => (res.ok ? res.json() : null))
+          .then((rows) => {
+            if (Array.isArray(rows) && activeConversationIdRef.current === completedConvId && latestWorldlineRef.current === wl) {
+              hydrateMessageIdsRef.current?.(rows);
+            }
+          })
+          .catch(() => undefined);
+      }
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
     },
     onLocalSend: (id) => setLocalSend({ id, scope: presentationScope }),
@@ -966,6 +1022,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   });
   // isThinking drops at the first sentence; the turn itself (and its lock) lasts until it ends.
   // Test doubles that only report isThinking still lock through it.
+  hydrateMessageIdsRef.current = hydrateMessageIds;
   const turnActive = Boolean(isTurnActive || isThinking);
 
   // Check the service when read-aloud is enabled without changing the user's saved choice.
@@ -1496,6 +1553,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // Stays null for network errors: a thrown fetch has no status code to show.
     let failedStatus: number | null = null;
     try {
+      stopReplay(false);
       audioPlayer.stopAll();
       const response = await apiFetch(
         `/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`
@@ -1506,6 +1564,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         throw new Error(`history query failed: ${response.status}`);
       }
       const rows = await response.json() as Array<{
+        id?: number;
         role: string;
         content: string;
         translation?: string | null;
@@ -1516,6 +1575,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           const parsedEmotion = row.role === 'assistant' ? parseLeadingEmotion(row.content) : undefined;
           return {
             id: `history_${conversation.id}_${index}`,
+            ...(typeof row.id === 'number' && row.id > 0 ? { dbId: row.id } : {}),
             role: row.role as 'user' | 'assistant',
             content: row.role === 'assistant'
               ? row.content.replace(/[ \t]*(?:\[EMO:[^\]\r\n]{1,24}\][ \t]*)+/gi,
@@ -1820,6 +1880,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const handleStopVoice = () => {
+    stopReplay(false);
     audioPlayer.stopAll();
     stopVoice();
   };
@@ -1827,9 +1888,57 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const handleCancelTurn = () => {
     setLocalSend(null);
     transcriptScroll.cancelPending();
+    stopReplay(false);
     audioPlayer.stopAll();
     cancelTurn();
   };
+
+  const handleCopyMessage = useCallback((text: string, label: string) => {
+    void copyText(text).then((ok) => {
+      setMessageNotice(ok ? { text: label, kind: 'info' } : { text: '复制失败，请手动选中复制。', kind: 'error' });
+    });
+  }, []);
+
+  const handleReplayMessage = useCallback(async (message: Message) => {
+    const convId = activeConversationIdRef.current;
+    if (!convId || !message.dbId || relocating) return;
+    const runId = ++replayRunIdRef.current;
+    replayAbortRef.current?.abort();
+    const controller = new AbortController();
+    replayAbortRef.current = controller;
+    setReplayStatus({ messageId: message.id, phase: 'loading', waitingForeground: Boolean(isSynthesizing || (isPlaying && !replayStatus)) });
+    try {
+      const response = await apiFetch(
+        `/api/conversations/${encodeURIComponent(convId)}/messages/${message.dbId}/replay?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+        { method: 'POST', signal: controller.signal },
+      );
+      if (replayRunIdRef.current !== runId) return;
+      if (!response.ok) {
+        await flagIfRelocating(response);
+        const code = (await response.json().catch(() => null))?.detail?.code as string | undefined;
+        setReplayStatus(null);
+        setMessageNotice(formatReplayError(code));
+        return;
+      }
+      const data = await response.json() as { source?: 'original' | 'synthesized'; segments?: string[] };
+      if (replayRunIdRef.current !== runId) return;
+      const segments = Array.isArray(data.segments) ? data.segments.filter((s): s is string => typeof s === 'string' && s.length > 0) : [];
+      if (!segments.length) { setReplayStatus(null); setMessageNotice({ text: '这条回复没有可播放的语音。', kind: 'info' }); return; }
+      audioPlayer.stopAll();
+      setReplayStatus({ messageId: message.id, phase: 'playing', source: data.source });
+      segments.forEach((seg, index) => {
+        void audioPlayer.playBase64(seg, index === segments.length - 1 ? () => {
+          if (replayRunIdRef.current === runId) setReplayStatus(null);
+        } : undefined);
+      });
+    } catch (error) {
+      if ((error as { name?: string })?.name === 'AbortError' || replayRunIdRef.current !== runId) return;
+      setReplayStatus(null);
+      setMessageNotice({ text: '连不上语音服务，暂时无法重播。', kind: 'error' });
+    } finally {
+      if (replayAbortRef.current === controller) replayAbortRef.current = null;
+    }
+  }, [flagIfRelocating, isPlaying, isSynthesizing, relocating, replayStatus, sessionId, worldline]);
 
   const handleSaveSettings = async (newSettings: {
     worldline: 'steins_gate' | 'beta';
@@ -2137,6 +2246,73 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
 
+  const handleConfirmTruncate = async (editedText?: string) => {
+    const target = truncateTarget;
+    const convId = activeConversationIdRef.current;
+    if (!target || !convId || truncateBusy || relocating) return;
+    // Always stop playback before truncating.
+    stopReplay(true);
+    if (isPlaying || isSynthesizing) stopVoice();
+    setTruncateBusy(true);
+    setTruncateError(null);
+    try {
+      const response = await apiFetch(
+        `/api/conversations/${encodeURIComponent(convId)}/truncate?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from_message_id: target.fromMessageId,
+            expected_last_message_id: target.expectedLastMessageId,
+          }),
+        },
+      );
+      if (!response.ok) {
+        await flagIfRelocating(response);
+        const body = await response.json().catch(() => null);
+        const code = body?.detail?.code as string | undefined;
+        setTruncateError(formatTruncateError(code));
+        if (code === 'conversation_changed') {
+          const currentConv = conversations.find((row) => row.id === convId);
+          if (currentConv) void selectConversation(currentConv, true);
+        }
+        return;
+      }
+      applyTruncate?.(target.fromMessageId);
+      setTruncateTarget(null);
+      setTruncateError(null);
+      window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
+
+      if (target.mode === 'edit' && editedText) {
+        const readyToSend = (
+          !conversationBusy
+          && conversationReconnectEpoch === null
+          && sessionState !== 'rejected'
+          && sessionState !== 'unknown'
+          && !providerGone
+          && !relocating
+          && (!canSendChat || canSendChat(editedText))
+        );
+        if (readyToSend && sendChat(editedText)) {
+          scrollTranscriptToLatest();
+          composerHandoffUntil.current = Number.POSITIVE_INFINITY;
+        } else {
+          // Step 2 failed: keep the edited message in the composer so the user never loses it.
+          setInputText(editedText);
+          window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+          setMessageNotice({
+            text: '已回到这句之前，但消息未能发出，改好的话已留在输入框里。',
+            kind: 'error',
+          });
+        }
+      }
+    } catch {
+      setTruncateError('回退对话时连接失败，请稍后再试。');
+    } finally {
+      setTruncateBusy(false);
+    }
+  };
+
   return (
     <OverlayRootContext.Provider value={overlayRoot}>
     <TipProvider>
@@ -2396,6 +2572,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
                   ) : msg.role === 'user' ? (
                     <article key={msg.id} className="ws2-line ws2-line-user" data-message-id={msg.id}>
                       <header><span className="ws2-who" data-testid="speaker-user" data-blank={userHudLabel === '——' ? '' : undefined}>{userHudLabel}</span></header>
+                      <MessageMenu
+                        message={msg}
+                        messages={visibleMessages}
+                        replay={replayStatus}
+                        disabled={relocating}
+                        onCopy={handleCopyMessage}
+                        onTruncateRequest={(target) => { setTruncateError(null); setTruncateTarget(target); }}
+                      />
                       <p
                         className="ws2-user-text"
                         {...(contentHasJapaneseKana(msg.content) ? { lang: 'ja' as const } : {})}
@@ -2405,13 +2589,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       <RecordedMarks messageId={msg.id} changes={msg.memoryRecorded} onOpen={openMemoryFromMark} />
                     </article>
                   ) : (
-                    <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
+                    <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`} data-message-id={msg.id}>
                       <header>
                         <span className="ws2-who" data-testid="speaker-assistant">
                           <span className="ws2-who-name" data-testid="speaker-assistant-primary">KURISU</span>
                           <span className="ws2-who-sub" data-testid="speaker-assistant-secondary">Amadeus</span>
                         </span>
                       </header>
+                      <MessageMenu
+                        message={msg}
+                        messages={visibleMessages}
+                        replay={replayStatus}
+                        disabled={relocating}
+                        onReplay={(targetMsg) => { void handleReplayMessage(targetMsg); }}
+                        onStopReplay={() => stopReplay(true)}
+                        onCopy={handleCopyMessage}
+                        onTruncateRequest={(target) => { setTruncateError(null); setTruncateTarget(target); }}
+                      />
                       <BilingualMessage
                         layout="paragraph"
                         segments={msg.segments || []}
@@ -2422,6 +2616,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
                         speakingId={isPlaying && msg.id === lastAssistantId ? speakingId : null}
                         arriving={sentenceArrivals(arrival, msg.id, msg.segments, Boolean(msg.streaming))}
                       />
+                      {replayStatus?.messageId === msg.id && (
+                        <div className="ws2-replay-bar" data-testid="replay-status-bar" role="status">
+                          {replayStatus.phase === 'loading' ? (
+                            <span>{replayStatus.waitingForeground ? '等本轮语音说完后重播…' : '正在准备语音…'}</span>
+                          ) : (
+                            <>
+                              <span className="ws2-replay-tag">{replayStatus.source === 'original' ? '原声' : '补合成'}</span>
+                              <span>正在重播</span>
+                            </>
+                          )}
+                          <button type="button" onClick={() => stopReplay(true)}>停止</button>
+                        </div>
+                      )}
                       {!msg.streaming && msg.memoryRefs ? (
                         <ReferencedMarks messageId={msg.id} refs={msg.memoryRefs} onOpen={openMemoryFromMark} />
                       ) : null}
@@ -2793,6 +3000,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <span className="audio-error-msg">{assetPackNotice.text}</span>
           </div>
         )}
+        {messageNotice && (
+          <div
+            className={`audio-error-toast${messageNotice.kind === 'info' ? ' info' : ''}`}
+            data-testid="message-action-toast"
+            role="status"
+          >
+            <span className="audio-error-msg">{messageNotice.text}</span>
+          </div>
+        )}
       </div>
 
       {isMemoryOpen ? (
@@ -3094,6 +3310,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
           error={forgetError}
           onClose={() => { if (!conversationBusy) { setForgetTarget(null); setForgetError(null); } }}
           onConfirm={(forgetLongTerm) => { void forgetConversation(forgetLongTerm); }}
+        />
+      )}
+
+      {truncateTarget && (
+        <TruncateConfirmDialog
+          target={truncateTarget}
+          busy={truncateBusy}
+          error={truncateError}
+          onConfirm={(editedText) => { void handleConfirmTruncate(editedText); }}
+          onCancel={() => { if (!truncateBusy) { setTruncateTarget(null); setTruncateError(null); } }}
         />
       )}
 

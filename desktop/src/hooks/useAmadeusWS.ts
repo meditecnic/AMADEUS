@@ -89,6 +89,8 @@ export type WSStatus = 'CONNECTING' | 'READY' | 'ERROR' | 'CLOSED';
 
 export interface Message {
   id: string;
+  /** Persistent history DB primary key when loaded from /messages or hydrated after turn.completed. */
+  dbId?: number;
   role: 'user' | 'assistant';
   content: string;
   translation?: string;
@@ -148,6 +150,10 @@ export interface UseAmadeusWSReturn {
   resetToDraft?: () => void;
   /** Remove failed-entry notices (conversationEntryError) once a runtime change reconnects the source conversation. */
   clearConversationEntryErrors?: () => void;
+  /** Attach backend numeric message IDs onto matching in-memory transcript rows without disrupting segments/marks. */
+  hydrateMessageIds?: (rows: ReadonlyArray<{ id?: number; role: string }>) => void;
+  /** Drop messages from the truncated point onward and restore emotion from the last retained assistant line. */
+  applyTruncate?: (fromDbId: number) => void;
   switchConversation: (conversationId: string, history: Message[], requestEpoch?: number) => boolean;
   switchWorldline: (worldline: 'steins_gate' | 'beta', requestId?: string) => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
@@ -1171,6 +1177,51 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setMessages((prev) => prev.filter((message) => !message.conversationEntryError));
   }, []);
 
+  /** Fill numeric dbId on live messages after turn.completed without recreating message keys or dropping marks. */
+  const hydrateMessageIds = useCallback((rows: ReadonlyArray<{ id?: number; role: string }>) => {
+    const persisted = rows.filter((row) => (
+      (row.role === 'user' || row.role === 'assistant')
+      && typeof row.id === 'number'
+      && row.id > 0
+    ));
+    if (!persisted.length) return;
+    setMessages((prev) => {
+      let cursor = 0;
+      let changed = false;
+      const next = prev.map((message) => {
+        if (message.systemError) return message;
+        if (message.dbId !== undefined) {
+          const hit = persisted.findIndex((row, index) => index >= cursor && row.id === message.dbId);
+          if (hit >= 0) cursor = hit + 1;
+          return message;
+        }
+        while (cursor < persisted.length && persisted[cursor].role !== message.role) {
+          cursor += 1;
+        }
+        if (cursor < persisted.length) {
+          const id = persisted[cursor].id!;
+          cursor += 1;
+          changed = true;
+          return { ...message, dbId: id };
+        }
+        return message;
+      });
+      if (changed) messagesRef.current = next;
+      return changed ? next : prev;
+    });
+  }, []);
+
+  /** Remove truncated suffix messages (along with their in-memory marks) and refresh the portrait emotion. */
+  const applyTruncate = useCallback((fromDbId: number) => {
+    setMessages((prev) => {
+      const cutIndex = prev.findIndex((message) => message.dbId !== undefined && message.dbId >= fromDbId);
+      const retained = cutIndex >= 0 ? prev.slice(0, cutIndex) : prev;
+      messagesRef.current = retained;
+      setEmotion(resolveConversationEmotion(undefined, retained));
+      return retained;
+    });
+  }, []);
+
   const switchConversation = useCallback((conversationId: string, history: Message[], requestEpoch?: number) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       paramsRef.current.onConversationSwitchError?.({
@@ -1297,6 +1348,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     reconnectStopReason,
     resetToDraft,
     clearConversationEntryErrors,
+    hydrateMessageIds,
+    applyTruncate,
     canSendChat,
     switchConversation,
     switchWorldline,

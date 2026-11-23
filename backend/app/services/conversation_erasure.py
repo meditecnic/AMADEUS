@@ -416,12 +416,14 @@ async def _commit_erasure_memory(request, worldline, *, history_ids: set[int] | 
 
 async def remove_truncated_audio(worldline: str, conversation_id: str, message_ids: list[int]) -> None:
     """Post-commit hook for removing audio associated with the frozen message IDs."""
+    from app.services.voice_cache import remove_conversation_audio
+
+    await remove_conversation_audio(conversation_id, message_ids)
 
 
 async def _finish_erasure(request: dict, worldline: str) -> dict[str, int]:
     counts = await _erase_history(request, worldline)
-    if request.get('cutoff_message_id') is not None:
-        await remove_truncated_audio(worldline, request['conversation_id'], json.loads(request['source_message_ids']))
+    await remove_truncated_audio(worldline, request['conversation_id'], json.loads(request['source_message_ids']))
     db = await get_db(worldline, 'memory')
     try:
         await db.execute("UPDATE conversation_erasure_requests SET state='completed' WHERE request_id=?", (request['request_id'],))

@@ -73,10 +73,10 @@ def walk_files(root: Path, *, reject_links: bool = False):
 
 
 def disk_usage() -> dict:
-    categories = dict.fromkeys(("conversations_memory", "voice_models", "speech_models", "embedding_models",
-                               "asset_pack", "pi_components", "logs", "backups", "other"), 0)
-    prefixes = {"voice-pack": "voice_models", "asset-pack": "asset_pack", "pi-agent": "pi_components",
-                "logs": "logs", "backups": "backups"}
+    categories = dict.fromkeys(("conversations_memory", "voice_models", "voice_cache", "speech_models",
+                               "embedding_models", "asset_pack", "pi_components", "logs", "backups", "other"), 0)
+    prefixes = {"voice-pack": "voice_models", "voice_cache": "voice_cache", "asset-pack": "asset_pack",
+                "pi-agent": "pi_components", "logs": "logs", "backups": "backups"}
     for relative, size in walk_files(db.get_data_root()):
         parts = relative.parts
         if relative.name.endswith((".sqlite3", ".sqlite3-wal", ".sqlite3-shm", ".db", ".db-wal", ".db-shm")) and parts[0] != "backups":

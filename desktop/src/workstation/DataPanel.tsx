@@ -610,6 +610,7 @@ function ExportGroup({ relocated, onRelocating }: { relocated: boolean; onReloca
 const DISK: { key: DiskCategory; label: string }[] = [
   { key: 'asset_pack', label: '素材包' },
   { key: 'voice_models', label: '语音参考' },
+  { key: 'voice_cache', label: '语音缓存' },
   { key: 'speech_models', label: '语音模型' },
   { key: 'embedding_models', label: '记忆模型' },
   { key: 'pi_components', label: 'pi 组件' },

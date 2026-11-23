@@ -1626,6 +1626,7 @@ async def processor_loop(
     expected_erasure = 0
     turn_worldline = session.worldline
     segment_pipeline = None
+    turn_audio = None
     diagnostic_observer = None
     segment_count = 0
     history_translation = ""
@@ -1720,7 +1721,12 @@ async def processor_loop(
         expected_erasure = await history_erasure_cursor(turn_worldline, session.session_id, conversation_id)
         active_history = session.history
         if session.protocol_version >= 2:
+            from app.services.voice_cache import TurnAudioRecorder
+
+            turn_audio = TurnAudioRecorder(foreground=True)
+
             async def emit_segment_event(event: dict):
+                turn_audio.on_event(event)
                 payload = dict(event)
                 if isinstance(payload.get("data"), bytes):
                     payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
@@ -2280,6 +2286,29 @@ async def processor_loop(
                         await segment_pipeline.cancel(reason="superseded_generation")
                     await send_queue.put((epoch, {"type": "status", "dsk": "idle", "state": "done", "tts": "idle"}))
                     return
+                if turn_audio is not None and segment_pipeline is not None:
+                    staged_segments = turn_audio.complete_segments(
+                        voice_stopped=bool(
+                            getattr(segment_pipeline, "_voice_stopped", False)
+                            or session.voice_stopped_turn_id == turn_id
+                        ),
+                        tts_enabled=bool(session.enable_tts),
+                    )
+                    if staged_segments:
+                        try:
+                            from app.services.voice_cache import archive_audio
+
+                            await archive_audio(
+                                worldline=turn_worldline,
+                                session_id=session.session_id,
+                                conversation_id=conversation_id,
+                                message_id=int(assistant_message_id),
+                                expected_erasure=expected_erasure,
+                                segments=staged_segments,
+                                source="original",
+                            )
+                        except Exception as exc:
+                            logger.warning("[VoiceCache] archive failed (%s); chat continues", type(exc).__name__)
                 session.append_message(
                     {
                         "role": "assistant",

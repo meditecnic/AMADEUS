@@ -304,3 +304,33 @@ async def truncate_conversation(
         except Exception as exc:
             logger.warning("Could not schedule title after truncation (%s)", type(exc).__name__)
         return counts
+
+
+@router.post("/{conversation_id}/messages/{message_id}/replay")
+async def replay_conversation_message(
+    conversation_id: str,
+    message_id: int,
+    session_id: str,
+    worldline: str = "steins_gate",
+):
+    from app.services.voice_cache import ReplayError, replay_message_audio
+
+    wl = normalize_worldline(worldline)
+    try:
+        await conversation_service.require_owned(conversation_id, session_id, wl)
+    except ConversationNotFound as exc:
+        raise _not_found(exc) from exc
+    if message_id <= 0:
+        raise HTTPException(status_code=404, detail={"code": "message_not_found"})
+    try:
+        return await replay_message_audio(
+            worldline=wl,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+    except ReplayError as exc:
+        detail: dict[str, object] = {"code": exc.code}
+        if exc.reason:
+            detail["reason"] = exc.reason
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
