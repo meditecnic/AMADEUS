@@ -1455,6 +1455,54 @@ async def test_10_truncate_re_enqueue_avoids_unique_cursor_conflict_and_guards_i
         (["提到了三件事"], "三年待ったそうね。", "等了三年。", None),
         (["今天和高校老师聊了研究"], "大学教授と研究の話をしたのね。", "聊了研究。", None),
         (["今天和高校老师聊了研究"], "真帆先生と話したのね。", "聊了研究。", "ungrounded_entity"),
+        pytest.param(
+            ["最近总在加班"], "今日は遅くまで働いていたのね。", "这周一直在加班，辛苦了。", None,
+            id="week-followed-by-always",
+        ),
+        pytest.param(
+            ["注意多休息"], "ゆっくり休んでほしいわ。", "希望你每周一次好好休息。", None,
+            id="weekly-frequency",
+        ),
+        pytest.param(
+            ["注意多休息"], "ゆっくり休んでほしいわ。", "今天要早一点休息哦。", None,
+            id="a-little-earlier",
+        ),
+        pytest.param(
+            ["这几天不太舒服"], "少し楽になるといいわね。", "希望你明天感觉好一点。", None,
+            id="a-little-better",
+        ),
+        pytest.param(
+            ["聊天时放松"], "気楽に話していいのよ。", "说话时放松一点就好。", None,
+            id="a-little-relaxed",
+        ),
+        pytest.param(
+            ["刚才提了三条建议"], "助言を伝えたわ。", "我给了你三点建议。", None,
+            id="three-points-as-quantity",
+        ),
+        pytest.param(
+            ["刚才提了些建议"], "助言を伝えたわ。", "我给了你三点建议。", "ungrounded_number",
+            id="three-points-without-quantity-evidence",
+        ),
+        pytest.param(
+            ["当时有点担心"], "一時はどうなるかと思ったわ。", "当时有点担心。", None,
+            id="temporarily-in-japanese",
+        ),
+        pytest.param(
+            ["凌晨一点再聊"], "深夜一時にまた話すのね。", "凌晨一点聊。", None,
+            id="grounded-one-am",
+        ),
+        pytest.param(
+            ["晚点再聊"], "また話すのね。", "凌晨一点再聊。", "ungrounded_date",
+            id="ungrounded-one-am",
+        ),
+        pytest.param(
+            ["星期一再聊"], "月曜日に話すのね。", "下周一再聊。", None,
+            id="grounded-next-monday",
+        ),
+        pytest.param(
+            ["改天再聊"], "また話すのね。", "下周一再聊。", "ungrounded_date",
+            id="ungrounded-next-monday",
+        ),
     ],
 )
 def test_diary_grounding_checks_complete_dates_times_and_message_quotes(sources, ja, zh, error):

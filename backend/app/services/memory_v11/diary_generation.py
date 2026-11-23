@@ -113,10 +113,10 @@ _DATE_RE = re.compile(
 )
 _DATE_FIELD_RE = re.compile(rf"({_TEMPORAL_NUMBER})([年月日号號])")
 _CLOCK_RE = re.compile(
-    rf"(?P<period>午前|午後|上午|下午|晚上)?[ \t]*"
+    rf"(?P<period>午前|午後|上午|下午|晚上|凌晨|深夜)?[ \t]*"
     rf"(?<![有这這那哪差每])(?P<hour>{_TEMPORAL_NUMBER})"
-    r"(?::(?P<colon_minute>[0-9]{2})(?!\d)|[時点點](?!間|点|點|儿|兒|也|的|期)"
-    rf"(?:(?P<minute>{_TEMPORAL_NUMBER})分|(?P<half>半))?)"
+    r"(?::(?P<colon_minute>[0-9]{2})(?!\d)|(?P<unit>[時点點])(?!間|点|點|儿|兒|也|的|期)"
+    rf"(?:(?P<minute>{_TEMPORAL_NUMBER})分|(?P<half>半)|(?P<oclock>[钟鐘]))?)"
 )
 _WEEKDAYS = {
     alias: day
@@ -287,6 +287,23 @@ def _temporal_number(token: str) -> int:
     return _kanji_to_int(token) or 0
 
 
+def _is_clock_time(match: re.Match[str]) -> bool:
+    if any(match[group] for group in ("period", "colon_minute", "minute", "half", "oclock")):
+        return True
+    after = match.string[match.end():].lstrip()
+    if match["unit"] == "時":
+        return match["hour"] != "一" or not after.startswith("は")
+    if match["hour"].isdecimal():
+        return True
+
+    before = match.string[:match.start("hour")].rstrip()
+    if before.endswith(("到", "至")):
+        return not after or after[0] in "，,。！？!?；;" or after.startswith(("左右", "为止"))
+    # A bare hour can introduce a scheduling clause, as in 「一点再聊」.
+    clause_start = not before or before[-1] in "，,。！？!?；;：:"
+    return clause_start and after.startswith(("聊", "再聊", "见", "見", "出发", "出發"))
+
+
 def _temporal_expressions(text: str):
     for match in _DATE_RE.finditer(text):
         token = match.group()
@@ -303,6 +320,8 @@ def _temporal_expressions(text: str):
         yield ("date", fields.get("年"), fields.get("月"), fields.get("日")), token
 
     for match in _CLOCK_RE.finditer(text):
+        if not _is_clock_time(match):
+            continue
         hour = _temporal_number(match["hour"])
         minute = _temporal_number(match["colon_minute"] or match["minute"] or "0")
         if match["half"]:
@@ -314,7 +333,12 @@ def _temporal_expressions(text: str):
         yield ("clock", hour, minute), match.group().strip()
 
     for match in _WEEKDAY_RE.finditer(text.casefold()):
-        yield ("weekday", _WEEKDAYS[match.group()]), match.group()
+        token = match.group()
+        if token.startswith(("周", "週")) and match.string[match.end():].startswith(
+            ("直", "次", "下", "起"),
+        ):
+            continue
+        yield ("weekday", _WEEKDAYS[token]), token
 
 
 def validate_diary_grounding(
@@ -385,7 +409,8 @@ def validate_diary_grounding(
             ):
                 continue
             return "ungrounded_date", f"未出の日時表現「{token}」"
-        quantity_texts.append(_CLOCK_RE.sub(" ", _DATE_RE.sub(" ", body)))
+        without_clocks = _CLOCK_RE.sub(lambda m: " " if _is_clock_time(m) else m.group(), body)
+        quantity_texts.append(_DATE_RE.sub(" ", without_clocks))
 
     ja_quantities, zh_quantities = quantity_texts
     for d in [d for tn in quantity_texts for d in _DIGIT_RE.findall(tn)]:
