@@ -8,13 +8,15 @@ import { deriveFactReadingArchive } from '../memory-space/readingDetails';
 
 const wsMock = vi.hoisted(() => ({
   messages: [] as Message[], isPlaying: false,
-  callbacks: {} as Pick<UseAmadeusWSParams, 'onTurnStarted' | 'onTurnCompleted' | 'onTurnHistorySaved'>,
-  sendChat: vi.fn<(content: string, onAccepted?: () => void) => boolean>(() => true),
+  callbacks: {} as Pick<UseAmadeusWSParams, 'onTurnStarted' | 'onTurnCompleted' | 'onTurnHistorySaved' | 'onAudioChunk'>,
+  sendChat: vi.fn<(content: string, onAccepted?: () => void, onRejected?: () => void) => boolean>(() => true),
   canSendChat: vi.fn<(content: string) => boolean>(() => true),
   stopVoice: vi.fn(), cancelTurn: vi.fn(), sendDebugTts: vi.fn(), updateConfig: vi.fn(),
   reconnect: vi.fn(), applyTruncate: vi.fn(), hydrateMessageIds: vi.fn(),
   switchConversation: vi.fn(() => true), switchWorldline: vi.fn(() => true),
-  stopAll: vi.fn(), playBase64: vi.fn(async () => undefined), wsRef: { current: null },
+  stopAll: vi.fn(),
+  playBase64: vi.fn<(data: string, onEnded?: () => void, onSettled?: () => void) => Promise<void>>(async () => undefined),
+  wsRef: { current: null },
 }));
 
 vi.mock('../hooks/useAmadeusWS', () => ({
@@ -38,7 +40,7 @@ vi.mock('../hooks/useAmadeusWS', () => ({
 vi.mock('../hooks/useAudioPlayer', () => ({
   useAudioPlayer: () => ({ currentVolume: 0, isPlaying: wsMock.isPlaying }),
   audioPlayer: {
-    init: vi.fn(), hasPendingPlayback: () => wsMock.isPlaying, playBase64: (...a: unknown[]) => wsMock.playBase64(...(a as [])),
+    init: vi.fn(), hasPendingPlayback: () => wsMock.isPlaying, playBase64: (...args: Parameters<typeof wsMock.playBase64>) => wsMock.playBase64(...args),
     stopAll: (...a: unknown[]) => wsMock.stopAll(...(a as [])), setVoiceVolume: vi.fn(), setMuted: vi.fn(),
   },
 }));
@@ -50,7 +52,9 @@ vi.mock('../components/TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
 vi.mock('../components/AvatarViewer', () => ({ default: () => null }));
 vi.mock('../components/SpriteAnimator', () => ({ default: () => null }));
 vi.mock('../components/BilingualMessage', () => ({
-  BilingualMessage: ({ fallbackJa, fallbackZh }: { fallbackJa: string; fallbackZh?: string }) => <div><span>{fallbackJa}</span>{fallbackZh ? <span>{fallbackZh}</span> : null}</div>,
+  BilingualMessage: ({ fallbackJa, fallbackZh, speakingId }: { fallbackJa: string; fallbackZh?: string; speakingId?: number | null }) => (
+    <div data-speaking-id={speakingId ?? ''}><span>{fallbackJa}</span>{fallbackZh ? <span>{fallbackZh}</span> : null}</div>
+  ),
 }));
 vi.mock('../components/ForgetConversationModal', () => ({ ForgetConversationModal: () => null }));
 vi.mock('../memory-space/MemorySpace', () => ({ MemorySpace: () => null }));
@@ -77,6 +81,30 @@ describe('resolveTruncateTarget & MessageMenu keyboard access', () => {
     for (const name of ['重播', '复制日文', '复制中文', '回到这里…']) {
       expect(screen.getByRole('menuitem', { name })).toBeInTheDocument();
     }
+  });
+  it('explains disabled ID-dependent menu items with a title only when dbId is missing', () => {
+    const unpersisted: Message = { id: 'u-pending', role: 'user', content: '未落库' };
+    const first = render(
+      <div className="ws2">
+        <MessageMenu message={unpersisted} messages={[...SAMPLE, unpersisted]} replay={null} onCopy={vi.fn()} onTruncateRequest={vi.fn()} />
+      </div>,
+    );
+    const trigger = screen.getByTestId('message-menu-trigger-u-pending');
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    expect(screen.getByRole('menuitem', { name: '改这句重发…' })).toHaveAttribute('title', '这条消息尚未写入记录，暂不可操作');
+    expect(screen.getByRole('menuitem', { name: '回到这里…' })).toHaveAttribute('title', '这条消息尚未写入记录，暂不可操作');
+    first.unmount();
+
+    render(
+      <div className="ws2">
+        <MessageMenu message={SAMPLE[3]} messages={SAMPLE} replay={null} onReplay={vi.fn()} onCopy={vi.fn()} onTruncateRequest={vi.fn()} />
+      </div>,
+    );
+    const lastTrigger = screen.getByTestId('message-menu-trigger-a2');
+    lastTrigger.focus();
+    fireEvent.keyDown(lastTrigger, { key: 'Enter' });
+    expect(screen.getByRole('menuitem', { name: '回到这里…' })).not.toHaveAttribute('title');
   });
 });
 
@@ -190,7 +218,7 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     await mountSelected();
     wsMock.stopAll.mockClear();
     openAction('a1', '重播');
-    expect(await screen.findByTestId('message-action-toast')).toHaveTextContent('等这轮语音结束后再重播');
+    expect(await screen.findByTestId('message-action-toast')).toHaveTextContent('等这轮结束后再重播');
     expect(wsMock.stopAll).not.toHaveBeenCalled();
     expect(wsMock.playBase64).not.toHaveBeenCalled();
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/replay?'))).toBe(false);
@@ -220,6 +248,23 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     await act(async () => finish(Response.json({ source: 'original', segments: ['UklGRg=='] })));
     expect(wsMock.playBase64).not.toHaveBeenCalled();
     expect(screen.queryByTestId('replay-status-bar')).not.toBeInTheDocument();
+  });
+
+  it('clears replay after the final segment fails and protects subsequent foreground audio', async () => {
+    await mountSelected();
+    openAction('a1', '重播');
+    await waitFor(() => expect(screen.getByTestId('replay-status-bar')).toHaveTextContent('正在重播'));
+    const onSettled = wsMock.playBase64.mock.calls.at(-1)?.[2];
+    expect(onSettled).toBeTypeOf('function');
+    act(() => onSettled?.());
+    expect(screen.queryByTestId('replay-status-bar')).not.toBeInTheDocument();
+
+    wsMock.isPlaying = true;
+    wsMock.stopAll.mockClear();
+    openAction('a1', '重播');
+    expect(await screen.findByTestId('message-action-toast')).toHaveTextContent('等这轮结束后再重播');
+    expect(wsMock.playBase64).toHaveBeenCalledOnce();
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
   });
 
   it('ignores an older history response after a newer refresh', async () => {
@@ -273,15 +318,58 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     expect(screen.getByLabelText('输入消息')).toHaveValue('改写后要保留');
   });
 
-  it('keeps the draft until the websocket confirms that the edited turn started', async () => {
+  it('preserves an existing composer draft during successful edit-and-resend without flashing', async () => {
     await mountSelected();
+    const composer = screen.getByLabelText('输入消息') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '原有未发草稿' } });
     openAction('u2', '改这句重发…');
-    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '等接收再清空' } });
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改写后的问题' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    await waitFor(() => expect(wsMock.sendChat).toHaveBeenCalledWith('改写后的问题', undefined, expect.any(Function)));
+    expect(composer).toHaveValue('原有未发草稿');
+  });
+
+  it('preserves both edited text and existing composer draft when edit-and-resend fails or is rejected', async () => {
+    await mountSelected();
+    const composer = screen.getByLabelText('输入消息') as HTMLTextAreaElement;
+
+    // 1) Synchronous send failure keeps both edited text and pre-existing draft.
+    wsMock.sendChat.mockReturnValueOnce(false);
+    fireEvent.change(composer, { target: { value: '原有草稿A' } });
+    openAction('u2', '改这句重发…');
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '未能发出的改稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(await screen.findByTestId('message-action-toast')).toHaveTextContent('改好的话已留在输入框里');
+    expect(composer.value).toContain('未能发出的改稿');
+    expect(composer.value).toContain('原有草稿A');
+
+    // 2) Delayed WS rejection / disconnect before turn.started keeps both texts too.
+    wsMock.sendChat.mockClear();
+    wsMock.sendChat.mockReturnValueOnce(true);
+    fireEvent.change(composer, { target: { value: '原有草稿B' } });
+    openAction('u2', '改这句重发…');
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '被拒收的改稿' } });
     fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
     await waitFor(() => expect(wsMock.sendChat).toHaveBeenCalled());
-    expect(screen.getByLabelText('输入消息')).toHaveValue('等接收再清空');
-    act(() => wsMock.sendChat.mock.calls[0]?.[1]?.());
-    expect(screen.getByLabelText('输入消息')).toHaveValue('');
+    expect(composer).toHaveValue('原有草稿B');
+    act(() => wsMock.sendChat.mock.calls[0]?.[2]?.());
+    expect(composer.value).toContain('被拒收的改稿');
+    expect(composer.value).toContain('原有草稿B');
+  });
+
+  it('hides foreground stop buttons and speaking highlight on the last assistant message while replaying', async () => {
+    const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '测试会话' }));
+    await waitFor(() => expect(wsMock.switchConversation).toHaveBeenCalled());
+    act(() => wsMock.callbacks.onAudioChunk?.(0, 'UklGRg=='));
+    openAction('a1', '重播');
+    await waitFor(() => expect(screen.getByTestId('replay-status-bar')).toHaveTextContent('正在重播'));
+    wsMock.isPlaying = true;
+    rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByTestId('replay-status-bar')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Current response controls' })).not.toBeInTheDocument();
+    const lastArticle = document.querySelector('[data-message-id="a2"]');
+    expect(lastArticle?.querySelector('[data-speaking-id]')).toHaveAttribute('data-speaking-id', '');
   });
 
   it('lists voice_cache separately in DataPanel disk usage', async () => {

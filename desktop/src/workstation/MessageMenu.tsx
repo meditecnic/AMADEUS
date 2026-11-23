@@ -85,6 +85,7 @@ export function MessageMenu({
 
   const isAssistant = message.role === 'assistant';
   const isThisReplaying = replay?.messageId === message.id;
+  const unpersistedTitle = !message.dbId ? '这条消息尚未写入记录，暂不可操作' : undefined;
   const rollbackTarget = resolveTruncateTarget(messages, message.id, 'rollback');
   const editTarget = isAssistant ? null : resolveTruncateTarget(messages, message.id, 'edit');
   const jaText = (message.segments?.length ? message.segments.map((s) => s.ja).join('') : message.content).trim();
@@ -117,20 +118,27 @@ export function MessageMenu({
             {isAssistant ? (
               <>
                 <DropdownMenu.Item className="ws2-menu-item" disabled={!message.dbId && !isThisReplaying}
+                  title={!message.dbId && !isThisReplaying ? unpersistedTitle : undefined}
                   onSelect={() => { if (isThisReplaying) onStopReplay?.(); else onReplay?.(message); }}>
                   {isThisReplaying ? (replay?.phase === 'loading' ? '取消重播' : '停止重播') : '重播'}
                 </DropdownMenu.Item>
                 <DropdownMenu.Item className="ws2-menu-item" disabled={!jaText} onSelect={() => onCopy(jaText, '已复制日文')}>复制日文</DropdownMenu.Item>
                 <DropdownMenu.Item className="ws2-menu-item" disabled={!zhText} onSelect={() => onCopy(zhText, '已复制中文')}>复制中文</DropdownMenu.Item>
                 <DropdownMenu.Separator className="ws2-menu-sep" />
-                <DropdownMenu.Item className="ws2-menu-item danger" disabled={!rollbackTarget} onSelect={() => openTruncate(rollbackTarget)}>回到这里…</DropdownMenu.Item>
+                <DropdownMenu.Item className="ws2-menu-item danger" disabled={!rollbackTarget}
+                  title={!rollbackTarget ? unpersistedTitle : undefined}
+                  onSelect={() => openTruncate(rollbackTarget)}>回到这里…</DropdownMenu.Item>
               </>
             ) : (
               <>
                 <DropdownMenu.Item className="ws2-menu-item" disabled={!message.content.trim()} onSelect={() => onCopy(message.content, '已复制')}>复制</DropdownMenu.Item>
                 <DropdownMenu.Separator className="ws2-menu-sep" />
-                <DropdownMenu.Item className="ws2-menu-item danger" disabled={!editTarget} onSelect={() => openTruncate(editTarget)}>改这句重发…</DropdownMenu.Item>
-                <DropdownMenu.Item className="ws2-menu-item danger" disabled={!rollbackTarget} onSelect={() => openTruncate(rollbackTarget)}>回到这里…</DropdownMenu.Item>
+                <DropdownMenu.Item className="ws2-menu-item danger" disabled={!editTarget}
+                  title={!editTarget ? unpersistedTitle : undefined}
+                  onSelect={() => openTruncate(editTarget)}>改这句重发…</DropdownMenu.Item>
+                <DropdownMenu.Item className="ws2-menu-item danger" disabled={!rollbackTarget}
+                  title={!rollbackTarget ? unpersistedTitle : undefined}
+                  onSelect={() => openTruncate(rollbackTarget)}>回到这里…</DropdownMenu.Item>
               </>
             )}
           </DropdownMenu.Content>

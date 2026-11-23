@@ -1915,7 +1915,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const convId = activeConversationIdRef.current;
     if (!convId || !message.dbId || relocating) return;
     if (turnActive || isSynthesizing || (!replayPlayingRef.current && (isPlaying || audioPlayer.hasPendingPlayback()))) {
-      setMessageNotice({ text: '她这轮的语音还没结束，等这轮语音结束后再重播。', kind: 'info' });
+      setMessageNotice({ text: '她正在回复这一轮，等这轮结束后再重播。', kind: 'info' });
       return;
     }
     stopReplay();
@@ -1942,18 +1942,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (!segments.length) { setReplayStatus(null); setMessageNotice({ text: '这条回复没有可播放的语音。', kind: 'info' }); return; }
       if (audioPlayer.hasPendingPlayback()) {
         stopReplay();
-        setMessageNotice({ text: '她这轮的语音还没结束，等这轮语音结束后再重播。', kind: 'info' });
+        setMessageNotice({ text: '她正在回复这一轮，等这轮结束后再重播。', kind: 'info' });
         return;
       }
       replayPlayingRef.current = true;
       setReplayStatus({ messageId: message.id, phase: 'playing', source: data.source });
+      const finishReplay = () => {
+        if (replayRunIdRef.current === runId) {
+          replayPlayingRef.current = false;
+          setReplayStatus(null);
+        }
+      };
       segments.forEach((seg, index) => {
-        void audioPlayer.playBase64(seg, index === segments.length - 1 ? () => {
-          if (replayRunIdRef.current === runId) {
-            replayPlayingRef.current = false;
-            setReplayStatus(null);
-          }
-        } : undefined);
+        const onSettled = index === segments.length - 1 ? finishReplay : undefined;
+        void audioPlayer.playBase64(seg, undefined, onSettled);
       });
     } catch (error) {
       if ((error as { name?: string })?.name === 'AbortError' || replayRunIdRef.current !== runId) return;
@@ -2325,6 +2327,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
 
       if (target.mode === 'edit' && editedText) {
+        const restoreEditDraft = () => {
+          setInputText((current) => {
+            if (!current.trim()) return editedText;
+            return current.trim() === editedText.trim() ? current : `${editedText}\n\n${current}`;
+          });
+          window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+          setMessageNotice({
+            text: '已回到这句之前，但消息未能发出，改好的话已留在输入框里。',
+            kind: 'error',
+          });
+        };
         const readyToSend = (
           !conversationBusy
           && conversationReconnectEpoch === null
@@ -2334,10 +2347,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
           && !relocating
           && (!canSendChat || canSendChat(editedText))
         );
-        setInputText(editedText);
         try {
-          if (readyToSend && sendChat(editedText, () => {
-            setInputText((current) => current === editedText ? '' : current);
+          if (readyToSend && sendChat(editedText, undefined, () => {
+            if (activeConversationIdRef.current === convId) restoreEditDraft();
           })) {
             scrollTranscriptToLatest();
             composerHandoffUntil.current = Number.POSITIVE_INFINITY;
@@ -2346,11 +2358,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         } catch {
           // A synchronous WebSocket write failure leaves the composer draft available.
         }
-        window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
-        setMessageNotice({
-          text: '已回到这句之前，但消息未能发出，改好的话已留在输入框里。',
-          kind: 'error',
-        });
+        restoreEditDraft();
       }
     } catch {
       setTruncateError('回退对话时连接失败，请稍后再试。');
@@ -2660,7 +2668,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                         fallbackJa={msg.content}
                         fallbackZh={msg.translation}
                         translationScope={msg.translationScope}
-                        speakingId={isPlaying && msg.id === lastAssistantId ? speakingId : null}
+                        speakingId={isPlaying && replayStatus?.phase !== 'playing' && msg.id === lastAssistantId ? speakingId : null}
                         arriving={sentenceArrivals(arrival, msg.id, msg.segments, Boolean(msg.streaming))}
                       />
                       {replayStatus?.messageId === msg.id && (
@@ -2688,9 +2696,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       {msg.streaming && isSynthesizing && !isThinking && (
                         <div className="ws2-voicing">正在合成语音…</div>
                       )}
-                      {msg.id === lastAssistantId && !showRunningNotice && (turnActive || isSynthesizing || isPlaying) && (
+                      {msg.id === lastAssistantId && !showRunningNotice
+                        && (turnActive || isSynthesizing || (isPlaying && replayStatus?.phase !== 'playing')) && (
                         <div className="ws2-actions is-latest" role="group" aria-label="Current response controls">
-                          <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing && !isPlaying}>停止本句</button>
+                          <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing && !(isPlaying && replayStatus?.phase !== 'playing')}>停止本句</button>
                           <button type="button" onClick={handleCancelTurn}>停止本轮</button>
                         </div>
                       )}
