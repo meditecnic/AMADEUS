@@ -328,7 +328,9 @@ def test_streaming_reply_across_memory_or_history_erasure(
             try:
                 assert started.wait(5)
                 session = chat_ws.sessions[owner]
-                task, pipeline = session.active_task, session.active_segment_pipeline
+                turn = session.turn_queue.active()
+                assert turn is not None
+                task, pipeline = turn.task, turn.state.active_segment_pipeline
                 heartbeat = pipeline._heartbeat_task
                 assert heartbeat is not None and not heartbeat.done()
                 if operation == "delete_fact":
@@ -354,7 +356,7 @@ def test_streaming_reply_across_memory_or_history_erasure(
                 await asyncio.gather(*conversation_service._title_tasks)
 
             client.portal.call(finish)
-            assert not session.is_busy
+            assert task.done() and not turn.state.is_busy
             assert heartbeat.done(), "the reply left a running heartbeat"
 
             async def terminal_frames():

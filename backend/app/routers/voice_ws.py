@@ -131,7 +131,8 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
         async with session_admission(session):
-            if text and not session.is_busy and not session.erasure_pending:
+            if (text and not session.is_busy and not session.erasure_pending
+                    and not session.turn_queue.turns(session.worldline)):
                 session.is_busy = True
                 session.active_task = asyncio.create_task(
                     process_queued_turn(session, text, send_queue, session.current_epoch, session.history_epoch)

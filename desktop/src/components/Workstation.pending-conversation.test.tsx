@@ -95,6 +95,7 @@ let listQueryCount: number;
 let afterPost: (() => void) | null;
 let assistantHistory: string | null = null;
 const historyByConversation = new Map<string, string>();
+const wireHistory = new Map<string, Frame[]>();
 const missingHistory = new Set<string>();
 const failedHistory = new Set<string>();
 const statusHistory = new Map<string, number>();
@@ -111,7 +112,7 @@ beforeEach(() => {
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
   failedHistory.clear(); heldHistory.clear(); statusHistory.clear(); playback.playing = false;
-  listQueryCount = 0; assistantHistory = null; historyByConversation.clear();
+  listQueryCount = 0; assistantHistory = null; historyByConversation.clear(); wireHistory.clear();
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
   vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id));
@@ -166,6 +167,7 @@ beforeEach(() => {
       if (failedHistory.has(id)) throw new TypeError('Failed to fetch');
       if (missingHistory.has(id)) return json({}, 404);
       if (statusHistory.has(id)) return json({}, statusHistory.get(id)!);
+      if (wireHistory.has(id)) return json(wireHistory.get(id));
       const assistantLine = historyByConversation.get(id) ?? assistantHistory;
       return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` },
         ...(assistantLine === null ? [] : [{ role: 'assistant', content: assistantLine }])]);
@@ -234,6 +236,84 @@ async function clickHistory(id: string) {
   fireEvent.click(document.querySelector(`[data-conversation-id="${id}"] .conversation-select`)!);
   await flush(20); await flush(100);
 }
+
+function sendText(text: string) {
+  fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: text } });
+  fireEvent.submit(document.querySelector('form.ws2-composer')!);
+}
+
+it('shows replying, queued and unread states beside the correct conversations', async () => {
+  rows = [oldRow, newRow];
+  await startOld(false);
+  act(() => latest().emit({ type: 'conversation.turn_state', conversation_id: 'old', running: true, queued: [] }));
+  await clickHistory('new');
+  act(() => latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: ['wait'] }));
+  expect(document.querySelector('[data-conversation-id="old"]')).toHaveTextContent('回复中');
+  expect(document.querySelector('[data-conversation-id="new"]')).toHaveTextContent('排队');
+  rows = rows.map(row => row.id === 'old' ? { ...row, last_active_at: '2026-10-23T00:02:00Z' } : row);
+  act(() => {
+    latest().emit({ type: 'turn.history_saved', conversation_id: 'old', turn_id: 'reply', generation: 2 });
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'old', running: false, queued: [] });
+  });
+  await flush(100);
+  expect(document.querySelector('[data-conversation-id="old"]')).toHaveTextContent('NEW');
+  expect(document.querySelector('[data-conversation-id="old"]')).not.toHaveTextContent('回复中');
+  await clickHistory('old');
+  expect(document.querySelector('[data-conversation-id="old"]')).not.toHaveTextContent('NEW');
+});
+
+it('withdraws a queued message by task ID and keeps it out of the transcript', async () => {
+  rows = [oldRow, newRow];
+  await startOld(false);
+  await clickHistory('new');
+  sendText('撤回这句');
+  act(() => {
+    latest().emit({ type: 'turn.accepted', conversation_id: 'new', task_id: 'queued-id', queued: true });
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: ['queued-id'] });
+  });
+  expect(screen.queryByText('撤回这句')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('输入消息')).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '撤回排队' }));
+  expect(latest().sent.at(-1)).toEqual({ type: 'turn.withdraw', task_id: 'queued-id' });
+  act(() => latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: [] }));
+  expect(screen.queryByRole('button', { name: '撤回排队' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
+});
+
+it.each([false, true])('reconciles a full reply after returning, completion before ACK=%s', async (beforeAck) => {
+  rows = [oldRow, newRow];
+  await startOld(false);
+  sendText('在旧对话继续问');
+  act(() => {
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'old', running: true, queued: [] });
+    latest().emit({ type: 'turn.started', conversation_id: 'old', turn_id: 'returning', generation: 2 });
+    latest().emit({ type: 'segment.ready', conversation_id: 'old', turn_id: 'returning', generation: 2,
+      segment_id: 0, ja: '一部分。', zh: '一部分。', emotion: 'neutral' });
+  });
+  await clickHistory('new');
+  wireHistory.set('old', [{ id: 14, role: 'user', turn_id: 'returning', content: '在旧对话继续问' }]);
+  FakeWebSocket.autoSwitch = !beforeAck;
+  await clickHistory('old');
+  if (!beforeAck) expect(screen.getByText('她还在回复。')).toBeInTheDocument();
+  wireHistory.get('old')!.push({
+    id: 15, role: 'assistant', turn_id: 'returning', content: '[EMO:happy] 一部分。ここで完了。', translation: '回答完毕。',
+  });
+  act(() => {
+    latest().emit({ type: 'turn.history_saved', conversation_id: 'old', turn_id: 'returning', generation: 2 });
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'old', running: false, queued: [] });
+    if (beforeAck) {
+      const request = latest().sent.filter(frame => frame.type === 'conversation.switch').at(-1);
+      latest().emit({ type: 'conversation.switched', request_id: request?.request_id,
+        conversation_id: 'old', worldline: 'steins_gate', generation: 3 });
+    }
+  });
+  await flush(100);
+  expect(active()).toBe('old');
+  expect(screen.getAllByText('在旧对话继续问')).toHaveLength(1);
+  expect(screen.getAllByText('一部分。ここで完了。')).toHaveLength(1);
+  expect(screen.queryByText('一部分。')).not.toBeInTheDocument();
+  expect(screen.queryByText('她还在回复。')).not.toBeInTheDocument();
+});
 
 it('retains a target when the socket closes after POST succeeds', async () => {
   await startOld(false);

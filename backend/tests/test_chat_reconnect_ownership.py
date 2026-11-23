@@ -85,9 +85,9 @@ def test_real_reconnect_cancels_old_turn_once_and_old_disconnect_keeps_new_turn(
         a.send_json({"type": "chat.send", "content": "一問目"})
         assert provider.started[0].wait(3)
         session = chat_ws.sessions[session_id]
-        old_task = session.active_task
-        old_owner = session.active_task_connection_id
-        old_turn = session.active_turn_id
+        old = session.turn_queue.active()
+        assert old is not None
+        old_task, old_owner, old_turn = old.task, old.owner, old.id
         assert old_owner
 
         b = sockets.enter_context(app_client.websocket_connect(f"/ws/chat?session_id={session_id}"))
@@ -95,19 +95,18 @@ def test_real_reconnect_cancels_old_turn_once_and_old_disconnect_keeps_new_turn(
         assert old_task.cancelled()
         assert provider.cancelled[0].is_set()
         assert cancelled_pipelines == [old_turn]
-        assert session.is_busy is False
-        assert session.active_task is None
-        assert session.active_task_connection_id is None
+        assert not session.turn_queue.turns()
         assert sum(chat_ws._ABORTED_TURN_JA in row["content"] for row in rows(app_client, session_id)) == 1
 
         b.send_json({"type": "chat.send", "content": "二問目"})
         assert provider.started[1].wait(3)
-        new_task = session.active_task
-        assert session.active_task_connection_id not in {None, old_owner}
+        new = session.turn_queue.active()
+        assert new is not None
+        new_task = new.task
+        assert new.owner != old_owner
         old_socket.close()  # Wait until A's reader finally has finished.
         assert not new_task.done()
-        assert session.active_task is new_task
-        assert session.is_busy
+        assert session.turn_queue.active() is new
         provider.release[1].set()
         frames = receive_until(b, "turn.completed")
         assert not any(frame["type"] == "turn.cancelled" for frame in frames)
@@ -130,8 +129,9 @@ def test_failed_auth_and_disconnect_do_not_cancel_another_connections_turn(
         a.send_json({"type": "chat.send", "content": "一問目"})
         assert provider.started[0].wait(3)
         session = chat_ws.sessions[session_id]
-        task = session.active_task
-        owner = session.active_task_connection_id
+        turn = session.turn_queue.active()
+        assert turn is not None
+        task = turn.task
         isolated_provider_credentials.delete("deepseek")
         with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as b:
             b.send_json({"type": "auth", "protocol_version": 2})
@@ -139,10 +139,10 @@ def test_failed_auth_and_disconnect_do_not_cancel_another_connections_turn(
             assert error["type"] == "error"
             assert "API Key" in error["message"]
             assert not task.done()
-            assert session.active_task_connection_id == owner
+            assert session.turn_queue.active() is turn
         assert not task.done()
         assert not provider.cancelled[0].is_set()
-        assert session.is_busy
+        assert session.turn_queue.active() is turn
         provider.release[0].set()
 
         async def wait_finished():

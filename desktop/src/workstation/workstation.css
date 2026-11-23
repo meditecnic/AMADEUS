@@ -378,6 +378,7 @@
 .ws2 .conversation-item.active :is(.conversation-title, .conversation-no), .ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) .conversation-title { color: var(--ws-ink); }
 /* a reply you have not seen: a small stamped tag, as the original's tips mark a new entry */
 .ws2 .conversation-new { flex: none; padding: 2px 4px 2px 5px; font: 500 8.5px/1 var(--ws-mono); letter-spacing: .16em; color: var(--ws-accent); box-shadow: inset 0 0 0 1px var(--ws-accent); }
+.ws2 .conversation-activity { flex: none; font-size: 10px; color: var(--ws-accent); }
 /* Rename in place: the title becomes a line to write on (the composer's floor, small), its keys under it. Enter saves;
    Esc or a click elsewhere restores. */
 .ws2 .conversation-select.is-editing { cursor: text; gap: 5px; padding: 9px 4px 10px 33px; }
@@ -558,6 +559,8 @@
 .ws2 .history-sidebar-icon.active:not(.add)::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .16), 0 0 9px var(--ws-accent); }
 /* a reply you have not seen: a tick beside the node */
 .ws2 .history-sidebar-icon.is-new::after { content: ''; position: absolute; left: calc(50% + 7px); top: calc(50% - 7px); width: 5px; height: 5px; background: var(--ws-accent); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.ws2 .conversation-rail-activity { position: absolute; right: calc(50% + 7px); width: 5px; height: 5px; border: 1px solid var(--ws-accent); border-radius: 50%; }
+.ws2 .conversation-rail-activity[data-running='true'] { background: var(--ws-accent); }
 .ws2 .history-rail-more { margin-top: 6px; padding: 3px 4px; border: 0; background: none; font: 10px/1 var(--ws-mono); letter-spacing: .06em; color: var(--ws-ink-3); }
 .ws2 .history-rail-more:hover { color: var(--ws-ink); }
 

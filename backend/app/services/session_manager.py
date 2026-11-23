@@ -157,6 +157,9 @@ class SessionCoordinator:
             "last_assistant_emotion": getattr(session, "last_assistant_emotion", "neutral"),
             "consecutive_no_emo_tags": getattr(session, "consecutive_no_emo_tags", 0),
         }
+        turn_queue = getattr(session, "turn_queue", None)
+        if turn_queue is not None:
+            await turn_queue.hide_active()
         cancelled = await cancel_inflight(session)
         session.revision = max(getattr(session, "revision", 0), getattr(session, "current_epoch", 0)) + 1
         session.current_epoch = session.revision

@@ -8,6 +8,7 @@ import { SessionMenuItems, TextFieldMenu, keepImeEscape } from '../workstation/m
 import { Lens, NewNode, PencilRing } from '../workstation/TitleStrip';
 import { conversationNo, conversationNumbers } from '../workstation/numbering';
 import { useSeenConversations } from '../workstation/seenConversations';
+import type { ConversationTurnState } from '../hooks/useAmadeusWS';
 import {
   type IdentityMode,
   normalizeIdentityMode,
@@ -36,6 +37,7 @@ type RowProps = {
   no: number;
   /** a reply landed after you last had it open (seenConversations.ts) */
   isNew: boolean;
+  activity: string;
   active: boolean;
   editing: boolean;
   actions: RowActions;
@@ -54,6 +56,7 @@ interface HistorySidebarProps {
   isCollapsed: boolean;
   onToggle: () => void;
   conversations: ConversationSummary[];
+  conversationTurns?: Readonly<Record<string, ConversationTurnState>>;
   activeId: string | null;
   searchQuery: string;
   onSearchChange: (query: string) => void;
@@ -87,6 +90,12 @@ function modeBadgeLabel(mode: IdentityMode | undefined): string {
 
 /** The rail shows this many conversations as nodes; the rest are counted under them. */
 const RAIL_NODES = 8;
+
+function activityLabel(turn?: ConversationTurnState) {
+  if (turn?.running && turn.queued.length) return '回复中 · 排队';
+  if (turn?.running) return '回复中';
+  return turn?.queued.length ? '排队' : '';
+}
 
 type RowActions = {
   /** Remember the row; editing starts once the menu has closed (see `flushRename`). */
@@ -255,7 +264,7 @@ function RenameField({ conversation, onCommit, onDone }: {
 
 /** One row. Memoised on its own data, so the many renders of a conversation switch leave the list alone. */
 const ConversationRow = memo(function ConversationRow({
-  conversation, index, no, isNew, active, editing, actions, onSelect, onRename, onRenameDone,
+  conversation, index, no, isNew, activity, active, editing, actions, onSelect, onRename, onRenameDone,
 }: RowProps) {
   return (
     <RowContextMenu conversation={conversation} actions={actions}>
@@ -302,6 +311,7 @@ const ConversationRow = memo(function ConversationRow({
                   {conversation.title}
                 </span>
                 {isNew && <span className="conversation-new" title="有新回复">NEW</span>}
+                {activity && <span className="conversation-activity">{activity}</span>}
               </span>
             </button>
           </Tip>
@@ -310,7 +320,8 @@ const ConversationRow = memo(function ConversationRow({
       </motion.article>
     </RowContextMenu>
   );
-}, (a, b) => a.index === b.index && a.no === b.no && a.isNew === b.isNew && a.active === b.active && a.editing === b.editing
+}, (a, b) => a.index === b.index && a.no === b.no && a.isNew === b.isNew && a.activity === b.activity
+  && a.active === b.active && a.editing === b.editing
   && a.actions === b.actions && a.onSelect === b.onSelect && a.onRename === b.onRename && a.onRenameDone === b.onRenameDone
   && sameRow(a.conversation, b.conversation));
 
@@ -318,6 +329,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   isCollapsed,
   onToggle,
   conversations,
+  conversationTurns,
   activeId,
   searchQuery,
   onSearchChange,
@@ -336,7 +348,10 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
     conversation.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())
   );
   const numbers = useMemo(() => conversationNumbers(conversations), [conversations]);
-  const isNew = useSeenConversations(conversations, activeId);
+  const hasUnreadReply = useSeenConversations(conversations, activeId);
+  const isNew = (conversation: ConversationSummary) => (
+    !conversationTurns?.[conversation.id]?.running && hasUnreadReply(conversation)
+  );
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -450,19 +465,24 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
               <NewNode />
             </button>
           </Tip>
-          {visible.slice(0, RAIL_NODES).map((conversation, index) => (
-            <Tip key={conversation.id} label={`${conversationNo(numbers.get(conversation.id) ?? 0)}　${conversation.title}`} side="right">
+          {visible.slice(0, RAIL_NODES).map((conversation, index) => {
+            const activity = activityLabel(conversationTurns?.[conversation.id]);
+            const label = [conversation.title, activity, isNew(conversation) && '有新回复'].filter(Boolean).join(' · ');
+            return (
+            <Tip key={conversation.id} label={`${conversationNo(numbers.get(conversation.id) ?? 0)}　${label}`} side="right">
               <button
                 type="button"
                 style={{ '--i': index } as React.CSSProperties}
                 className={`history-sidebar-icon${conversation.id === shownActiveId ? ' active' : ''}${conversation.is_pinned ? ' pinned' : ''}${isNew(conversation) ? ' is-new' : ''}`}
-                aria-label={conversation.title}
+                aria-label={label}
                 onClick={() => select(conversation)}
               >
                 {conversation.id === shownActiveId && <PencilRing seed={conversation.id} rx={8.5} ry={8} />}
+                {activity && <span className="conversation-rail-activity" data-running={conversationTurns?.[conversation.id]?.running} />}
               </button>
             </Tip>
-          ))}
+            );
+          })}
           {visible.length > RAIL_NODES && (
             <Tip label="展开会话列表" side="right">
               <button type="button" className="history-rail-more" onClick={onToggle} aria-label={`还有 ${visible.length - RAIL_NODES} 个会话，展开会话列表`}>
@@ -533,6 +553,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                   index={index}
                   no={numbers.get(conversation.id) ?? 0}
                   isNew={isNew(conversation)}
+                  activity={activityLabel(conversationTurns?.[conversation.id])}
                   active={conversation.id === shownActiveId}
                   editing={conversation.id === editingId}
                   actions={actions}

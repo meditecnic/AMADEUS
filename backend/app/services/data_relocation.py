@@ -88,9 +88,8 @@ async def drain(request_task):
     pending = [finished for task, finished in _tasks.items() if task is not current]
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
-    from app.routers.chat_ws import sessions
-    active = [session.active_task for session in sessions.values()
-              if session.active_task is not None and not session.active_task.done()]
+    from app.routers.chat_ws import active_chat_tasks, sessions
+    active = active_chat_tasks()
     if active:
         await asyncio.gather(*active, return_exceptions=True)
     pending = [task for session in sessions.values() for task in session.background_tasks if not task.done()]

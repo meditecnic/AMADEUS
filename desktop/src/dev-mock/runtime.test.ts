@@ -171,7 +171,7 @@ describe('dev mock protocol v2', () => {
     vi.runAllTimers();
     const frames = send.mock.calls.map(([frame]) => frame);
     expect(frames.filter(frame => frame.type === 'segment.ready')).toHaveLength(30);
-    expect(frames.at(-1).type).toBe('turn.completed');
+    expect(frames.at(-2).type).toBe('turn.completed');
     expect(frames.some(frame => frame.type.includes('audio'))).toBe(false);
     const list = mock.rest(url(`/api/conversations${scope}&scenario=workstation-long`), 'GET').body;
     expect(list).toEqual(expect.arrayContaining([expect.objectContaining({ id: frames[1].conversation_id, model_id: 'mock-research-03' })]));
@@ -186,18 +186,24 @@ describe('dev mock protocol v2', () => {
     socket.receive({ type: 'auth', worldline: 'steins_gate', conversation_mode: 'draft' });
     expect(frames[0]).toMatchObject({ type: 'session.ready', conversation_mode: 'draft', conversation_id: null });
     socket.receive({ type: 'chat.send', content: 'こんにちは' });
-    expect(frames.map(frame => frame.type)).toEqual(['session.ready', 'turn.started']);
+    expect(frames.map(frame => frame.type)).toEqual([
+      'session.ready', 'turn.accepted', 'conversation.turn_state', 'turn.started',
+    ]);
+    expect(frames[1]).toMatchObject({ task_id: frames[3].turn_id, queued: false });
+    expect(frames[2]).toMatchObject({ conversation_id: frames[3].conversation_id, running: true, queued: [] });
     const firstDelay = scenarios.streaming.dialogue.sentences[0].delayMs;
     vi.advanceTimersByTime(firstDelay - 1);
-    expect(frames).toHaveLength(2);
+    expect(frames).toHaveLength(4);
     vi.advanceTimersByTime(1);
-    expect(frames[2]).toMatchObject({ type: 'segment.ready', segment_id: 0, ja: expect.any(String), zh: expect.any(String) });
+    expect(frames[4]).toMatchObject({ type: 'segment.ready', segment_id: 0, ja: expect.any(String), zh: expect.any(String) });
     vi.runAllTimers();
     expect(frames.map(frame => frame.type)).toEqual([
-      'session.ready', 'turn.started', ...scenarios.streaming.dialogue.sentences.map(() => 'segment.ready'), 'turn.completed',
+      'session.ready', 'turn.accepted', 'conversation.turn_state', 'turn.started',
+      ...scenarios.streaming.dialogue.sentences.map(() => 'segment.ready'), 'turn.completed', 'conversation.turn_state',
     ]);
-    const turn = frames[1];
-    expect(frames.slice(2).every(frame => frame.turn_id === turn.turn_id && frame.generation === turn.generation)).toBe(true);
+    const turn = frames[3];
+    expect(frames.slice(4, -1).every(frame => frame.turn_id === turn.turn_id && frame.generation === turn.generation)).toBe(true);
+    expect(frames.at(-1)).toMatchObject({ conversation_id: turn.conversation_id, running: false, queued: [] });
     const history = mock.rest(url(`/api/conversations/${turn.conversation_id}/messages${scope}`), 'GET').body;
     expect(history).toEqual([
       expect.objectContaining({ id: expect.any(Number), role: 'user', content: 'こんにちは' }),
@@ -225,14 +231,14 @@ describe('dev mock protocol v2', () => {
       const socket = mock.connect(url('/ws/chat?session_id=marks'), frame => frames.push(frame));
       socket.receive({ type: 'auth', worldline: 'steins_gate', conversation_mode: 'draft' });
       socket.receive({ type: 'chat.send', content: '记住我最近在写分享，其实我改喝拿铁了' });
-      const turn = frames[1];
+      const turn = frames.find(frame => frame.type === 'turn.started')!;
       const sentences = scenarios.streaming.dialogue.sentences;
       const done = sentences.reduce((sum, sentence) => sum + sentence.delayMs, 0) + scenarios.streaming.dialogue.completionDelayMs;
       vi.advanceTimersByTime(done);
-      expect(frames.slice(-2).map(frame => frame.type)).toEqual(['memory.referenced', 'turn.completed']);
-      expect(frames.at(-2)).toMatchObject({ conversation_id: turn.conversation_id, turn_id: turn.turn_id, generation: turn.generation });
+      expect(frames.slice(-3).map(frame => frame.type)).toEqual(['memory.referenced', 'turn.completed', 'conversation.turn_state']);
+      expect(frames.at(-3)).toMatchObject({ conversation_id: turn.conversation_id, turn_id: turn.turn_id, generation: turn.generation });
       vi.advanceTimersByTime(1499);
-      expect(frames.at(-1)?.type).toBe('turn.completed');
+      expect(frames.at(-2)?.type).toBe('turn.completed');
       vi.advanceTimersByTime(1);
       expect(frames.at(-1)).toMatchObject({ type: 'memory.recorded', conversation_id: turn.conversation_id, turn_id: turn.turn_id });
       socket.close();
@@ -319,7 +325,7 @@ describe('dev mock protocol v2', () => {
     const length = frames.length;
     vi.runAllTimers();
     expect(frames).toHaveLength(length);
-    expect(frames.slice(-2).map((frame) => frame.type)).toEqual(['turn.cancelled', 'turn.history_saved']);
+    expect(frames.slice(-3).map((frame) => frame.type)).toEqual(['turn.cancelled', 'turn.history_saved', 'conversation.turn_state']);
     slow.receive({ type: 'ping' });
     expect(frames.at(-1)?.type).toBe('pong');
     slow.close();

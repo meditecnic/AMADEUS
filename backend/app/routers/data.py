@@ -34,9 +34,9 @@ async def get_backups():
 
 @router.post("/backups")
 async def create_backup():
-    from app.routers.chat_ws import sessions
+    from app.routers.chat_ws import has_chat_work
 
-    if any(s.active_task is not None and not s.active_task.done() for s in sessions.values()):
+    if has_chat_work():
         raise HTTPException(409, detail={"code": "conversation_active"})
     return await _call(backups.create_backup)
 

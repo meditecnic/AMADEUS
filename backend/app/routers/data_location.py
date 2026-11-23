@@ -37,7 +37,7 @@ class MoveRequest(LocationRequest):
 async def move_location(request: MoveRequest):
     import asyncio
     from app import db
-    from app.routers.chat_ws import sessions
+    from app.routers.chat_ws import has_chat_work
     from app.services import backups, data_relocation, data_startup
 
     if not data_location.location()["movable"]:
@@ -52,7 +52,7 @@ async def move_location(request: MoveRequest):
     # No await between admission checks and closing the gate.
     if data_relocation.relocating():
         raise HTTPException(409, detail={"code": "data_relocating"})
-    if any(s.active_task is not None and not s.active_task.done() for s in sessions.values()):
+    if has_chat_work():
         raise HTTPException(409, detail={"code": "conversation_active"})
     if (db.get_data_root() / "restore-request.json").exists():
         raise HTTPException(409, detail={"code": "restore_pending"})
