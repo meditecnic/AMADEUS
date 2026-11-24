@@ -19,7 +19,7 @@
             "kind": "effort",
             "label": "推理强度",
             "native": true,
-            "default": "low",
+            "default": "high",
             "request_mode": "thinking_and_effort",
             "options": [
               { "value": "disabled", "label": "OFF" },
@@ -58,7 +58,7 @@
             "kind": "effort",
             "label": "推理强度",
             "native": true,
-            "default": "low",
+            "default": "high",
             "request_mode": "thinking_and_effort",
             "options": [
               { "value": "disabled", "label": "OFF" },

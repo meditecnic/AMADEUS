@@ -180,10 +180,13 @@ def test_live_discovery_metadata_survives_catalog_reconciliation():
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "raw", "expected"),
     [
+        ("deepseek", "deepseek-flash", None, "high"),
         ("deepseek", "deepseek-flash", "xhigh", "high"),
         ("deepseek", "deepseek-flash", "low", "low"),
+        ("deepseek", "deepseek-v4-flash", None, "high"),
         ("deepseek", "deepseek-v4-flash", "xhigh", "high"),
         ("deepseek", "deepseek-v4-flash", "low", "low"),
+        ("deepseek", "deepseek-v4-pro", None, "low"),
         ("deepseek", "deepseek-v4-pro", "low", "low"),
         ("deepseek", "deepseek-v4-pro", "max", "max"),
         ("deepseek", "deepseek-v4-pro", "xhigh", "high"),
@@ -265,7 +268,7 @@ def test_provider_metadata_exposes_default_model_control_schema_and_no_kimi(app_
     assert flash["max_output_tokens"] == 393_216
     assert flash["disclosed_version"] == "DeepSeek-V4.1-Flash-1017"
     assert flash["thinking_control"]["native"] is True
-    assert flash["thinking_control"]["default"] == "low"
+    assert flash["thinking_control"]["default"] == "high"
     assert [row["value"] for row in flash["thinking_control"]["options"]] == [
         "disabled",
         "low",
@@ -508,3 +511,43 @@ def test_websocket_blocks_model_that_disappeared_before_any_provider_call(
             assert chat_ws.sessions[session_id].is_busy is False
     finally:
         model_catalog.clear_discovery("deepseek")
+
+
+@pytest.mark.parametrize(
+    ("model_id", "requested", "expected"),
+    [
+        ("deepseek-flash", None, "high"),
+        ("deepseek-flash", "low", "low"),
+        ("deepseek-v4-flash", None, "high"),
+        ("deepseek-v4-flash", "low", "low"),
+        ("deepseek-v4-pro", None, "low"),
+    ],
+)
+def test_websocket_flash_defaults_to_high_without_overwriting_saved_low(
+    app_client,
+    monkeypatch,
+    model_id: str,
+    requested: str | None,
+    expected: str,
+):
+    from app.routers import chat_ws
+
+    store = InMemoryCredentialStore()
+    store.set("deepseek", "test-deepseek-secret")
+    monkeypatch.setattr(chat_ws, "credential_store", store)
+    session_id = f"q337-{model_id}-{requested or 'unset'}"
+    auth_frame = {
+        "type": "auth",
+        "client": "desktop",
+        "protocol_version": 2,
+        "conversation_mode": "draft",
+        "provider_id": "deepseek",
+        "model": model_id,
+    }
+    if requested is not None:
+        auth_frame["reasoning_effort"] = requested
+
+    with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+        websocket.send_json(auth_frame)
+        assert websocket.receive_json()["type"] == "session.ready"
+    assert chat_ws.sessions[session_id].reasoning_effort == expected
