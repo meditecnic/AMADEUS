@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.routers import chat_ws
+from test_chat_ws_turn_queue import receive
 
 
 @pytest.fixture
@@ -39,11 +40,11 @@ def ready_chat(app_client, monkeypatch):
 def test_accepts_8000_code_points(ready_chat, frame_type, content):
     ws, session, processor = ready_chat
     ws.send_json({"type": frame_type, "content": content})
-    assert ws.receive_json() == {"type": "test.processed"}
-    assert session.is_busy is True
-    assert session.active_turn_id is not None
-    assert session.history[-1]["role"] == "user"
-    assert session.history[-1]["content"] == content.strip()
+    frames = receive(ws, "test.processed")
+    turn = session.turn_queue.active()
+    assert turn is not None and frames == [{"type": "test.processed"}]
+    assert turn.state.history[-1]["role"] == "user"
+    assert turn.state.history[-1]["content"] == content.strip()
     processor.assert_awaited_once()
     assert processor.call_args.args[1] == content.strip()
 
@@ -65,10 +66,11 @@ def test_rejects_over_8000_without_starting_a_turn(ready_chat, frame_type, conte
     assert session.is_busy is False
     assert session.active_turn_id is None
     assert session.active_task is None
+    assert not session.turn_queue.turns()
     processor.assert_not_called()
 
     # The rejected frame leaves this connection ready for a valid message.
     ws.send_json({"type": frame_type, "content": "短消息"})
-    assert ws.receive_json() == {"type": "test.processed"}
+    receive(ws, "test.processed")
     processor.assert_awaited_once()
-    assert session.history[-1]["content"] == "短消息"
+    assert session.turn_queue.active().state.history[-1]["content"] == "短消息"

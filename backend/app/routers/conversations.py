@@ -45,7 +45,13 @@ def _matching_session(conversation_id: str, session_id: str, worldline: str):
 @asynccontextmanager
 async def _clear_runtime(conversation_id: str, session_id: str, worldline: str, *, deleting: bool):
     await conversation_service.require_owned(conversation_id, session_id, worldline)
+    from app.routers.chat_ws import sessions
     from app.services.session_manager import cancel_inflight
+
+    owner = sessions.get(session_id)
+    turn_queue = getattr(owner, "turn_queue", None)
+    if turn_queue is not None:
+        await turn_queue.erase(worldline, conversation_id)
     session = _matching_session(conversation_id, session_id, worldline)
     if session is None:
         yield
@@ -281,7 +287,12 @@ async def truncate_conversation(
         try:
             record = await conversation_service.require_owned(conversation_id, session_id, wl)
             session = _matching_session(conversation_id, session_id, wl)
-            if session is not None and session.is_busy:
+            from app.routers.chat_ws import sessions
+
+            turn_queue = getattr(sessions.get(session_id), "turn_queue", None)
+            if (session is not None and session.is_busy) or (
+                turn_queue is not None and turn_queue.busy(wl, conversation_id)
+            ):
                 raise TruncateError("conversation_busy")
             counts = await request_erasure(
                 session_id=session_id, identity_mode=record["identity_mode"], worldline=wl,

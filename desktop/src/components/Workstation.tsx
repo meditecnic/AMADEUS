@@ -276,7 +276,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [truncateBusy, setTruncateBusy] = useState(false);
   const [truncateError, setTruncateError] = useState<string | null>(null);
   const [messageNotice, setMessageNotice] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
-  const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<HistoryMessageRow>) => void) | undefined>(undefined);
+  const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<HistoryMessageRow>, reconcile?: boolean) => void) | undefined>(undefined);
   const messageHistoryReadRef = useRef(0);
   const messageIdRefreshRef = useRef<{ convId: string; epoch: number; promise: Promise<HistoryMessageRow[] | null> } | null>(null);
   const truncateTurnWaiterRef = useRef<{ convId: string; epoch: number; afterReadId: number; resolve: (rows: HistoryMessageRow[] | null) => void; timer: number } | null>(null);
@@ -792,6 +792,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (target.requestEpoch !== requestEpoch || conversationEpochRef.current !== requestEpoch
       || target.conversationId !== conversationId || target.worldline !== latestWorldlineRef.current
       || (confirmedWorldline !== undefined && target.worldline !== confirmedWorldline)) return false;
+    activeConversationIdRef.current = target.conversationId;
     setActiveConversationId(target.conversationId);
     setConversations(current => {
       const rows = current.some(row => row.id === target.conversationId)
@@ -824,6 +825,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     activeTool,
     activeNotice,
     emotion,
+    conversationTurns,
+    withdrawTurn,
     sendChat,
     canSendChat,
     stopVoice,
@@ -898,6 +901,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (target) return acceptConversationEntry({ conversationId, worldline: switchedWorldline, requestEpoch });
       if (requestEpoch !== undefined) return false;
       setConversationBusy(false);
+      activeConversationIdRef.current = conversationId;
       setActiveConversationId(conversationId);
       setConversations((current) => current.map((row) => ({
         ...row,
@@ -974,13 +978,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
       // Keep audioError untouched so a concurrent TTS failure is not overwritten.
       setSessionError({ kind: 'worldline', code });
     },
-    onTurnCompleted: () => {
+    onTurnCompleted: (reconcileHistory) => {
       setLocalSend(null);
       const conversationId = activeConversationIdRef.current;
-      if (conversationId) refreshMessageIds(conversationId);
+      if (conversationId) refreshMessageIds(conversationId, reconcileHistory);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
     },
     onTurnHistorySaved: refreshMessageIds,
+    onBackgroundHistorySaved: (conversationId) => {
+      refreshMessageIds(conversationId, true);
+      void loadConversations().catch(() => undefined);
+    },
     onLocalSend: (id) => setLocalSend({ id, scope: presentationScope }),
     onConfigApplied: ({ reasoningEffort: appliedEffort }) => {
       if (appliedEffort === undefined) return;
@@ -1536,7 +1544,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return entered;
   };
 
-  function fetchMessageIds(conversationId: string): Promise<HistoryMessageRow[] | null> {
+  function fetchMessageIds(conversationId: string, reconcile = false): Promise<HistoryMessageRow[] | null> {
     if (activeConversationIdRef.current !== conversationId) return Promise.resolve(null);
     const readId = ++messageHistoryReadRef.current;
     const entryEpoch = conversationEpochRef.current;
@@ -1549,7 +1557,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         if (Array.isArray(rows) && readId === messageHistoryReadRef.current
           && entryEpoch === conversationEpochRef.current
           && activeConversationIdRef.current === conversationId && latestWorldlineRef.current === wl) {
-          hydrateMessageIdsRef.current?.(rows);
+          if (reconcile) hydrateMessageIdsRef.current?.(rows, true);
+          else hydrateMessageIdsRef.current?.(rows);
           return rows as HistoryMessageRow[];
         }
         return null;
@@ -1575,8 +1584,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return promise;
   }
 
-  function refreshMessageIds(conversationId: string) {
-    void fetchMessageIds(conversationId);
+  function refreshMessageIds(conversationId: string, reconcile = false) {
+    void fetchMessageIds(conversationId, reconcile);
   }
 
   const selectConversation = async (conversation: ConversationSummary, force = false) => {
@@ -2226,9 +2235,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (entryInterruptedByShiftRef.current) abandonConversationEntry(false);
     // Leftover voice fades out (well before the commit point of the animation), then stops.
     if (isPlaying) {
+      const stopPlayback = () => {
+        stopReplay(false);
+        audioPlayer.stopAll();
+      };
       const fade = audioPlayer.fadeOut?.(400);
-      if (fade) void fade.then(() => handleStopVoice());
-      else handleStopVoice();
+      if (fade) void fade.then(stopPlayback);
+      else stopPlayback();
     }
     // The menu closes under the overlay once it is covered (WorldlineShift onCovered).
     const run = new ShiftTransaction(`shift-${crypto.randomUUID()}`, worldline, to, () => {
@@ -2286,7 +2299,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
-  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || turnActive || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
+  const activeConversationTurns = activeConversationId ? conversationTurns?.[activeConversationId] : undefined;
+  const queuedTurns = activeConversationTurns?.queued ?? [];
+  const listedTurns = activeConversationId && turnActive
+    ? { ...conversationTurns, [activeConversationId]: { running: true, queued: queuedTurns } }
+    : conversationTurns;
+  const showRunningNotice = activeConversationTurns?.running && !messages.some((message) => message.streaming);
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown'
+    || turnActive || isSynthesizing || queuedTurns.length > 0 || conversationBusy
+    || conversationReconnectEpoch !== null || providerGone || relocating;
   useEffect(() => {
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
@@ -2450,7 +2471,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           if (currentConv) void selectConversation(currentConv, true);
         } else {
           if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
-          setTruncateError(formatTruncateError(code));
+          setTruncateError(formatTruncateError(code, queuedTurns.length > 0));
         }
         return;
       }
@@ -2666,6 +2687,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen || isMemoryOpen}>
         <MotionConfig transition={wsTransition(worldline, 'base')} reducedMotion="user">
         <HistorySidebar
+          conversationTurns={listedTurns}
           isCollapsed={isHistoryCollapsed}
           onToggle={() => setIsHistoryCollapsed((v) => !v)}
           conversations={conversations}
@@ -2710,7 +2732,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             data-scroll-start={transcriptScroll.atStart}
             data-scroll-end={transcriptScroll.atEnd}
           >
-            {visibleMessages.length === 0 ? (
+            {visibleMessages.length === 0 && queuedTurns.length === 0 ? (
               // An empty conversation is a note left on the sheet (SG: a scrap of notebook paper taped down; β: a framed
               // slip). "NO DATA" is what the original's empty save slots say.
               <div className="ws2-empty">
@@ -2824,7 +2846,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       {msg.streaming && isSynthesizing && !isThinking && (
                         <div className="ws2-voicing">正在合成语音…</div>
                       )}
-                      {msg.id === lastAssistantId && (turnActive || isSynthesizing || (isPlaying && replayStatus?.phase !== 'playing')) && (
+                      {msg.id === lastAssistantId && !showRunningNotice
+                        && (turnActive || isSynthesizing || (isPlaying && replayStatus?.phase !== 'playing')) && (
                         <div className="ws2-actions is-latest" role="group" aria-label="Current response controls">
                           <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing && !(isPlaying && replayStatus?.phase !== 'playing')}>停止本句</button>
                           <button type="button" onClick={handleCancelTurn}>停止本轮</button>
@@ -2833,6 +2856,30 @@ export const Workstation: React.FC<WorkstationProps> = ({
                     </article>
                   )
                 ))}
+              </div>
+            )}
+            {queuedTurns.map((taskId) => {
+              const text = activeConversationTurns?.queuedTexts?.[taskId];
+              const previewId = text ? `queued-${taskId}` : undefined;
+              return (
+                <div key={taskId} className="ws2-turn-notice">
+                  {text && <p id={previewId} className="ws2-queued-message">{text}</p>}
+                  <div className="ws2-replay-bar">
+                    <span role="status">她在等另一段回复结束。</span>
+                    <button type="button" aria-describedby={previewId} onClick={() => {
+                      if (withdrawTurn(taskId) && text) {
+                        composerHandoffUntil.current = Date.now() + 3000;
+                        preserveEditDraft(text);
+                      }
+                    }}>撤回排队</button>
+                  </div>
+                </div>
+              );
+            })}
+            {showRunningNotice && (
+              <div className="ws2-replay-bar ws2-turn-notice">
+                <span role="status">她还在回复。</span>
+                <button type="button" onClick={handleCancelTurn}>停止本轮</button>
               </div>
             )}
           </div>
@@ -3437,18 +3484,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       {shiftConfirm && (
         <ConfirmDialog
-          title="停止本轮并跃迁？"
-          confirmLabel="停止本轮并跃迁"
+          title="跃迁到另一条世界线？"
+          confirmLabel="跃迁"
           onConfirm={() => {
             const to = shiftConfirm;
             setShiftConfirm(null);
-            // Generation is cancelled outright; her voice is left to startShift, which fades it before stopping.
-            if (turnActive || isSynthesizing) cancelTurn();
             startShift(to);
           }}
           onCancel={() => setShiftConfirm(null)}
         >
-          <p>她还在回复。跃迁到{shiftConfirm === 'steins_gate' ? ' STEINS;GATE ' : ' β 世界线'}会先停下这一轮回复；取消则留在当前世界线，继续听她说完。</p>
+          <p>她会在原世界线继续回复。</p>
         </ConfirmDialog>
       )}
 

@@ -41,8 +41,10 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
   return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
 }
 
-export function formatTruncateError(code: string | null | undefined): string {
-  if (code === 'conversation_busy') return '她正在回复这一轮，请先停掉当前回复后再试。';
+export function formatTruncateError(code: string | null | undefined, hasQueuedTurn = false): string {
+  if (code === 'conversation_busy') return hasQueuedTurn
+    ? '这段对话有消息在排队，请先撤回排队的消息再试。'
+    : '她正在回复这一轮，请先停掉当前回复后再试。';
   if (code === 'conversation_changed') return '对话内容刚刚有更新，请刷新画面确认后再试。';
   if (code === 'invalid_truncate_point') return '这条消息不能作为回退起点，请刷新对话后再试。';
   return '回退对话没有成功，请稍后再试。';

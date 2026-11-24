@@ -14,6 +14,16 @@ type Conversation = {
   provider_id: string; model_id: string; identity_mode: string; last_active_at: string; created_at: string;
   messages: HistoryMessage[];
 };
+type MockTurn = {
+  id: string;
+  worldline: 'steins_gate' | 'beta';
+  conversation: Conversation;
+  content: string;
+  queued: boolean;
+  generation?: number;
+  hidden?: boolean;
+  reported?: boolean;
+};
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const fail = (status: number, code: string): Reply => ok({ detail: { code } }, status);
 const worldlineOf = (value: unknown) => value === 'beta' ? 'beta' : 'steins_gate';
@@ -287,7 +297,7 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     const name = selectScenario(url, cookies);
     const scenario: Scenario = scenarios[name];
     const session = url.searchParams.get('session_id') || 'default';
-    let worldline = 'steins_gate';
+    let worldline: MockTurn['worldline'] = 'steins_gate';
     let conversationId: string | null = null;
     let identityMode = 'okabe';
     let authenticated = false;
@@ -295,7 +305,7 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     let selectedModel = model.id;
     let closed = false;
     let generation = 0;
-    let activeTurn: Frame | null = null;
+    const lanes = new Map<MockTurn['worldline'], MockTurn[]>();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const lifecycleTimers = new Set<ReturnType<typeof setTimeout>>();
     const emit = (frame: Frame) => { if (!closed) send(frame); };
@@ -310,23 +320,95 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
       clearTimers();
       lifecycleTimers.forEach(clearTimeout);
       lifecycleTimers.clear();
-      if (activeTurn && typeof activeTurn.conversation_id === 'string') {
-        state(name, client).busyConversations.delete(activeTurn.conversation_id);
+      for (const lane of lanes.values()) {
+        for (const turn of lane) state(name, client).busyConversations.delete(turn.conversation.id);
       }
-      activeTurn = null;
+      lanes.clear();
     };
     const currentRows = () => conversations(name, client, session, worldline);
-    const cancel = () => {
-      clearTimers();
-      if (activeTurn) {
-        if (typeof activeTurn.conversation_id === 'string') {
-          state(name, client).busyConversations.delete(activeTurn.conversation_id);
-        }
-        emit({ type: 'turn.cancelled', ...activeTurn });
-        emit({ type: 'turn.history_saved', ...activeTurn });
-      }
-      activeTurn = null;
+    const scope = (turn: MockTurn) => ({
+      conversation_id: turn.conversation.id, turn_id: turn.id, generation: turn.generation,
+    });
+    const active = () => {
+      const turn = lanes.get(worldline)?.[0];
+      return turn?.generation !== undefined && turn.conversation.id === conversationId ? turn : undefined;
     };
+    const hide = () => {
+      const turn = active();
+      if (turn && !turn.hidden) {
+        turn.hidden = true;
+        publish(turn);
+      }
+    };
+    const publish = (turn: MockTurn) => {
+      const matching = (lanes.get(turn.worldline) ?? []).filter(item => item.conversation === turn.conversation);
+      const running = matching.some(item => item.generation !== undefined);
+      const queued = matching.filter(item => item.generation === undefined).map(item => item.id);
+      const id = turn.conversation.id;
+      const busy = state(name, client).busyConversations;
+      if (running || queued.length) busy.add(id);
+      else busy.delete(id);
+      if (turn.queued || turn.hidden || turn.reported) {
+        matching.forEach(item => { item.reported = true; });
+        emit({ type: 'conversation.turn_state', worldline: turn.worldline, conversation_id: id, running, queued });
+      }
+    };
+    const remove = (turn: MockTurn) => {
+      const lane = lanes.get(turn.worldline);
+      if (!lane?.includes(turn)) return;
+      lane.splice(lane.indexOf(turn), 1);
+      publish(turn);
+      const next = lane[0];
+      if (next && next.generation === undefined) start(next);
+    };
+
+    function start(turn: MockTurn) {
+      turn.generation = generation;
+      turn.hidden = worldline !== turn.worldline || conversationId !== turn.conversation.id;
+      publish(turn);
+      const clientState = state(name, client);
+      const userId = ++clientState.nextMessageId;
+      const assistant: HistoryMessage = { turn_id: turn.id, role: 'assistant', content: '', translation: '' };
+      turn.conversation.messages.push({ id: userId, turn_id: turn.id, role: 'user', content: turn.content });
+      if (!turn.hidden) emit({ type: 'turn.started', ...scope(turn) });
+      const running = () => lanes.get(turn.worldline)?.[0] === turn;
+      let elapsed = 0;
+      scenario.dialogue.sentences.forEach((sentence, segmentId) => {
+        elapsed += sentence.delayMs;
+        schedule(elapsed, () => {
+          if (!running()) return;
+          assistant.content += sentence.ja;
+          assistant.translation += sentence.zh;
+          if (!turn.hidden) {
+            emit({ type: 'segment.ready', ...scope(turn), segment_id: segmentId, ja: sentence.ja, zh: sentence.zh, emotion: sentence.emotion });
+          }
+        });
+      });
+      const memory = mockMemoryForTurn(turn.content, turn.worldline);
+      schedule(elapsed + scenario.dialogue.completionDelayMs, () => {
+        if (!running()) return;
+        assistant.id = ++clientState.nextMessageId;
+        turn.conversation.messages.push(assistant);
+        turn.conversation.last_active_at = new Date().toISOString();
+        if (turn.hidden) {
+          emit({ type: 'turn.history_saved', ...scope(turn) });
+        } else {
+          if (memory.referenced) emit({ type: 'memory.referenced', ...scope(turn), items: memory.referenced });
+          clientState.replayCache.set(`${turn.conversation.id}:${assistant.id}`, 'original');
+          emit({ type: 'turn.completed', ...scope(turn) });
+        }
+        remove(turn);
+        if (memory.recorded) {
+          schedule(RECORDED_DELAY_MS, () => {
+            if (conversationId !== turn.conversation.id || worldline !== turn.worldline) return;
+            emit({
+              type: 'memory.recorded', conversation_id: turn.conversation.id, turn_id: turn.id,
+              source_message_id: userId, changes: memory.recorded,
+            });
+          });
+        }
+      });
+    }
 
     function receive(frame: Frame) {
       if (closed) return;
@@ -364,35 +446,46 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
         if (frame.default_identity_mode === 'self' || frame.default_identity_mode === 'okabe') identityMode = frame.default_identity_mode;
         emit({ type: 'config_applied', reasoning_effort: frame.reasoning_effort ?? null });
       } else if (frame.type === 'conversation.switch') {
-        cancel();
         const target = currentRows().find(row => row.id === frame.conversation_id);
         if (!target) {
           emit({ type: 'conversation.switch_error', request_id: frame.request_id, conversation_id: frame.conversation_id, code: 'conversation_not_found' });
         } else {
+          hide();
           conversationId = target.id;
           emit({ type: 'conversation.switched', request_id: frame.request_id, conversation_id: conversationId, worldline, generation: ++generation });
         }
       } else if (frame.type === 'worldline.switch') {
-        cancel();
         const target = worldlineOf(frame.target_worldline);
         schedule(scenario.shift.delayMs, () => {
           if (scenario.shift.fail) {
             emit({ type: 'worldline.switch_error', request_id: frame.request_id, worldline: target, code: scenario.shift.code, message: scenario.shift.message });
           } else {
+            hide();
             worldline = target;
             conversationId = null;
             emit({ type: 'worldline.switched', request_id: frame.request_id, worldline, generation: ++generation });
           }
         });
       } else if (frame.type === 'turn.cancel') {
-        cancel();
-      } else if (frame.type === 'clear_history') {
-        cancel();
-        const conversation = currentRows().find(row => row.id === conversationId);
-        if (conversation) conversation.messages = [];
+        const turn = active();
+        if (!turn) return;
+        turn.conversation.messages.push({
+          id: ++state(name, client).nextMessageId, turn_id: turn.id, role: 'assistant',
+          content: '[EMO:disappointed] この質問は途中で止まった。もう一度送って。',
+          translation: '这一问中断了，没有收到回复。请再发一次。',
+        });
+        turn.conversation.last_active_at = new Date().toISOString();
+        emit({ type: 'turn.cancelled', ...scope(turn) });
+        emit({ type: 'turn.history_saved', ...scope(turn) });
+        remove(turn);
+      } else if (frame.type === 'turn.withdraw') {
+        for (const lane of lanes.values()) {
+          const turn = lane.find(item => item.id === frame.task_id && item.generation === undefined);
+          if (turn) remove(turn);
+        }
       } else if (frame.type === 'chat.send' && typeof frame.content === 'string' && frame.content.trim()) {
-        if (activeTurn || scenario.chatError) {
-          emit({ type: 'error', message: scenario.chatError || '上一问仍在生成。', recoverable: true });
+        if (scenario.chatError) {
+          emit({ type: 'error', message: scenario.chatError, recoverable: true });
           return;
         }
         let conversation = currentRows().find(row => row.id === conversationId);
@@ -402,42 +495,16 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
           currentRows().unshift(conversation);
           conversationId = conversation.id;
         }
-        const clientState = state(name, client);
-        const userId = ++clientState.nextMessageId;
-        const assistantId = ++clientState.nextMessageId;
-        const turnId = `mock-turn-${++counter}`;
-        const assistant: HistoryMessage = { id: assistantId, turn_id: turnId, role: 'assistant', content: '', translation: '' };
-        conversation.messages.push({ id: userId, turn_id: turnId, role: 'user', content: frame.content.trim() }, assistant);
-        activeTurn = { turn_id: turnId, generation: ++generation, conversation_id: conversationId };
-        const busyConvId = conversation.id;
-        clientState.busyConversations.add(busyConvId);
-        const turn = activeTurn;
-        emit({ type: 'turn.started', ...turn });
-        let elapsed = 0;
-        scenario.dialogue.sentences.forEach((sentence, segmentId) => {
-          elapsed += sentence.delayMs;
-          schedule(elapsed, () => {
-            assistant.content += sentence.ja;
-            assistant.translation += sentence.zh;
-            emit({ type: 'segment.ready', ...turn, segment_id: segmentId, ja: sentence.ja, zh: sentence.zh, emotion: sentence.emotion });
-          });
-        });
-        const memory = mockMemoryForTurn(frame.content, worldline);
-        schedule(elapsed + scenario.dialogue.completionDelayMs, () => {
-          if (memory.referenced) emit({ type: 'memory.referenced', ...turn, items: memory.referenced });
-          clientState.replayCache.set(`${busyConvId}:${assistantId}`, 'original');
-          clientState.busyConversations.delete(busyConvId);
-          emit({ type: 'turn.completed', ...turn });
-          activeTurn = null;
-        });
-        // Ingestion runs after the reply, like the real job; a cancel or switch before it fires drops it.
-        if (memory.recorded) {
-          schedule(elapsed + scenario.dialogue.completionDelayMs + RECORDED_DELAY_MS, () => {
-            emit({
-              type: 'memory.recorded', conversation_id: turn.conversation_id, turn_id: turn.turn_id,
-              source_message_id: counter, changes: memory.recorded,
-            });
-          });
+        const lane = lanes.get(worldline) ?? [];
+        lanes.set(worldline, lane);
+        const queued = lane.length > 0;
+        const turn = { id: `mock-turn-${++counter}`, worldline, conversation, content: frame.content.trim(), queued };
+        lane.push(turn);
+        if (queued) {
+          emit({ type: 'turn.accepted', task_id: turn.id, conversation_id: conversation.id, worldline, queued });
+          publish(turn);
+        } else {
+          start(turn);
         }
       }
       // voice.stop / tts_debug intentionally emit no audio in this silent mock.

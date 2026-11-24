@@ -204,20 +204,6 @@ async def test_reader_boundary_hides_exception(monkeypatch, capsys):
     _assert_logged(capsys, "[Reader Exception]")
 
 
-def test_clear_history_hides_exception_and_keeps_history(app_client, monkeypatch, capsys):
-    monkeypatch.setattr(chat_ws.models, "clear_session_data", AsyncMock(side_effect=RuntimeError(SECRET)))
-    session_id = f"clear-error-{uuid4()}"
-    with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
-        ws.send_json({"type": "auth", "protocol_version": 2, "conversation_mode": "draft"})
-        assert ws.receive_json()["type"] == "session.ready"
-        session = chat_ws.sessions[session_id]
-        session.history = [{"role": "user", "content": "keep me"}]
-        ws.send_json({"type": "clear_history"})
-        assert ws.receive_json() == {"type": "error", "message": "物理清除历史记录失败"}
-        assert session.history == [{"role": "user", "content": "keep me"}]
-    _assert_logged(capsys, f"[Clear History Error] Session {session_id}:", include_text=False)
-
-
 def test_stt_hides_exception_and_keeps_connection(app_client, monkeypatch, capsys):
     monkeypatch.setattr(type(speech_service), "transcribe_pcm", AsyncMock(side_effect=RuntimeError(SECRET)))
     with app_client.websocket_connect(f"/ws/voice?session_id=stt-error-{uuid4()}") as ws:

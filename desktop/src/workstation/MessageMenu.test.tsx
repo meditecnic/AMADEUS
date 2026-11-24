@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Message, UseAmadeusWSParams } from '../hooks/useAmadeusWS';
+import type { ConversationTurnState, Message, UseAmadeusWSParams } from '../hooks/useAmadeusWS';
 import { Workstation } from '../components/Workstation';
 import { DataPanel } from './DataPanel';
 import { MessageMenu, resolveTruncateTarget } from './MessageMenu';
@@ -8,6 +8,7 @@ import { deriveFactReadingArchive } from '../memory-space/readingDetails';
 
 const wsMock = vi.hoisted(() => ({
   messages: [] as Message[], isPlaying: false, isTurnActive: false, isSynthesizing: false,
+  conversationTurns: {} as Record<string, ConversationTurnState>,
   callbacks: {} as Pick<UseAmadeusWSParams, 'onTurnStarted' | 'onTurnCompleted' | 'onTurnHistorySaved' | 'onAudioChunk'>,
   sendChat: vi.fn<(content: string, onAccepted?: () => void, onRejected?: () => void) => boolean>(() => true),
   canSendChat: vi.fn<(content: string) => boolean>(() => true),
@@ -30,6 +31,7 @@ vi.mock('../hooks/useAmadeusWS', () => ({
     return {
       status: 'READY', sessionState: 'ready', messages: wsMock.messages, isThinking: false, isTurnActive: wsMock.isTurnActive,
       isSynthesizing: wsMock.isSynthesizing, activeTool: null, activeNotice: null, emotion: 'neutral',
+      conversationTurns: wsMock.conversationTurns,
       sendChat: wsMock.sendChat, canSendChat: wsMock.canSendChat, stopVoice: wsMock.stopVoice, cancelTurn: wsMock.cancelTurn,
       sendDebugTts: wsMock.sendDebugTts, updateConfig: wsMock.updateConfig, reconnect: wsMock.reconnect,
       applyTruncate: wsMock.applyTruncate, hydrateMessageIds: wsMock.hydrateMessageIds,
@@ -118,6 +120,7 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
   beforeEach(() => {
     localStorage.clear();
     wsMock.messages = SAMPLE.map((m) => ({ ...m }));
+    wsMock.conversationTurns = {};
     wsMock.isPlaying = false;
     wsMock.isTurnActive = false;
     wsMock.isSynthesizing = false;
@@ -150,9 +153,10 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
   async function mountSelected() {
-    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: '测试会话' }));
     await waitFor(() => expect(wsMock.switchConversation).toHaveBeenCalled());
+    return view;
   }
 
   it('stops playback before calling truncate and confirms rollback copy', async () => {
@@ -182,6 +186,33 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
     await waitFor(() => expect(screen.getByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument());
     expect(wsMock.applyTruncate).not.toHaveBeenCalled();
+  });
+
+  it('preserves an edited draft when a queued turn blocks edit-and-resend', async () => {
+    truncateStatus = 409;
+    truncateBody = { detail: { code: 'conversation_busy' } };
+    const view = await mountSelected();
+    const composer = screen.getByLabelText('输入消息');
+    fireEvent.change(composer, { target: { value: '原有输入稿' } });
+    wsMock.conversationTurns = {
+      'conv-1': { running: false, queued: ['wait'], queuedTexts: { wait: '正在排队的另一句' } },
+    };
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('正在排队的另一句')).toBeInTheDocument();
+
+    openAction('u2', '改这句重发…');
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改好的第二句' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(await screen.findByText('这段对话有消息在排队，请先撤回排队的消息再试。')).toBeInTheDocument();
+    expect(callOrder).toContain('truncate:{"from_message_id":12,"expected_last_message_id":13}');
+    expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('改好的第二句');
+    expect(composer).toHaveValue('原有输入稿');
+    expect(wsMock.applyTruncate).not.toHaveBeenCalled();
+    expect(wsMock.sendChat).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByTestId('truncate-edit-textarea')).not.toBeInTheDocument();
+    expect(composer).toHaveValue('改好的第二句\n\n原有输入稿');
   });
 
   it('edit-and-resend runs two steps and keeps edited text in composer when sending fails', async () => {
