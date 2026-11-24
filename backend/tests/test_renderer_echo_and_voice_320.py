@@ -185,9 +185,10 @@ def test_320_s02_t1_full_chinese_draft_guides_kurisu_voice_and_low_thinking(
     assert "今天真够呛" not in str(renderer_call["active_history"])
     control = renderer_call["active_history"][1]["content"]
     assert "断片" not in control
-    assert "牧瀬紅莉栖の常体" in control
-    for forbidden in ("「〜だよ」", "「〜だね」", "「〜だろ」", "「〜しよう」"):
+    assert "牧瀬紅莉栖の自然な常体" in control
+    for forbidden in ("「〜だよ」", "「〜だね」", "「〜だろ」"):
         assert forbidden in JAPANESE_RENDERER_SYSTEM_PROMPT
+    assert "「〜しよう」" not in JAPANESE_RENDERER_SYSTEM_PROMPT
 
     assert "".join(ready) == rendered_full
     assert history_body == rendered_full
@@ -200,9 +201,9 @@ def test_320_s02_t1_full_chinese_draft_guides_kurisu_voice_and_low_thinking(
 @pytest.mark.parametrize(
     ("identity_mode", "familiarity", "expected_marker"),
     [
-        ("okabe", "initial", "常体"),
-        ("self", "familiar", "常体"),
-        ("self", "initial", "敬体（です・ます）"),
+        ("okabe", "initial", "牧瀬紅莉栖の自然な常体"),
+        ("self", "familiar", "牧瀬紅莉栖の自然な常体"),
+        ("self", "initial", "さっぱりと対等な敬体（です・ます。過剰な敬語は不可）"),
     ],
 )
 async def test_320_renderer_follows_turn_register_plain_vs_polite(
