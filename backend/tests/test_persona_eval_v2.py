@@ -473,7 +473,8 @@ def test_live_cli_bootstraps_isolated_product_and_reveals_after_scoring(tmp_path
             if packet.get("stream"):
                 assert packet["thinking"]["type"] in {"enabled", "disabled"}
                 if packet["messages"][0]["content"] == JAPANESE_RENDERER_SYSTEM_PROMPT:
-                    assert packet["thinking"]["type"] == "disabled"
+                    assert packet["thinking"]["type"] == "enabled"
+                    assert packet["reasoning_effort"] == "low"
                     answer = "そうね。"
                 else:
                     answer = "[EMO:neutral] 你说得对，我也这么想。"
@@ -585,8 +586,10 @@ async def test_simulation_rewrites_one_drift_without_poisoning_later_turns(cards
     assert metrics["rewrites"] == 1 and metrics["failed_replies"] == 1 and metrics["question_ending_rate"] == 0.75
     assert metrics["cross_turn_ngram_repeat_rate"] > 0 and not sent["subtitle"]
     assert len(sent["simulator"]) == 4
-    for packet in sent["simulator"] + sent["renderer"]:
+    for packet in sent["simulator"]:
         assert packet["thinking"] == {"type": "disabled"} and "reasoning_effort" not in packet
+    for packet in sent["renderer"]:
+        assert packet["thinking"] == {"type": "enabled"} and packet["reasoning_effort"] == "low"
     sim = json.loads(sent["simulator"][1]["messages"][-1]["content"])
     assert sim["scene"]["user"]["perturbations"] == cards[0]["user"]["perturbations"]
     assert sim["recent_dialogue"][-1] == {"user": "嗯1", "reply": "そばにいるわ。"}

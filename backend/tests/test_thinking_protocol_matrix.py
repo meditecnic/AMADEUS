@@ -235,7 +235,15 @@ async def test_japanese_renderer_stream_uses_protocol_minimum(auxiliary_stream_c
     )
     assert rendered == MESSAGES[0]["content"]
     (_, payload), = captured
-    assert_stream_minimum(payload, spec, 0.0)
+    if spec is None:
+        assert_fields(payload, None, None, 0.0)
+        return
+    mode, tiers, _, _ = spec
+    expected_tier = "low" if "low" in tiers else tiers[0]
+    retains_temperature = expected_tier == "disabled" or (
+        mode == "openai_reasoning_effort" and expected_tier == "none"
+    )
+    assert_fields(payload, mode, expected_tier, 0.0 if retains_temperature else None)
 
 
 @pytest.mark.asyncio

@@ -7,8 +7,10 @@ import httpx
 import asyncio
 from app import config
 from app.security.local_transport import sovits_tts_url
+from app.domain.language_publication import _looks_like_chinese_wording
 from app.domain.segments import (
     AudioErrorCode,
+    analysis_surface_without_bounded_embeds,
     prepare_tts_text,
     render_tts_pronunciation_surface,
 )
@@ -84,15 +86,43 @@ V2PRO_GENERATION_PARAMS = {
     "batch_size": 1,
 }
 
-_QUOTED_SPAN_RE = re.compile(r"「[^「」\r\n]{1,32}」|『[^『』\r\n]{1,32}』|“[^“”\r\n]{1,32}”")
+_QUOTED_SPAN_RE = re.compile(
+    r'「[^「」\r\n]{1,32}」|『[^『』\r\n]{1,32}』|“[^“”\r\n]{1,32}”|"[^"\r\n]{1,32}"'
+)
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_HAN_RUN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]+")
+
+
+def _mark_mixed_chinese_runs(inner: str) -> str:
+    """Isolate Chinese-only Han runs inside a mixed kana+Chinese quote."""
+    parts: list[str] = []
+    cursor = 0
+    for run in _HAN_RUN_RE.finditer(inner):
+        token = run.group()
+        if not _looks_like_chinese_wording(token):
+            continue
+        parts.append(render_tts_pronunciation_surface(inner[cursor:run.start()]))
+        parts.append(f"\u200b{token}\u200b")
+        cursor = run.end()
+    if not parts:
+        return inner
+    parts.append(render_tts_pronunciation_surface(inner[cursor:]))
+    return "".join(parts)
 
 
 def tts_speech_surface(text: str, quoted_source: str | None = None) -> tuple[str, str]:
-    """Give Chinese words quoted from this turn's user text a speech-only language boundary."""
-    if not quoted_source or _KANA_RE.search(quoted_source) or not _HAN_RE.search(quoted_source):
-        return render_tts_pronunciation_surface(text), "ja"
+    """Give quoted Chinese words a speech-only language boundary for GPT-SoVITS."""
+    source_outer = (
+        analysis_surface_without_bounded_embeds(quoted_source)
+        if quoted_source
+        else ""
+    )
+    source_is_chinese = bool(
+        quoted_source
+        and _HAN_RE.search(source_outer)
+        and not _KANA_RE.search(source_outer)
+    )
 
     parts = []
     cursor = 0
@@ -100,11 +130,27 @@ def tts_speech_surface(text: str, quoted_source: str | None = None) -> tuple[str
     for match in _QUOTED_SPAN_RE.finditer(text):
         quote = match.group()
         inner = quote[1:-1]
-        if not _HAN_RE.search(inner) or inner.strip() not in quoted_source:
+        if not _HAN_RE.search(inner):
             continue
-        parts.append(render_tts_pronunciation_surface(text[cursor:match.start()]))
-        # Auto detection needs a boundary to classify a one-character Chinese quote.
-        parts.append(f"{quote[0]}\u200b{inner}\u200b{quote[-1]}")
+        has_kana = bool(_KANA_RE.search(inner))
+        explicit_chinese = _looks_like_chinese_wording(inner)
+        quoted_from_chinese = (
+            source_is_chinese
+            and not has_kana
+            and inner.strip() in quoted_source
+        )
+        if not explicit_chinese and not quoted_from_chinese:
+            continue
+        if has_kana:
+            marked = _mark_mixed_chinese_runs(inner)
+            if marked == inner:
+                continue
+            parts.append(render_tts_pronunciation_surface(text[cursor:match.start()]))
+            parts.append(f"{quote[0]}{marked}{quote[-1]}")
+        else:
+            parts.append(render_tts_pronunciation_surface(text[cursor:match.start()]))
+            # Auto detection needs a boundary to classify a short Chinese quote.
+            parts.append(f"{quote[0]}\u200b{inner}\u200b{quote[-1]}")
         cursor = match.end()
         mixed = True
     if not mixed:
