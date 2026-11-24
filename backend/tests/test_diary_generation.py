@@ -251,11 +251,14 @@ async def _append_turns(
 async def test_1_three_synthetic_segments_write_non_overlapping_complete_diaries(monkeypatch):
     session_id, cid = await _new_conv("s1")
     credentials.credential_store.set("deepseek", "valid-key-for-offline-transport")
-    outputs = [seg[2] for seg in SYNTHETIC_SEGMENTS]
-    seen: list[int] = []
+    outputs = [
+        {"body_ja": "「記録にない台詞」を聞いた。", "body_zh": "听到了一句话。"},
+        *(seg[2] for seg in SYNTHETIC_SEGMENTS),
+    ]
+    seen: list[list[dict[str, str]]] = []
 
-    def handle_diary_request(_req: httpx.Request) -> httpx.Response:
-        seen.append(1)
+    def handle_diary_request(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content)["messages"])
         body = {
             "choices": [
                 {"message": {"content": json.dumps(outputs[len(seen) - 1], ensure_ascii=False)}}
@@ -326,13 +329,22 @@ async def test_1_three_synthetic_segments_write_non_overlapping_complete_diaries
         assert json.loads(row["verified_phrases_json"]) == []
 
     assert covered == all_ids
+    assert len(seen) == 4
+    first, rewrite = seen[:2]
+    assert [message["role"] for message in first] == ["system", "user"]
+    assert "日中どちらの本文にも鉤括弧や引用符を使わない" in first[0]["content"]
+    assert "誰が誰に何を頼んだか" in first[0]["content"]
+    assert "頼みや提案、予定は、実際に済んだこととして書かない" in first[0]["content"]
+    assert "相手の話として書く" in json.loads(first[1]["content"])["mode_note"]
+    assert rewrite[:2] == first
+    assert "両方の本文から鉤括弧や引用符をすべて外し" in rewrite[2]["content"]
     usage_rows = await _sql(
         "steins_gate",
         "control",
         "SELECT category, source FROM model_usage WHERE conversation_id = ?",
         (cid,),
     )
-    assert [(r["category"], r["source"]) for r in usage_rows] == [("background", "diary")] * 3
+    assert [(r["category"], r["source"]) for r in usage_rows] == [("background", "diary")] * 4
 
 
 @pytest.mark.asyncio
