@@ -67,7 +67,8 @@ async def test_lifespan_shutdown_cancels_open_chat_and_slow_turn(monkeypatch, fa
             await send_frame({'type': 'chat', 'content': 'hello'})
             await asyncio.wait_for(slow_started.wait(), 2)
             session = chat_ws.sessions[session_id]
-            assert session.is_busy
+            turn = session.turn_queue.active()
+            assert turn is not None and turn.state.is_busy
             # Server shutdown cancels the still-open connection before exiting lifespan.
             shutdown_started = asyncio.get_running_loop().time()
             connection.cancel()
@@ -77,8 +78,9 @@ async def test_lifespan_shutdown_cancels_open_chat_and_slow_turn(monkeypatch, fa
         assert handler_cancelled.is_set() and handler_finished.is_set()
         assert handler_tasks == [connection]
         assert stream_closed.is_set()
-        assert session.active_task.done() and not session.is_busy
-        assert not session.active_streams and session.active_segment_pipeline is None
+        assert turn.task.done() and not turn.state.is_busy
+        assert not turn.state.active_streams and turn.state.active_segment_pipeline is None
+        assert not session.turn_queue.turns()
         assert not data_relocation._tasks
         assert not (asyncio.all_tasks() - before), 'shutdown left background tasks alive'
         rows = await models.get_recent_messages(

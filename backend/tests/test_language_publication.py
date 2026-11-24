@@ -660,7 +660,7 @@ async def test_foreign_reply_is_rendered_through_isolated_japanese_layer(
     assert foreign_draft.removeprefix("[EMO:neutral] ") in str(
         renderer_call["active_history"][0]
     )
-    assert user_request in str(renderer_call["active_history"][0])
+    assert user_request not in str(renderer_call["active_history"])
     assert "OLD CONTEXT MUST NOT ENTER RENDERER" not in str(
         renderer_call["active_history"]
     )

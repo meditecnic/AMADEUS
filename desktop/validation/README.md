@@ -6,6 +6,10 @@ The mock [catalog](../src/dev-mock/README.md) defines the available scenarios.
 Mission `AGENTS.md`, `services.yaml` and `library/user-testing.md` remain the
 authority for boundaries, commands, browser policy and assertion requirements.
 
+## Automated Playwright journeys
+
+With `AMADEUS_DEV_MOCK=1 npm run dev -- --port 1420 --strictPort` running in `desktop/`, run `node validation/rollback-journey.playwright.mjs` (or `validation/background-queue.playwright.mjs`) to verify rollback, edit-and-resend, busy 409 rejection, confirmation copy, and voice stop-before-delete. Optional env vars: `AMADEUS_PLAYWRIGHT_MODULE`, `AMADEUS_BROWSER_EXE`, `AMADEUS_MOCK_URL`, and `AMADEUS_BROWSER_ARTIFACTS`.
+
 ## Start and isolate
 
 1. Run the mission init procedure. On this Windows host use its documented

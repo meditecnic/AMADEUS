@@ -29,6 +29,22 @@ class TimedSSE(httpx.AsyncByteStream):
         self.closed = True
 
 
+class ClockedSSE(TimedSSE):
+    def __init__(self, lines, monkeypatch):
+        super().__init__(lines)
+        loop = asyncio.get_running_loop()
+        self.now = loop.time()
+        monkeypatch.setattr(loop, "time", lambda: self.now)
+
+    async def __aiter__(self):
+        for line in self.lines:
+            self.now += 0.05
+            # Let the event loop queue and run any timeout due at this time.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            yield (line + "\n").encode("utf-8")
+
+
 @pytest.fixture(params=["deepseek", "compatible", "responses", "gemini"])
 def streaming_adapter(request, monkeypatch):
     def make(stream):
@@ -83,20 +99,22 @@ async def test_silent_stream_is_cancelled_and_closed(streaming_adapter):
     'data: {"type":"response.reasoning_text.delta","delta":"thinking"}',
     'data: {"candidates":[{"content":{"parts":[{"text":"考え中","thought":true}]}}]}',
 ])
-async def test_data_lines_advance_budget_even_without_visible_text(streaming_adapter, line):
-    # Total duration exceeds the budget; comments between data cannot reset it.
-    stream = TimedSSE([line, ": keep-alive", ""] * 25)
-    await asyncio.wait_for(collect(streaming_adapter(stream)), timeout=2)
+async def test_data_lines_advance_budget_even_without_visible_text(streaming_adapter, line, monkeypatch):
+    # The 0.15 s between data lines fits the 0.2 s budget; the whole stream does not.
+    with monkeypatch.context() as clock:
+        stream = ClockedSSE([line, ": keep-alive", ""] * 25, clock)
+        await collect(streaming_adapter(stream))
     assert stream.closed
 
 
 async def test_done_is_a_progress_line(monkeypatch):
     # All adapters use this iterator before their existing DONE parsing.
     monkeypatch.setattr(provider_adapters, "PROVIDER_STALL_TIMEOUT_SECONDS", 0.2)
-    stream = TimedSSE(["data: [DONE]", ": keep-alive"] * 25)
-    response = httpx.Response(200, stream=stream)
-    try:
-        lines = [line async for line in provider_adapters.iter_provider_lines(response)]
-    finally:
-        await response.aclose()
+    with monkeypatch.context() as clock:
+        stream = ClockedSSE(["data: [DONE]", ": keep-alive"] * 25, clock)
+        response = httpx.Response(200, stream=stream)
+        try:
+            lines = [line async for line in provider_adapters.iter_provider_lines(response)]
+        finally:
+            await response.aclose()
     assert lines.count("data: [DONE]") == 25

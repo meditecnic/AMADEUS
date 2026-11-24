@@ -146,7 +146,7 @@ describe('useAmadeusWS B1 liveness + audio degradation', () => {
 
     expect(onAudioDegraded).toHaveBeenCalledTimes(1);
     // Text/subtitle still complete despite audio failures.
-    const assistant = result.current.messages.find((m) => m.turnId === 't');
+    const assistant = result.current.messages.find((m) => m.role === 'assistant' && m.turnId === 't');
     expect(assistant?.content).toBe('一。二。');
     unmount();
   });
@@ -167,7 +167,7 @@ describe('useAmadeusWS B1 liveness + audio degradation', () => {
 
     act(() => result.current.cancelTurn());
     // Partial content preserved, streaming ended synchronously.
-    const afterCancel = result.current.messages.find((m) => m.turnId === 't');
+    const afterCancel = result.current.messages.find((m) => m.role === 'assistant' && m.turnId === 't');
     expect(afterCancel?.streaming).toBe(false);
     expect(afterCancel?.content).toBe('一。');
 
@@ -182,7 +182,7 @@ describe('useAmadeusWS B1 liveness + audio degradation', () => {
 
     expect(socket.closeCalled).toBe(false);
     expect(result.current.status).not.toBe('ERROR');
-    expect(result.current.messages.find((m) => m.turnId === 't')?.streaming).toBe(false);
+    expect(result.current.messages.find((m) => m.role === 'assistant' && m.turnId === 't')?.streaming).toBe(false);
     expect(socket.sent.map((p) => JSON.parse(p).type)).toContain('turn.cancel');
     unmount();
   });

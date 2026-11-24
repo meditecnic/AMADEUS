@@ -8,16 +8,65 @@ import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
 const RECORDED_DELAY_MS = 1500;
-type HistoryMessage = { role: string; content: string; translation?: string };
+type HistoryMessage = { id?: number; turn_id?: string; role: string; content: string; translation?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
   provider_id: string; model_id: string; identity_mode: string; last_active_at: string; created_at: string;
   messages: HistoryMessage[];
 };
+type MockTurn = {
+  id: string;
+  worldline: 'steins_gate' | 'beta';
+  conversation: Conversation;
+  content: string;
+  queued: boolean;
+  generation?: number;
+  hidden?: boolean;
+  reported?: boolean;
+};
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const fail = (status: number, code: string): Reply => ok({ detail: { code } }, status);
 const worldlineOf = (value: unknown) => value === 'beta' ? 'beta' : 'steins_gate';
 const summary = ({ messages: _messages, ...conversation }: Conversation) => ({ ...conversation });
+
+/** Synthesize a tiny valid silent PCM WAV (mono 16-bit) as base64 for dev-mock replay. */
+function makeMockSilentWavBase64(durationSec = 0.8, sampleRate = 16000): string {
+  const numSamples = Math.round(sampleRate * durationSec);
+  const dataSize = numSamples * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buf);
+  const writeStr = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i += 1) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+const MOCK_WAV_B64 = makeMockSilentWavBase64(0.8);
+const SILENT_WAV_CACHE = new Map<number, string>();
+function replayWavFor(durationSec?: number): string {
+  if (!durationSec) return MOCK_WAV_B64;
+  let cached = SILENT_WAV_CACHE.get(durationSec);
+  if (!cached) {
+    cached = makeMockSilentWavBase64(durationSec, 8000);
+    SILENT_WAV_CACHE.set(durationSec, cached);
+  }
+  return cached;
+}
 
 export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) {
   const clients = new Map<string, {
@@ -27,6 +76,9 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     data: ReturnType<typeof createDataStore>;
     providers: ReturnType<typeof createProviderStore>;
     assetPack: ReturnType<typeof createAssetPackStore>;
+    busyConversations: Set<string>;
+    replayCache: Map<string, 'original' | 'synthesized'>;
+    nextMessageId: number;
   }>();
   let counter = 0;
 
@@ -42,6 +94,9 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
         assetPack: createAssetPackStore(options.assetPackMovable ?? true),
         // [210] the passcode lives with the client, so setting one on the system page holds at the next login
         data: createDataStore(scenarios[name].data, scenarios[name].login.passcodeSet ? scenarios[name].login.password : null),
+        busyConversations: new Set(),
+        replayCache: new Map(),
+        nextMessageId: 100,
       };
       clients.set(key, current);
     }
@@ -49,7 +104,8 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
   }
 
   function conversations(name: string, client: string, session: string, worldline: string) {
-    const scopes = state(name, client).conversations;
+    const clientState = state(name, client);
+    const scopes = clientState.conversations;
     const key = JSON.stringify([session, worldline]);
     let rows = scopes.get(key);
     if (!rows) {
@@ -59,7 +115,10 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
         model_id: row.model_id ?? model.id,
         // listed newest first: the first row was opened last
         created_at: new Date(Date.parse(fixedTime) - (index + 1) * 3_600_000).toISOString(),
-        messages: structuredClone(row.messages),
+        messages: structuredClone(row.messages).map((msg: HistoryMessage) => ({
+          ...msg,
+          id: msg.id ?? ++clientState.nextMessageId,
+        })),
       }));
       scopes.set(key, rows);
     }
@@ -178,10 +237,38 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
       }
       return fail(405, 'method_not_allowed');
     }
-    const match = path.match(/^\/api\/conversations\/([^/]+)(?:\/(messages|forget))?$/);
+    const replayMatch = path.match(/^\/api\/conversations\/([^/]+)\/messages\/(\d+)\/replay$/);
+    if (replayMatch && method === 'POST') {
+      const conversation = rows.find(row => row.id === replayMatch[1]);
+      if (!conversation) return fail(404, 'conversation_not_found');
+      const msgId = Number(replayMatch[2]);
+      const targetMsg = conversation.messages.find((msg) => msg.id === msgId);
+      if (!targetMsg || targetMsg.role !== 'assistant') return fail(404, 'message_not_found');
+      const replayWav = replayWavFor(scenario.replayDurationSec);
+      const cacheKey = `${conversation.id}:${msgId}`;
+      const existing = clientState.replayCache.get(cacheKey);
+      if (existing) {
+        return ok({ message_id: msgId, source: existing, cached: true, segments: [replayWav] });
+      }
+      clientState.replayCache.set(cacheKey, 'synthesized');
+      return { ...ok({ message_id: msgId, source: 'synthesized', cached: false, segments: [replayWav] }), delayMs: 120 };
+    }
+    const match = path.match(/^\/api\/conversations\/([^/]+)(?:\/(messages|forget|truncate))?$/);
     const conversation = rows.find(row => row.id === match?.[1]);
     if (!conversation || !match) return fail(404, 'conversation_not_found');
     if (match[2] === 'messages' && method === 'GET') return ok(structuredClone(conversation.messages));
+    if (match[2] === 'truncate' && method === 'POST') {
+      if (clientState.busyConversations.has(conversation.id)) return fail(409, 'conversation_busy');
+      const fromId = Number(body.from_message_id);
+      const expectedLastId = Number(body.expected_last_message_id);
+      const lastId = conversation.messages.length ? Number(conversation.messages[conversation.messages.length - 1].id ?? 0) : 0;
+      if (lastId !== expectedLastId) return fail(409, 'conversation_changed');
+      const cutIndex = conversation.messages.findIndex((msg) => msg.id === fromId);
+      if (cutIndex < 0 || conversation.messages[cutIndex].role !== 'user') return fail(422, 'invalid_truncate_point');
+      const removed = conversation.messages.splice(cutIndex);
+      removed.forEach((msg) => { if (msg.id) clientState.replayCache.delete(`${conversation.id}:${msg.id}`); });
+      return ok({ messages_deleted: removed.length, summaries_deleted: 0, core_facts_deleted: 0, episodic_deleted: 0 });
+    }
     const eraseConversationDiaries = (conversationId: string) => {
       for (const mode of ['self', 'okabe'] as const) {
         const memScope = clientState.memory.scope(JSON.stringify([session, worldline, mode]), worldline);
@@ -220,7 +307,7 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     const name = selectScenario(url, cookies);
     const scenario: Scenario = scenarios[name];
     const session = url.searchParams.get('session_id') || 'default';
-    let worldline = 'steins_gate';
+    let worldline: MockTurn['worldline'] = 'steins_gate';
     let conversationId: string | null = null;
     let identityMode = 'okabe';
     let authenticated = false;
@@ -228,7 +315,7 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     let selectedModel = model.id;
     let closed = false;
     let generation = 0;
-    let activeTurn: Frame | null = null;
+    const lanes = new Map<MockTurn['worldline'], MockTurn[]>();
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const lifecycleTimers = new Set<ReturnType<typeof setTimeout>>();
     const emit = (frame: Frame) => { if (!closed) send(frame); };
@@ -243,14 +330,95 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
       clearTimers();
       lifecycleTimers.forEach(clearTimeout);
       lifecycleTimers.clear();
-      activeTurn = null;
+      for (const lane of lanes.values()) {
+        for (const turn of lane) state(name, client).busyConversations.delete(turn.conversation.id);
+      }
+      lanes.clear();
     };
     const currentRows = () => conversations(name, client, session, worldline);
-    const cancel = () => {
-      clearTimers();
-      if (activeTurn) emit({ type: 'turn.cancelled', ...activeTurn });
-      activeTurn = null;
+    const scope = (turn: MockTurn) => ({
+      conversation_id: turn.conversation.id, turn_id: turn.id, generation: turn.generation,
+    });
+    const active = () => {
+      const turn = lanes.get(worldline)?.[0];
+      return turn?.generation !== undefined && turn.conversation.id === conversationId ? turn : undefined;
     };
+    const hide = () => {
+      const turn = active();
+      if (turn && !turn.hidden) {
+        turn.hidden = true;
+        publish(turn);
+      }
+    };
+    const publish = (turn: MockTurn) => {
+      const matching = (lanes.get(turn.worldline) ?? []).filter(item => item.conversation === turn.conversation);
+      const running = matching.some(item => item.generation !== undefined);
+      const queued = matching.filter(item => item.generation === undefined).map(item => item.id);
+      const id = turn.conversation.id;
+      const busy = state(name, client).busyConversations;
+      if (running || queued.length) busy.add(id);
+      else busy.delete(id);
+      if (turn.queued || turn.hidden || turn.reported) {
+        matching.forEach(item => { item.reported = true; });
+        emit({ type: 'conversation.turn_state', worldline: turn.worldline, conversation_id: id, running, queued });
+      }
+    };
+    const remove = (turn: MockTurn) => {
+      const lane = lanes.get(turn.worldline);
+      if (!lane?.includes(turn)) return;
+      lane.splice(lane.indexOf(turn), 1);
+      publish(turn);
+      const next = lane[0];
+      if (next && next.generation === undefined) start(next);
+    };
+
+    function start(turn: MockTurn) {
+      turn.generation = generation;
+      turn.hidden = worldline !== turn.worldline || conversationId !== turn.conversation.id;
+      publish(turn);
+      const clientState = state(name, client);
+      const userId = ++clientState.nextMessageId;
+      const assistant: HistoryMessage = { turn_id: turn.id, role: 'assistant', content: '', translation: '' };
+      turn.conversation.messages.push({ id: userId, turn_id: turn.id, role: 'user', content: turn.content });
+      if (!turn.hidden) emit({ type: 'turn.started', ...scope(turn) });
+      const running = () => lanes.get(turn.worldline)?.[0] === turn;
+      let elapsed = 0;
+      scenario.dialogue.sentences.forEach((sentence, segmentId) => {
+        elapsed += sentence.delayMs;
+        schedule(elapsed, () => {
+          if (!running()) return;
+          assistant.content += sentence.ja;
+          assistant.translation += sentence.zh;
+          if (!turn.hidden) {
+            emit({ type: 'segment.ready', ...scope(turn), segment_id: segmentId, ja: sentence.ja, zh: sentence.zh, emotion: sentence.emotion });
+          }
+        });
+      });
+      const memory = mockMemoryForTurn(turn.content, turn.worldline);
+      schedule(elapsed + scenario.dialogue.completionDelayMs, () => {
+        if (!running()) return;
+        assistant.id = ++clientState.nextMessageId;
+        turn.conversation.messages.push(assistant);
+        turn.conversation.last_active_at = new Date().toISOString();
+        if (turn.hidden) {
+          emit({ type: 'turn.history_saved', ...scope(turn) });
+        } else {
+          if (memory.referenced) emit({ type: 'memory.referenced', ...scope(turn), items: memory.referenced });
+          clientState.replayCache.set(`${turn.conversation.id}:${assistant.id}`, 'original');
+          emit({ type: 'turn.completed', ...scope(turn) });
+        }
+        remove(turn);
+        if (memory.recorded) {
+          schedule(RECORDED_DELAY_MS, () => {
+            if (conversationId !== turn.conversation.id || worldline !== turn.worldline) return;
+            emit({
+              type: 'memory.recorded', conversation_id: turn.conversation.id, turn_id: turn.id,
+              source_message_id: userId, changes: memory.recorded,
+            });
+          });
+        }
+      });
+    }
 
     function receive(frame: Frame) {
       if (closed) return;
@@ -288,35 +456,47 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
         if (frame.default_identity_mode === 'self' || frame.default_identity_mode === 'okabe') identityMode = frame.default_identity_mode;
         emit({ type: 'config_applied', reasoning_effort: frame.reasoning_effort ?? null });
       } else if (frame.type === 'conversation.switch') {
-        cancel();
         const target = currentRows().find(row => row.id === frame.conversation_id);
         if (!target) {
           emit({ type: 'conversation.switch_error', request_id: frame.request_id, conversation_id: frame.conversation_id, code: 'conversation_not_found' });
         } else {
+          hide();
           conversationId = target.id;
           emit({ type: 'conversation.switched', request_id: frame.request_id, conversation_id: conversationId, worldline, generation: ++generation });
         }
       } else if (frame.type === 'worldline.switch') {
-        cancel();
         const target = worldlineOf(frame.target_worldline);
         schedule(scenario.shift.delayMs, () => {
           if (scenario.shift.fail) {
             emit({ type: 'worldline.switch_error', request_id: frame.request_id, worldline: target, code: scenario.shift.code, message: scenario.shift.message });
           } else {
+            hide();
             worldline = target;
             conversationId = null;
             emit({ type: 'worldline.switched', request_id: frame.request_id, worldline, generation: ++generation });
           }
         });
       } else if (frame.type === 'turn.cancel') {
-        cancel();
-      } else if (frame.type === 'clear_history') {
-        cancel();
-        const conversation = currentRows().find(row => row.id === conversationId);
-        if (conversation) conversation.messages = [];
+        const turn = active();
+        if (!turn) return;
+        turn.conversation.messages.push({
+          id: ++state(name, client).nextMessageId, turn_id: turn.id, role: 'assistant',
+          content: '[EMO:disappointed] この質問は途中で止まった。もう一度送って。',
+          translation: '这一问中断了，没有收到回复。请再发一次。',
+        });
+        turn.conversation.last_active_at = new Date().toISOString();
+        emit({ type: 'turn.cancelled', ...scope(turn) });
+        emit({ type: 'turn.history_saved', ...scope(turn) });
+        remove(turn);
+      } else if (frame.type === 'turn.withdraw') {
+        for (const lane of lanes.values()) {
+          const turn = lane.find(item => item.id === frame.task_id && item.generation === undefined);
+          if (turn) remove(turn);
+        }
       } else if (frame.type === 'chat.send' && typeof frame.content === 'string' && frame.content.trim()) {
-        if (activeTurn || scenario.chatError) {
-          emit({ type: 'error', message: scenario.chatError || '上一问仍在生成。', recoverable: true });
+        const trimmed = frame.content.trim();
+        if (scenario.chatError && (!scenario.chatErrorTrigger || trimmed.includes(scenario.chatErrorTrigger))) {
+          emit({ type: 'error', message: scenario.chatError, recoverable: true });
           return;
         }
         let conversation = currentRows().find(row => row.id === conversationId);
@@ -326,34 +506,16 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
           currentRows().unshift(conversation);
           conversationId = conversation.id;
         }
-        const assistant: HistoryMessage = { role: 'assistant', content: '', translation: '' };
-        conversation.messages.push({ role: 'user', content: frame.content.trim() }, assistant);
-        activeTurn = { turn_id: `mock-turn-${++counter}`, generation: ++generation, conversation_id: conversationId };
-        const turn = activeTurn;
-        emit({ type: 'turn.started', ...turn });
-        let elapsed = 0;
-        scenario.dialogue.sentences.forEach((sentence, segmentId) => {
-          elapsed += sentence.delayMs;
-          schedule(elapsed, () => {
-            assistant.content += sentence.ja;
-            assistant.translation += sentence.zh;
-            emit({ type: 'segment.ready', ...turn, segment_id: segmentId, ja: sentence.ja, zh: sentence.zh, emotion: sentence.emotion });
-          });
-        });
-        const memory = mockMemoryForTurn(frame.content, worldline);
-        schedule(elapsed + scenario.dialogue.completionDelayMs, () => {
-          if (memory.referenced) emit({ type: 'memory.referenced', ...turn, items: memory.referenced });
-          emit({ type: 'turn.completed', ...turn });
-          activeTurn = null;
-        });
-        // Ingestion runs after the reply, like the real job; a cancel or switch before it fires drops it.
-        if (memory.recorded) {
-          schedule(elapsed + scenario.dialogue.completionDelayMs + RECORDED_DELAY_MS, () => {
-            emit({
-              type: 'memory.recorded', conversation_id: turn.conversation_id, turn_id: turn.turn_id,
-              source_message_id: counter, changes: memory.recorded,
-            });
-          });
+        const lane = lanes.get(worldline) ?? [];
+        lanes.set(worldline, lane);
+        const queued = lane.length > 0;
+        const turn = { id: `mock-turn-${++counter}`, worldline, conversation, content: frame.content.trim(), queued };
+        lane.push(turn);
+        if (queued) {
+          emit({ type: 'turn.accepted', task_id: turn.id, conversation_id: conversation.id, worldline, queued });
+          publish(turn);
+        } else {
+          start(turn);
         }
       }
       // voice.stop / tts_debug intentionally emit no audio in this silent mock.

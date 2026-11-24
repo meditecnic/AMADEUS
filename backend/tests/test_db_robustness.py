@@ -260,17 +260,17 @@ async def test_abnormal_disconnect_cleanup(setup_test_db):
 
             session_state = sessions.get(session_id)
             assert session_state is not None
-            assert session_state.is_busy is True
-            assert session_state.active_task is not None
-            assert not session_state.active_task.done()
+            turn = session_state.turn_queue.active()
+            assert turn is not None and turn.state.is_busy is True
+            assert not turn.task.done()
         finally:
             ws.closed = True
             await ws.recv_queue.put(None)
             await asyncio.wait_for(endpoint_task, timeout=5)
         
         # Verify tasks are cancelled and cleaned up
-        assert session_state.is_busy is False
-        assert session_state.active_task is None or session_state.active_task.done()
+        assert not session_state.turn_queue.turns()
+        assert turn.task.done() and turn.state.is_busy is False
         assert stream_cancelled.is_set()
         
         # Verify database lock is free (all connections closed)

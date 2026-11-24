@@ -78,6 +78,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         await _reject_voice(websocket, "invalid_worldline", "Unsupported worldline")
         return
     from app.routers.chat_ws import SessionState, process_queued_turn, sessions, sessions_creation_lock
+    from app.services.conversation_admission import session_admission
     async with sessions_creation_lock:
         session = sessions.setdefault(session_id, SessionState(session_id))
     session.worldline = worldline
@@ -129,12 +130,14 @@ async def websocket_voice_endpoint(websocket: WebSocket):
             identity_mode=getattr(session, "identity_mode", "okabe"),
         )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
-        if text and not session.is_busy and not session.erasure_pending:
-            session.is_busy = True
-            session.active_task = asyncio.create_task(
-                process_queued_turn(session, text, send_queue, session.current_epoch, session.history_epoch)
-            )
-            session.active_task_connection_id = connection_id
+        async with session_admission(session):
+            if (text and not session.is_busy and not session.erasure_pending
+                    and not session.turn_queue.turns(session.worldline)):
+                session.is_busy = True
+                session.active_task = asyncio.create_task(
+                    process_queued_turn(session, text, send_queue, session.current_epoch, session.history_epoch)
+                )
+                session.active_task_connection_id = connection_id
 
     async def vad_monitor():
         nonlocal last_speech_at

@@ -59,8 +59,15 @@ function StarReading(props: {
   const lines = saidLines(details);
   const payload = details.type === 'ok' ? details.payload : null;
   const herText = payload ? ('fact' in payload ? payload.fact.display_text : payload.experience.display_text) : null;
-  const version = payload && 'fact' in payload && payload.versions.length > 1
-    ? { count: payload.versions.length, active: payload.fact.active_version } : null;
+  const activeVersionRow = payload && 'fact' in payload
+    ? payload.versions.find((v) => v.is_active) ?? payload.versions[payload.versions.length - 1] ?? null
+    : null;
+  const restoredFromVersion =
+    activeVersionRow && typeof activeVersionRow.restored_from_version === 'number'
+      ? activeVersionRow.restored_from_version
+      : null;
+  const version = payload && 'fact' in payload && (payload.versions.length > 1 || restoredFromVersion !== null)
+    ? { count: payload.versions.length, active: payload.fact.active_version, restoredFrom: restoredFromVersion } : null;
   return (
     <>
       <p className="r-kick" data-testid="reading-kick">{kick} · <b>{props.zone}</b></p>
@@ -96,7 +103,16 @@ function StarReading(props: {
                 ? <><dt>时效</dt><dd className="zh">{star.pinned ? '已置顶，不会淡去' : `${md(star.expiresAt!)} 后淡去`}</dd></>
                 : null
             ) : <><dt>你提过</dt><dd>{star.evidenceCount} 次</dd></>}
-            {version ? <><dt>版本</dt><dd className="zh">改过 {version.count - 1} 次 · 现在是第 {version.active} 版</dd></> : null}
+            {version ? (
+              <>
+                <dt>版本</dt>
+                <dd className="zh">
+                  {version.restoredFrom !== null
+                    ? `回退对话后已恢复（第 ${version.active} 版）`
+                    : `改过 ${version.count - 1} 次 · 现在是第 ${version.active} 版`}
+                </dd>
+              </>
+            ) : null}
             {star.pinned ? <><dt>置顶</dt><dd className="zh">是</dd></> : null}
           </dl>
         </>

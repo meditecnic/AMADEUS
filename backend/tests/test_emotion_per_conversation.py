@@ -33,7 +33,7 @@ def _send_turn(ws, content: str) -> list[dict]:
     while True:
         frame = ws.receive_json()
         frames.append(frame)
-        if frame.get("type") in {"turn.completed", "error"}:
+        if frame["type"] in {"turn.completed", "error"}:
             return frames
 
 

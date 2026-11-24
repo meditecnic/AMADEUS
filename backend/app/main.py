@@ -79,6 +79,8 @@ async def lifespan(app: FastAPI):
     from app.services.conversation_erasure import resume_erasures
     for worldline in ('steins_gate', 'beta'):
         await resume_erasures(worldline=worldline)
+    from app.services.voice_cache import cleanup_orphan_voice_cache
+    await cleanup_orphan_voice_cache()
     from app.services.provider_runtime import restore_custom_provider_configuration
     await restore_custom_provider_configuration()
     soul_engine.load_profiles()

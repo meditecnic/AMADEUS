@@ -297,14 +297,18 @@ async def test_aborted_turn_notice_is_held_when_the_shield_is_interrupted(
     with pytest.raises(asyncio.CancelledError):
         await processor
 
-    gc.collect()
     notice = running["notice"]
-    assert not notice.done()
-    assert notice in session.background_tasks, "the session must keep the notice alive"
-    assert notice.get_name().startswith("chat-bg:") and "gated_persist" in notice.get_name()
-
-    release.set()
-    await asyncio.wait_for(notice, 2)
+    try:
+        gc.collect()
+        assert not notice.done()
+        assert notice in session.background_tasks, "the session must keep the notice alive"
+        pending_rows = await models.get_recent_messages(
+            session.session_id, worldline=SG, conversation_id=session.conversation_id
+        )
+        assert [(row["role"], row["content"]) for row in pending_rows] == [("user", user_msg)]
+    finally:
+        release.set()
+        await asyncio.wait_for(notice, 2)
     await asyncio.sleep(0)
     assert notice not in session.background_tasks, "finished tasks are released"
 

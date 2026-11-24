@@ -1,3 +1,4 @@
+import { resolveTruncateTarget } from '../workstation/MessageMenu';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -63,6 +64,109 @@ describe('useAmadeusWS v2', () => {
     FakeWebSocket.instances = [];
     vi.unstubAllGlobals();
     localStorage.clear();
+  });
+
+  it('uses persisted turn identity after a rejected send, cancellation, and overlapping history responses', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onTurnHistorySaved = vi.fn();
+    const rejectedAccepted = vi.fn();
+    const h = renderHook(() => useAmadeusWS({ ...params, onTurnHistorySaved } as UseAmadeusWSParams));
+    const socket = FakeWebSocket.instances[0];
+    const conversation_id = 'conversation-one';
+    act(() => socket.onopen?.());
+    act(() => socket.emit({ type: 'session.ready', conversation_id, worldline: 'steins_gate', generation: 1 }));
+    const send = h.result.current.sendChat as (text: string, onAccepted?: () => void) => boolean;
+    act(() => send('rejected question', rejectedAccepted));
+    act(() => socket.emit({ type: 'error', code: 'message_too_long', recoverable: true, message: 'too long' }));
+    act(() => send('stopped question'));
+    act(() => socket.emit({ type: 'turn.started', conversation_id, turn_id: 'stopped', generation: 2 }));
+    act(() => h.result.current.cancelTurn());
+    act(() => socket.emit({ type: 'turn.cancelled', conversation_id, turn_id: 'stopped', generation: 2 }));
+    expect(onTurnHistorySaved).not.toHaveBeenCalled();
+    act(() => socket.emit({ type: 'turn.history_saved', conversation_id, turn_id: 'stopped', generation: 2 }));
+    expect(onTurnHistorySaved).toHaveBeenCalledWith(conversation_id);
+
+    act(() => send('new question'));
+    act(() => socket.emit({ type: 'status', state: 'cancelled', dsk: 'idle', tts: 'idle' }));
+    act(() => socket.emit({ type: 'turn.started', conversation_id, turn_id: 'new', generation: 3 }));
+    const stoppedRows = [
+      { id: 2, role: 'user', turn_id: 'stopped', content: 'stopped question' },
+      { id: 3, role: 'assistant', turn_id: 'stopped', content: '中断。', translation: '已停止。' },
+    ];
+    const allRows = [...stoppedRows,
+      { id: 4, role: 'user', turn_id: 'new', content: 'new question' },
+      { id: 5, role: 'assistant', turn_id: 'new', content: '新しい。' },
+    ];
+    act(() => socket.emit({ type: 'segment.ready', conversation_id, turn_id: 'new', generation: 3, segment_id: 0, ja: '新しい。', zh: '' }));
+    act(() => socket.emit({ type: 'turn.completed', conversation_id, turn_id: 'new', generation: 3 }));
+    act(() => h.result.current.hydrateMessageIds!(allRows));
+    act(() => h.result.current.hydrateMessageIds!(stoppedRows));
+    const messages = h.result.current.messages;
+    const user = (content: string) => messages.find((m) => m.role === 'user' && m.content === content)!;
+    expect(rejectedAccepted).not.toHaveBeenCalled();
+    expect(user('rejected question').dbId).toBeUndefined();
+    expect(resolveTruncateTarget(messages, user('rejected question').id, 'rollback')).toBeNull();
+    expect(resolveTruncateTarget(messages, user('stopped question').id, 'edit')).toMatchObject({
+      fromMessageId: 2, expectedLastMessageId: 5, deletedTurns: 2,
+    });
+    expect(user('new question').dbId).toBe(4);
+    expect(messages.find((m) => m.role === 'assistant' && m.turnId === 'stopped')).toMatchObject({
+      dbId: 3, content: '中断。', translation: '已停止。',
+    });
+    h.unmount();
+  });
+
+  it('leaves the assistant ID unset when two history rows share its turn and role', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+    const turn = { conversation_id: 'conversation-one', turn_id: 'ambiguous-turn', generation: 2 };
+    act(() => socket.onopen?.());
+    act(() => socket.emit({ type: 'session.ready', conversation_id: turn.conversation_id, worldline: 'steins_gate', generation: 1 }));
+    act(() => result.current.sendChat('one question'));
+    act(() => socket.emit({ type: 'turn.started', ...turn }));
+    act(() => socket.emit({ type: 'segment.ready', ...turn, segment_id: 0, ja: '答え。', zh: '' }));
+    act(() => socket.emit({ type: 'turn.completed', ...turn }));
+    act(() => result.current.hydrateMessageIds!([
+      { id: 1, role: 'user', turn_id: turn.turn_id, content: 'one question' },
+      { id: 2, role: 'assistant', turn_id: turn.turn_id, content: '答え。' },
+      { id: 3, role: 'assistant', turn_id: turn.turn_id, content: '別の答え。' },
+    ]));
+    expect(result.current.messages).toHaveLength(2);
+    const [user, assistant] = result.current.messages;
+    expect(user).toMatchObject({ role: 'user', dbId: 1, content: 'one question' });
+    expect(assistant.dbId).toBeUndefined();
+    expect(assistant).toMatchObject({ role: 'assistant', content: '答え。' });
+    unmount();
+  });
+
+  it('invokes sendChat onRejected on server error or close before turn.started, and not after acceptance', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.onopen?.());
+    act(() => socket.emit({ type: 'session.ready', conversation_id: 'conversation-one', worldline: 'steins_gate', generation: 1 }));
+
+    const onAcceptedErr = vi.fn();
+    const onRejectedErr = vi.fn();
+    act(() => result.current.sendChat('rejected-by-server', onAcceptedErr, onRejectedErr));
+    act(() => socket.emit({ type: 'error', code: 'busy', recoverable: true, message: 'busy' }));
+    expect(onRejectedErr).toHaveBeenCalledOnce();
+    expect(onAcceptedErr).not.toHaveBeenCalled();
+
+    const onAcceptedOk = vi.fn();
+    const onRejectedOk = vi.fn();
+    act(() => result.current.sendChat('accepted-turn', onAcceptedOk, onRejectedOk));
+    act(() => socket.emit({ type: 'turn.started', conversation_id: 'conversation-one', turn_id: 'ok-1', generation: 2 }));
+    act(() => socket.emit({ type: 'error', code: 'turn_failed', recoverable: true, message: 'boom' }));
+    expect(onAcceptedOk).toHaveBeenCalledOnce();
+    expect(onRejectedOk).not.toHaveBeenCalled();
+
+    const onRejectedClose = vi.fn();
+    act(() => result.current.sendChat('dropped-before-start', undefined, onRejectedClose));
+    act(() => socket.onclose?.({ code: 1006 }));
+    expect(onRejectedClose).toHaveBeenCalledOnce();
+    unmount();
   });
 
   it('authenticates a fresh workstation in draft mode without activating history', () => {
@@ -645,7 +749,7 @@ describe('useAmadeusWS v2', () => {
       socket.emit({ type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 3, segment_id: 2, ja: '迟到', zh: '迟到', emotion: 'neutral' });
     });
 
-    const assistant = result.current.messages.find((message) => message.turnId === 't');
+    const assistant = result.current.messages.find((message) => message.role === 'assistant' && message.turnId === 't');
     expect(assistant?.content).toBe('一。二。');
     expect(assistant?.translation).toBe('一。二。');
     unmount();
@@ -772,7 +876,7 @@ describe('useAmadeusWS v2', () => {
       });
     });
 
-    const assistant = result.current.messages.find((message) => message.turnId === 't');
+    const assistant = result.current.messages.find((message) => message.role === 'assistant' && message.turnId === 't');
     expect(assistant?.translation).toBe('完整译文。');
     expect(assistant).toMatchObject({ translationScope: 'turn' });
     expect(assistant?.segments?.[0].zh).toBe('');
@@ -949,7 +1053,7 @@ describe('useAmadeusWS v2', () => {
 
     expect(result.current.isThinking).toBe(false);
     expect(result.current.isSynthesizing).toBe(false);
-    expect(result.current.messages.find((message) => message.turnId === 't')?.streaming).toBe(false);
+    expect(result.current.messages.find((message) => message.role === 'assistant' && message.turnId === 't')?.streaming).toBe(false);
     unmount();
   });
 });

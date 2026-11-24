@@ -1,0 +1,44 @@
+{
+  "name": "rollback",
+  "extends": "streaming",
+  "description": "Multi-turn SG histories, sustained silent replay, and targeted send failure for rollback journey validation.",
+  "conversations": [
+    {
+      "id": "rollback-main",
+      "worldline": "steins_gate",
+      "title": "回滚旅程主会话",
+      "identity_mode": "okabe",
+      "messages": [
+        { "role": "user", "content": "第一轮：确认基准记录。" },
+        { "role": "assistant", "content": "一回目の観測を記録したわ。", "translation": "第一轮观测已经记下了。" },
+        { "role": "user", "content": "第二轮：这条稍后会被改写。" },
+        { "role": "assistant", "content": "二回目の仮説を仮置きするわ。", "translation": "先把第二轮假设暂存下来。" },
+        { "role": "user", "content": "第三轮：这条会被回滚删掉。" },
+        { "role": "assistant", "content": "三回目の結果は破棄対象よ。", "translation": "第三轮结果属于待回滚内容。" }
+      ]
+    },
+    {
+      "id": "rollback-busy",
+      "worldline": "steins_gate",
+      "title": "回滚忙态验证",
+      "identity_mode": "okabe",
+      "messages": [
+        { "role": "user", "content": "忙态第一轮：保持不动。" },
+        { "role": "assistant", "content": "最初の前提はそのまま残すわ。", "translation": "最初的前提原样保留。" },
+        { "role": "user", "content": "忙态第二轮：忙时不能被删。" },
+        { "role": "assistant", "content": "応答中は消させないわよ。", "translation": "回复进行中可不能删掉。" }
+      ]
+    }
+  ],
+  "dialogue": {
+    "sentences": [
+      { "ja": "接続は安定しているわ。", "zh": "连接很稳定。", "emotion": "neutral", "delayMs": 900 },
+      { "ja": "まず、観測したことを一つずつ記録しましょう。", "zh": "先把观测到的事情逐一记下来吧。", "emotion": "intellectual", "delayMs": 1400 },
+      { "ja": "結論を急がずに、次の結果を待つの。", "zh": "别急着下结论，等下一次结果。", "emotion": "happy", "delayMs": 1400 }
+    ],
+    "completionDelayMs": 500
+  },
+  "chatError": "模拟发送失败：通道暂时不可用。",
+  "chatErrorTrigger": "[MOCK_SEND_FAIL]",
+  "replayDurationSec": 8
+}

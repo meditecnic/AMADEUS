@@ -37,6 +37,10 @@ _ATOMIC_REQUEST_PREFIX = "v17:"
 _OPTIMISTIC_ATTEMPTS = 3
 
 
+class TruncateError(Exception):
+    pass
+
+
 @dataclass
 class FactRecompute:
     fact_id: str
@@ -49,15 +53,28 @@ class FactRecompute:
 
 
 async def request_erasure(*, session_id: str, identity_mode: str, worldline: str,
-                          conversation_id: str, action: str, forget_long_term: bool) -> dict[str, int]:
+                          conversation_id: str, action: str, forget_long_term: bool,
+                          cutoff: tuple[int, int] | None = None) -> dict[str, int]:
     await resume_erasures(worldline=worldline, session_id=session_id, conversation_id=conversation_id)
     history = await get_db(worldline, 'history')
     try:
+        point = cutoff[0] if cutoff else 0
+        scope = (session_id, conversation_id)
+        await history.execute('BEGIN')
         rows = await (await history.execute(
-            'SELECT id FROM messages WHERE session_id=? AND conversation_id=?',
-            (session_id, conversation_id),
+            'SELECT id,role FROM messages WHERE session_id=? AND conversation_id=? AND id>=? ORDER BY id',
+            (*scope, point),
         )).fetchall()
         history_ids = {int(row['id']) for row in rows}
+        if cutoff:
+            last_retained = await (await history.execute(
+                'SELECT MAX(id) FROM messages WHERE session_id=? AND conversation_id=? AND id<?',
+                (*scope, point),
+            )).fetchone()
+            if (rows[-1]['id'] if rows else last_retained[0]) != cutoff[1]:
+                raise TruncateError('conversation_changed')
+            if not rows or rows[0]['id'] != point or rows[0]['role'] != 'user':
+                raise TruncateError('invalid_truncate_point')
     finally:
         await history.close()
 
@@ -65,9 +82,47 @@ async def request_erasure(*, session_id: str, identity_mode: str, worldline: str
                    identity_mode=identity_mode, conversation_id=conversation_id,
                    action=action, forget_long_term=int(forget_long_term),
                    state='pending', created_at=datetime.now(timezone.utc).isoformat(),
-                   cutoff_message_id=None)
-    counts = await _commit_erasure_memory(request, worldline, history_ids=history_ids)
+                   cutoff_message_id=point if cutoff else None)
+    if cutoff:
+        request['last_retained_message_id'] = last_retained[0]
+        request['source_message_ids'] = json.dumps(sorted(history_ids))
+        counts = await _commit_erasure_memory(request, worldline)
+    else:
+        counts = await _commit_erasure_memory(request, worldline, history_ids=history_ids)
     return {**await _finish_erasure(request, worldline), **counts}
+
+
+async def history_erasure_cursor(worldline: str, session_id: str, conversation_id: str) -> int:
+    db = await get_db(worldline, "memory")
+    try:
+        row = await (await db.execute(
+            """SELECT COALESCE(MAX(rowid),0) FROM conversation_erasure_requests
+               WHERE session_id=? AND conversation_id=?""",
+            (session_id, conversation_id),
+        )).fetchone()
+        return int(row[0])
+    finally:
+        await db.close()
+
+
+async def truncate_cursor(db, *, session_id, identity_mode, conversation_id) -> int:
+    row = await (await db.execute(
+        """SELECT COALESCE(MAX(rowid),0) FROM conversation_erasure_requests
+           WHERE session_id=? AND identity_mode=? AND conversation_id=? AND cutoff_message_id IS NOT NULL""",
+        (session_id, identity_mode, conversation_id),
+    )).fetchone()
+    return int(row[0])
+
+
+async def validate_ingest_sources(db, *, session_id, identity_mode, conversation_id,
+                                  source_message_ids, expected_truncate=None) -> None:
+    from app.services.memory_v11.contracts import MemoryValidationError
+
+    scope = dict(session_id=session_id, identity_mode=identity_mode, conversation_id=conversation_id)
+    if await sources_erased(db, **scope, source_message_ids=source_message_ids):
+        raise MemoryValidationError('source_erased', 'source history has been erased')
+    if expected_truncate is not None and await truncate_cursor(db, **scope) != expected_truncate:
+        raise MemoryValidationError('conversation_truncated', 'conversation was truncated during extraction')
 
 
 async def _whole_conversation_sources(db, request, history_ids):
@@ -267,7 +322,7 @@ async def _record_erasure(db, request):
            VALUES(:request_id,:session_id,:identity_mode,:conversation_id,:action,:forget_long_term,
                   :source_message_ids,:state,:created_at,:cutoff_message_id)""", request,
     )
-    await erase_conversation_diaries(db, request)
+    discarded_diaries = await erase_conversation_diaries(db, request)
     await db.execute(
         """UPDATE memory_ingest_jobs SET state='cancelled', retryable=0,
            lease_owner=NULL, lease_expires_at=NULL, next_attempt_at=NULL,
@@ -275,10 +330,11 @@ async def _record_erasure(db, request):
            WHERE session_id=? AND identity_mode=? AND conversation_id=?
              AND state IN ('pending','processing','failed')
              AND (?='delete' OR source_message_id IN (SELECT value FROM json_each(?))
+                  OR job_id IN (SELECT value FROM json_each(?))
                   OR EXISTS (SELECT 1 FROM memory_diaries d
                              WHERE d.diary_id=memory_ingest_jobs.job_id AND d.state='discarded'))""",
         (request['created_at'], request['session_id'], request['identity_mode'], request['conversation_id'],
-         request['action'], request['source_message_ids']),
+         request['action'], request['source_message_ids'], json.dumps(discarded_diaries)),
     )
 
 
@@ -358,8 +414,16 @@ async def _commit_erasure_memory(request, worldline, *, history_ids: set[int] | 
         await db.close()
 
 
+async def remove_truncated_audio(worldline: str, conversation_id: str, message_ids: list[int]) -> None:
+    """Post-commit hook for removing audio associated with the frozen message IDs."""
+    from app.services.voice_cache import remove_conversation_audio
+
+    await remove_conversation_audio(conversation_id, message_ids)
+
+
 async def _finish_erasure(request: dict, worldline: str) -> dict[str, int]:
     counts = await _erase_history(request, worldline)
+    await remove_truncated_audio(worldline, request['conversation_id'], json.loads(request['source_message_ids']))
     db = await get_db(worldline, 'memory')
     try:
         await db.execute("UPDATE conversation_erasure_requests SET state='completed' WHERE request_id=?", (request['request_id'],))
@@ -392,6 +456,14 @@ async def _erase_history(request: dict, worldline: str) -> dict[str, int]:
         if request['action'] == 'delete':
             await db.execute('DELETE FROM conversations WHERE id=? AND session_id=?',
                              (request['conversation_id'], request['session_id']))
+        elif request.get('cutoff_message_id') is not None:
+            from app.services.conversations import DEFAULT_CONVERSATION_TITLE, NEW_CONVERSATION_TITLE
+            await db.execute(
+                """UPDATE conversations SET title=CASE WHEN is_default THEN ? ELSE ? END,updated_at=?
+                   WHERE id=? AND session_id=? AND title_source='auto'""",
+                (DEFAULT_CONVERSATION_TITLE, NEW_CONVERSATION_TITLE, request['created_at'],
+                 request['conversation_id'], request['session_id']),
+            )
         await db.execute('INSERT INTO conversation_erasure_commits(request_id) VALUES(?)', (request['request_id'],))
         await db.commit()
         return {'messages_deleted': max(0, messages.rowcount), 'summaries_deleted': max(0, summaries.rowcount)}

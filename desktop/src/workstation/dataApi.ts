@@ -166,7 +166,7 @@ export type DataLocationMoveResult = {
   path: string;
 };
 export type DiskCategory =
-  | 'conversations_memory' | 'voice_models' | 'speech_models' | 'embedding_models' | 'asset_pack'
+  | 'conversations_memory' | 'voice_models' | 'voice_cache' | 'speech_models' | 'embedding_models' | 'asset_pack'
   | 'pi_components' | 'logs' | 'backups' | 'other';
 export type DiskUsage = { categories: Partial<Record<DiskCategory, number>>; total_bytes: number };
 export const dataLocation = () => json<DataLocation>('/api/data/location');

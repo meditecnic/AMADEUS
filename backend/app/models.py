@@ -41,7 +41,7 @@ async def save_message(
         cur = await db.execute(
             """INSERT INTO messages(
                    session_id,conversation_id,role,content,translation,turn_id,revision
-               ) VALUES(?,?,?,?,?,?,?)""",
+                 ) VALUES(?,?,?,?,?,?,?)""",
             (session_id, cid, role, content, translation, turn_id, revision),
         )
         await db.commit()
@@ -107,7 +107,7 @@ async def get_session_messages(
     db = await get_db(wl, "history")
     try:
         cur = await db.execute(
-            """SELECT conversation_id,role,content,translation,created_at,turn_id,revision
+            """SELECT id,conversation_id,role,content,translation,created_at,turn_id,revision
                FROM messages WHERE session_id=? AND conversation_id=? ORDER BY id""",
             (session_id, cid),
         )

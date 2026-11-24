@@ -41,8 +41,8 @@ def abort():
     _event.clear()
 
 
-async def run_in_thread(function, *args):
-    """Keep the executor future until work finishes, even if its caller cancels."""
+def submit_thread_work(function, *args):
+    """Register a filesystem job so relocation can drain its executor future."""
     work = asyncio.get_running_loop().run_in_executor(None, contextvars.copy_context().run, function, *args)
     _thread_work.add(work)
 
@@ -52,6 +52,12 @@ async def run_in_thread(function, *args):
             done.exception()
 
     work.add_done_callback(finished)
+    return work
+
+
+async def run_in_thread(function, *args):
+    """Keep the executor future until work finishes, even if its caller cancels."""
+    work = submit_thread_work(function, *args)
     # Cancelling asyncio.wait cancels only its waiter, not the actual executor work.
     await asyncio.wait({work})
     return work.result()
@@ -82,9 +88,8 @@ async def drain(request_task):
     pending = [finished for task, finished in _tasks.items() if task is not current]
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
-    from app.routers.chat_ws import sessions
-    active = [session.active_task for session in sessions.values()
-              if session.active_task is not None and not session.active_task.done()]
+    from app.routers.chat_ws import active_chat_tasks, sessions
+    active = active_chat_tasks()
     if active:
         await asyncio.gather(*active, return_exceptions=True)
     pending = [task for session in sessions.values() for task in session.background_tasks if not task.done()]
