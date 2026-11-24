@@ -1,8 +1,8 @@
 # AMADEUS
 
-**一个可以在自己电脑上和牧濑红莉栖说话的桌面应用。**
+**我做了一个可以在自己电脑上和牧濑红莉栖说话的桌面应用。**
 
-她使用日语回答，屏幕上同时有中文字幕。她会记住你们聊过的事，能看得见，也能让她忘掉。（Amadeus 的人格设定基本上就是参考官方小说和相关资料）本项目共有两条世界线：**STEINS;GATE** 和 **β**。两边的对话、记忆互不相通，界面也各是各的样子。（sg 线相当于是架空的，在现实中红莉栖还活着的情况下，诞生的 Amadeus；加了些设定，你在 sg 线提到真实红莉栖，Amadeus 还会争风吃醋。）
+她用日语回你，屏幕上同步出中文字幕。聊过的事她会记下来，你能翻出来看，也能让她忘掉。（Amadeus 的人格设定基本上就是参考官方小说和相关资料）里面做了两条世界线：**STEINS;GATE** 和 **β**。两边各自聊各自的、记各自的，界面也完全是两套样子。（sg 线相当于是架空的，在现实中红莉栖还活着的情况下，诞生的 Amadeus；加了些设定，你在 sg 线提到真实红莉栖，Amadeus 还会争风吃醋。）
 
 这是一个非官方、非商业的粉丝作品，和官方没有任何关系，仓库里也不包含任何原作素材。 · [English](#english) · [日本語](#日本語)
 
@@ -13,24 +13,22 @@
 | ![SG worldline chat](assets/screenshots/sg-chat.png) | ![β worldline chat](assets/screenshots/beta-chat.png) |
 | ![Worldline shift transition](assets/screenshots/worldline-shift.png) | ![Memory star map](assets/screenshots/memory-star-map.png) |
 
-*截图是没放原作素材包时截的，所以舞台上是自制的占位画面，记忆星图里是测试数据。*
+*截图是没放原作素材包时截的，所以舞台上是自制的占位画面，记忆星图里填的也是测试数据。*
 
 ## 现在做到哪了
 
-从 6 月中旬开始，做了大约五个月。
+从 6 月中旬动手到现在，前前后后做了大约五个月。**Windows 安装包已经打出来了**，我拿一台干净的 Windows Server 2022 虚拟机把安装、对话、记忆、重启、卸载保留数据这套 10 项验收完整跑过了一遍。现在每次打包，CI 也会在干净的 Windows 上自动装一遍、查一遍。v0.1.0 还在做最后的发版准备，暂时还没公开发布。
 
-**Windows 安装包已经打出来了**，在一台干净的 Windows Server 2022 虚拟机上跑过完整的 10 项验收（安装、对话、记忆、重启、卸载保留数据这些）。现在每次打包，CI 也会在干净的 Windows 上自动装一遍、查一遍。v0.1.0 正在做最后的准备，还没公开发布。
+目前能用的东西差不多是这些：
 
-现在能用的：
+- 日语对话配中文字幕——回复一句一句流出来，每句日语配一句中文。翻译慢一点没关系，不会卡住正文，漏翻了也会直接标出来。
+- 长期记忆全存在你自己电脑上。她记了什么，进档案页都能看、能改、能删，想直观一点也可以去记忆星图里逛一逛。清空某段对话的时候，可以把只属于那段对话的记忆一并抹掉。
+- **STEINS;GATE** 和 **β** 两条世界线各有各的人格、会话、记忆和界面风格，对话和记忆分开存（模型连接设置两边共用）。在右上角「**系统 → 世界线**」就能切，两边聊着的会话和没发出去的草稿都会留着。跃迁动画看腻了，点一下或者按 Esc 就能跳过。
+- 模型自己选着接就行：DeepSeek、智谱 GLM，或者任何兼容 OpenAI 接口的服务（本地跑的也行）。想联网搜索的话，可以配 Tavily 或 Firecrawl。
+- 想听她开口说话也行，接上本机的 GPT-SoVITS 就能念出来，配法写在后面的「[语音](#语音可选)」。
+- 所有服务都只监听本机回环地址。聊天内容只发给你自己配的模型服务，只有在你开了联网搜索时，搜索词才会发给你选的搜索服务。
 
-- **日语对话 + 中文字幕**：回复一句一句流出来，每句日语配一句中文。翻译慢了不会卡住正文，漏翻了会标出来。
-- **长期记忆**：存在你自己电脑上。她记了什么，在档案页里都能看、能改、能删，也能在记忆星图里整个逛一逛；清空某段对话时，可以把只属于那段对话的记忆一起抹掉。
-- **两条世界线**：**STEINS;GATE** 和 **β** 各有各的人格、会话、记忆和界面风格，对话和记忆分开存（模型连接设置两边共用）。在右上角「**系统 → 世界线**」切换，两边的会话和没发出去的草稿都会留着；跃迁动画不想看，点一下或按 Esc 就能跳过。
-- **用你自己的模型**：DeepSeek、智谱 GLM，或者任何兼容 OpenAI 接口的服务（本地跑的也行）。联网搜索可选 Tavily 或 Firecrawl。
-- **红莉栖的声音（可选）**：用本机的 GPT-SoVITS 念出来，见「[语音](#语音可选)」。
-- **只在本机跑**：服务只监听本机回环地址。对话内容只发给你自己配的模型服务；开了联网搜索的话，搜索词会发给你选的搜索服务。
-
-以后还会做英文和日文界面。不管哪种界面她都说日语：英文界面配英文字幕，日文界面就不显示字幕了。
+英文和日文界面后面也会补上。不过不管切到哪种界面她都说日语：英文界面配英文字幕，日文界面就干脆不显示字幕了。
 
 ## 技术细节
 
@@ -55,30 +53,31 @@ flowchart LR
   WS --> TTS --> Sovits
 ```
 
-- **一轮对话**：前端通过 WebSocket 把你的话发给后端；后端取出当前世界线的常驻事实、和这句话对得上的事实以及相关的过往经历，编进人格提示词，再流式请求日语回复。用 DeepSeek 时，模型觉得要翻旧事，会调 `recall_memory` 工具把其余的事实找出来，再生成一遍。每句日语一写完就推给前端，字幕和语音各走各的队列，所以翻译慢了不拖正文，字幕晚到的话会在这一轮结束后补上。
-- **记忆**：事实和经历存在本机 SQLite，写入时用 `jina-embeddings-v5-text-nano-retrieval`（768 维）建向量索引；嵌入模型加载失败时退回关键词检索，聊天不受影响。
-- **召回实测**：接真实模型（`deepseek-flash`）的端到端测试里，12 道要用到旧事实的题全都调了记忆，4 道不需要的对照题一次也没误调。只代表那套题和那次的环境。
-- **安装包**：Tauri 外壳把 PyInstaller 打包的后端（带嵌入模型）一起装进 NSIS 安装程序；启动时在系统分配的本机端口拉起后端，一个数据目录只开一个实例，关窗口时后端一起退出。每次打包，CI（`.github/workflows/release.yml`、`packaging/windows/`）会先自检打包好的后端，再在干净的 Windows 上跑 `install_smoke.py`：静默安装、登录并连上本地模型端点、单实例、关窗后进程全部退出、没有任何对外网络连接、卸载后数据还在。发版前还会用 `verify_update_signature.py` 核对自动更新的签名。
-- **安全**：WebSocket 会校验 Origin。安装版的 API 密钥存在 Windows 凭据管理器里，源码运行默认只放在内存里。
-- **怎么开发的**：这个项目由我一个人维护，产品方向、架构取舍和最终验收都是我自己在管。代码大多由 AI 编程代理分小批写，合并前一般会让另一个代理对着规格审一遍；代码改动要过测试，界面改动看实机截图，安装包改动上干净的 Windows 跑一遍。
+聊起来的时候，前端走 WebSocket 把你的话发给后端。后端会捞出当前世界线的常驻事实、跟这句话对得上的事实以及相关的过往经历，拼进人格提示词，再去流式请求日语回复。用 DeepSeek 时，如果模型觉得要翻旧账，还会自己调 `recall_memory` 工具把其余事实找出来再生成一遍。每句日语一写完就先推给前端，字幕翻译和语音各自走单独的队列，所以翻译慢了不拖正文，字幕晚到的话也会在这一轮结束后补齐。
+
+记忆里的事实和经历都存在本机 SQLite，写入时用 `jina-embeddings-v5-text-nano-retrieval`（768 维）建向量索引。万一嵌入模型没加载起来，会自动退回关键词检索，聊天本身不受影响。之前接真实模型（`deepseek-flash`）跑过一轮端到端召回实测：12 道要翻旧事实的题全都调了记忆，4 道用不上的对照题一次也没误调（当然，这个数字只代表那套题和当时的环境）。
+
+打包这边是用 Tauri 外壳把 PyInstaller 打好的后端（连着嵌入模型）一起塞进 NSIS 安装程序。启动时后端跑在系统随机分配的本机端口上，同一个数据目录只允许开一个实例，关窗口的时候后端跟着一起退出。每次打包，CI（`.github/workflows/release.yml`、`packaging/windows/`）都会先自检打包好的后端，再拉一台干净的 Windows 跑 `install_smoke.py`，把静默安装、登录并连上本地模型端点、单实例、关窗后进程全退干净、没有任何对外网络连接、卸载后数据还在这些全都验一遍；发版前还会用 `verify_update_signature.py` 核对自动更新签名。安全上，WebSocket 会校验 Origin，安装版的 API 密钥存在 Windows 凭据管理器里，源码运行默认只放内存。
+
+另外说明一下开发方式：这个项目一直是我一个人维护，产品方向、架构取舍和最终验收都由我管。写码大多交给 AI 编程代理分小批完成，合并前一般会让另一家代理对着规格审一遍——代码要过测试，界面看实机截图，安装包上干净 Windows 跑一遍。
 
 ## 这个项目是怎么做出来的
 
-这个项目是我一个人当 operator，带着多家厂商的 AI 编程代理分角色协作做出来的——拆包派单、写码、异厂盲审、Windows 真机实跑和带预算上限的真实模型复跑，每一步都有可核对的记录。如果你对这套多厂商 agent 工程实践感兴趣，想看我们踩过哪些单测漏掉的坑、怎么把问题拽出来的，可以看 [工程实践与案例总览](docs/engineering/README.md)（含真实 PR 案例与脱敏样板）。
+一个人同时管桌面端、记忆系统、打包和实机验收，我搭了一套多厂商 AI 编程代理的协作流程：我当 operator 定目标、批合并和预算，下面拆包派单、写码、异厂盲审、Windows 真机实跑、带预算上限的真实模型复跑，每一步都留了能点开核对的记录。想看我们踩过哪些单测漏掉的坑、怎么把 bug 拽出来的，可以直接看 [工程实践与案例总览](docs/engineering/README.md)（含真实 PR 案例和脱敏样板）。
 
 ## 安装与常见问题
 
-桌面版只支持 **Windows 10/11（64 位）**。v0.1.0 发布后，从 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下载安装包。
+桌面版目前只支持 **Windows 10/11（64 位）**。等 v0.1.0 发布后，直接去 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下安装包就行。
 
-- **SmartScreen 提示「未知发布者」**：个人项目，还没买代码签名证书。确认是从本仓库 Releases 下载的、校验和也对得上（见下一条），点「**更多信息 → 仍要运行**」就行。
-- **核对安装包**：发布页附了 `SHA256SUMS.txt`。在 PowerShell 里跑 `Get-FileHash .\Amadeus_<版本>_x64-setup.exe -Algorithm SHA256`，和文件里对应那一行比一下（不分大小写），一致再装。
-- **WebView2**：电脑上还没有 WebView2 运行时的话，安装程序会自动联网装上，这时要连着网。
-- **日志在哪**：`%LOCALAPPDATA%\com.amadeus.desktop\logs`；设了 `AMADEUS_DATA_DIR` 的话在 `<AMADEUS_DATA_DIR>\logs`。
-- **提 Bug**：欢迎来 [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) 反馈！贴日志和截图前看一眼，**别把 API 密钥、令牌和聊天内容贴出来**。
+- 装的时候要是弹出 SmartScreen 提示「未知发布者」，别慌——个人项目，实在还没买代码签名证书。确认是从本仓库 Releases 下的、校验和也对得上（看下一条），点「**更多信息 → 仍要运行**」就可以。
+- 想核对安装包的话，发布页会附 `SHA256SUMS.txt`。在 PowerShell 里跑一下 `Get-FileHash .\Amadeus_<版本>_x64-setup.exe -Algorithm SHA256`，跟文件里对应那一行比对（不分大小写），完全一致再装。
+- 如果电脑上还没装 WebView2 运行时，安装程序会自动联网装上，这一步需要连着网。
+- 日志默认放在 `%LOCALAPPDATA%\com.amadeus.desktop\logs`，要是自己设了 `AMADEUS_DATA_DIR`，就在 `<AMADEUS_DATA_DIR>\logs` 里。
+- 遇到 Bug 欢迎直接来 [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) 提！不过贴日志和截图之前记得看一眼，**千万别把 API 密钥、令牌和聊天内容贴出来**。
 
 ## 本地开发运行
 
-两种跑法，都是在浏览器里打开 http://localhost:1420（Linux 上也能跑）：只看界面用**本地 mock**，想真聊就起**真实后端**。
+本地跑有两种模式，都是在浏览器里打开 http://localhost:1420（Linux 上也能跑）：只想看看界面就用**本地 mock**，想接模型真聊就起**真实后端**。
 
 ```powershell
 git clone https://github.com/meditecnic/AMADEUS.git
@@ -87,7 +86,7 @@ cd AMADEUS
 
 ### 1. 只看界面（本地 mock）
 
-只要 **Node.js 22.13+**（20.x 的话要 20.19+），不用 Python、API 密钥、模型和语音。在仓库根目录下：
+这个模式只需要 **Node.js 22.13+**（20.x 要 20.19+），不用装 Python，也不用填 API 密钥、模型和语音。在仓库根目录下跑：
 
 ```powershell
 cd desktop
@@ -97,20 +96,20 @@ Remove-Item Env:AMADEUS_DEV_MOCK -ErrorAction SilentlyContinue
 npm run dev -- --port 1420 --strictPort
 ```
 
-打开 http://localhost:1420/?scenario=streaming ，等 USER ID 自动打完 `Salieri`，默认没设启动口令，直接按 Enter 就进工作台。想看启动口令页，就打开 http://localhost:1420/?scenario=login-passcode ，用公开的本地测试口令 **`Gott würfelt nicht`** 登录。（算是原作的一个小彩蛋吧，后续我也会做些调整）发一句话，会收到三组预设的日语回复和中文字幕。会话和记忆都是测试数据，改了也只存在开发服务器的内存里，重启就还原。
+浏览器打开 http://localhost:1420/?scenario=streaming ，等 USER ID 自动打完 `Salieri`，默认没设启动口令，直接按 Enter 就进工作台了。想看启动口令页的话，打开 http://localhost:1420/?scenario=login-passcode ，输公开的本地测试口令 **`Gott würfelt nicht`** 登录就行。（算是原作的一个小彩蛋吧，后续我也会做些调整）进去随便发一句话，会收到三组预设的日语回复和中文字幕。这里的会话和记忆全都是测试数据，改了也只留在开发服务器内存里，一重启就还原。
 
-mock 只在开发服务器里有，打生产包时会被剔除。登录失败、空状态、离线、记忆档案等其他场景见 [场景说明](desktop/src/dev-mock/README.md)、[场景文件](desktop/src/dev-mock/scenarios/) 和 [浏览器走查说明](desktop/validation/README.md)。
+mock 只在开发服务器里生效，打生产包的时候会被剔除。登录失败、空状态、离线、记忆档案这些其他场景可以看 [场景说明](desktop/src/dev-mock/README.md)、[场景文件](desktop/src/dev-mock/scenarios/) 和 [浏览器走查说明](desktop/validation/README.md)。
 
 ### 2. 接模型真聊（真实后端）
 
-还需要 **Python 3.11** 和一个大模型服务的 API 密钥。先把 mock 那个开发服务器停掉。
+想真聊的话，还需要 **Python 3.11** 和一个大模型服务的 API 密钥。开始之前先把上面那个 mock 开发服务器停掉。
 
-Windows 上先装好这两样：
+Windows 上先把这两样装好：
 
-1. **Visual C++ 2015–2022 运行库 (x64)**（[`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe)）。缺了它，装依赖和启动后端都不报错，要等第一次写记忆、加载 `torch` 时才报 `WinError 1114`，很难查。
+1. **Visual C++ 2015–2022 运行库 (x64)**（[`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe)）。这东西很坑：缺了它的时候装依赖、起后端都不会报错，偏偏等到第一次写记忆加载 `torch` 才抛 `WinError 1114`，特别难查。
 2. **Python 3.11**（[3.11.9](https://www.python.org/downloads/release/python-3119/)，python.org 上最后一个带 Windows 安装包的 3.11 版本）。
 
-建虚拟环境、装依赖（只用做一次）：
+建虚拟环境、装依赖（只用做这一次）：
 
 ```powershell
 cd backend
@@ -119,7 +118,7 @@ py -3.11 -m venv .venv
 cd ..
 ```
 
-然后一条命令同时起前后端（`run_dev.bat` 也是同一个启动器）：
+然后一条命令同时起前后端（`run_dev.bat` 调的也是同一个启动器）：
 
 ```powershell
 # 在仓库根目录；开发单独用一个数据目录，别指向安装版的数据
@@ -130,9 +129,9 @@ npm ci
 npm run dev:real
 ```
 
-启动器会临时生成一个本地 API 令牌交给前后端，任意一边退出或者按 Ctrl+C，两边一起停。后端端口默认自动挑空闲的，想固定就设 `BACKEND_PORT`。Linux/macOS 一样：设好 `AMADEUS_DATA_DIR`、`unset AMADEUS_DB_PATH`，在 `desktop/` 下跑 `npm run dev:real`。
+启动器会自动生成一个临时本地 API 令牌交给前后端，哪边退出或者按 Ctrl+C 两边会一起停。后端端口默认自动挑空闲的，想固定端口就设 `BACKEND_PORT`。Linux/macOS 也一样：设好 `AMADEUS_DATA_DIR`、`unset AMADEUS_DB_PATH`，进 `desktop/` 跑 `npm run dev:real`。
 
-想分两个终端、自己看日志也行。这样不开本地令牌认证（`AMADEUS_LOCAL_API_TOKEN`、`AMADEUS_DEV_LOCAL_API_TOKEN` 都别设），只适合调试：
+要是习惯分两个终端、自己盯日志也行。注意这样不开本地令牌认证（`AMADEUS_LOCAL_API_TOKEN`、`AMADEUS_DEV_LOCAL_API_TOKEN` 都别设），只适合本地调试：
 
 ```powershell
 # 终端 1：后端（仓库根目录下）
@@ -149,41 +148,41 @@ $env:AMADEUS_DEV_MOCK = "0"
 npm run dev -- --port 1420 --strictPort
 ```
 
-`AMADEUS_DEV_MOCK=0` 会关掉 mock，把 `/api`、`/ws` 和 `/health` 转给 `http://127.0.0.1:8000`（`AMADEUS_BACKEND_ORIGIN` 可改）。Linux/macOS 上后端用 `.venv/bin/python`，前端跑 `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort`。
+`AMADEUS_DEV_MOCK=0` 会关掉 mock，把 `/api`、`/ws` 和 `/health` 转给 `http://127.0.0.1:8000`（想改地址就设 `AMADEUS_BACKEND_ORIGIN`）。Linux/macOS 上后端改用 `.venv/bin/python`，前端跑 `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort`。
 
-源码运行一定要设非空的 `AMADEUS_DATA_DIR`，没有默认目录，没设会直接报错退出；只设 `AMADEUS_DB_PATH` 绕不过去。
+提醒一句：源码运行一定要设非空的 `AMADEUS_DATA_DIR`，程序没有默认目录，没设会直接报错退出，只设 `AMADEUS_DB_PATH` 也绕不过去。
 
-起来以后打开 http://localhost:1420 ，默认没有启动口令，等 USER ID 打完直接按 Enter 就进工作台；在「**系统 → 数据**」里设了口令的话，就输你设的口令。（没设口令时输 `Gott würfelt nicht` 也能进，算个小彩蛋；不分大小写，`ü` 写成 `u` 或 `ue` 也行）点右上角「**系统 → 连接**」，填好你的模型和 API 密钥并保存，连接测试通过就能聊了。列表里默认那条 `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` 是给本地模型服务准备的预设。
+服务起来后打开 http://localhost:1420 ，默认没有启动口令，等 USER ID 打完直接按 Enter 就能进工作台；如果之前在「**系统 → 数据**」里设过口令，就输自己设的那个。（没设口令时输 `Gott würfelt nicht` 也能进，算个小彩蛋，不分大小写，`ü` 写成 `u` 或 `ue` 也认）进去后点右上角「**系统 → 连接**」，填好模型和 API 密钥点保存，连接测试过了就能开聊。列表里默认带的那条 `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` 是留给本地模型服务的预设。
 
-第一次写记忆时，会自动下载嵌入模型 `jinaai/jina-embeddings-v5-text-nano-retrieval`（约 866 MB，Jina AI，CC BY-NC 4.0）。想提前下好固定的版本：
+第一次写记忆时，会自动下载嵌入模型 `jinaai/jina-embeddings-v5-text-nano-retrieval`（约 866 MB，Jina AI，CC BY-NC 4.0）。想提前把固定版本下好可以跑这句：
 
 ```sh
 hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md
 ```
 
-没配语音的话，后端日志里的 `[WARN] TTS reference audio not found ...` 不用管。
+没配语音的话，后端日志里冒出来的 `[WARN] TTS reference audio not found ...` 直接忽略就好。
 
-桌面窗口要靠安装包（打包脚本在 `packaging/windows/`）；源码里直接跑 `npm run tauri -- dev` 起不来，开发就用浏览器。
+另外，完整的桌面窗口要靠安装包打包出来（脚本在 `packaging/windows/`），源码里直接跑 `npm run tauri -- dev` 起不来，平时开发用浏览器就行。
 
 ### 3. 数据、日志和密钥
 
-- **数据**：安装版存在 `%LOCALAPPDATA%\com.amadeus.desktop\data`。卸载默认保留数据，只有在卸载时勾了删除应用数据才会删。想换位置，现在可以直接在「**系统 → 数据**」里选一个新的空目录迁移过去，迁完重启一下就行；也可以照旧设用户环境变量 `AMADEUS_DATA_DIR` 再重启应用（设了这个变量，应用内迁移就关掉了）。
-- **数据出问题时**：设的数据目录找不到或者无效，启动会直接停下提示，不会新建空库盖过去。已有的库没通过启动自检（`PRAGMA quick_check`），也不会新建空库，而是进入「数据异常」状态：对话等功能暂停，原来的库原样留着。升级时数据迁移失败，会先退回升级前的备份。
-- **日志**：见上面「[安装与常见问题](#安装与常见问题)」。
-- **密钥**：安装版存在 Windows 凭据管理器里；源码运行默认只放内存，重启后要重新填。在 Windows 上跑源码也想存下来，可以设 `AMADEUS_CREDENTIAL_BACKEND=windows`（会读写你本机真实的凭据）。
+- 安装版的数据存在 `%LOCALAPPDATA%\com.amadeus.desktop\data`。卸载时默认会保留数据，只有你在卸载界面主动勾了删除应用数据才会删掉。想挪地方的话，现在可以直接在「**系统 → 数据**」里挑一个新的空目录迁过去，迁完重启一下就行；照旧设用户环境变量 `AMADEUS_DATA_DIR` 再重启也可以（不过设了这个变量后，应用内迁移会自动关掉）。
+- 数据目录万一出问题也不会瞎覆写：设的目录找不到或无效，启动会直接停下提示，不会新建一个空库盖过去。已有的库如果没通过启动自检（`PRAGMA quick_check`），同样不会新建空库，而是切到「数据异常」状态，暂停对话等功能，原库原样留着不动。升级时数据迁移失败的话，会先退回升级前的备份。
+- 日志位置看上面的「[安装与常见问题](#安装与常见问题)」。
+- API 密钥在安装版里存在 Windows 凭据管理器中；源码运行默认只放在内存里，重启后要重新填。在 Windows 上跑源码也想持久化存下来，可以设 `AMADEUS_CREDENTIAL_BACKEND=windows`（注意这会读写你本机真实的凭据）。
 
 ## 原作素材包
 
-仓库里**没有**任何原作素材（立绘、CG、Logo、BGM 这些）。没有素材包也能用，界面会显示自制的占位画面。（版权问题，目前的解法就只能是素材包了）
+仓库里**没有**放任何原作素材（立绘、CG、Logo、BGM 这些都没有）。不装素材包也照样能用，界面会显示我自制的占位画面。（版权问题，目前的解法就只能是素材包了）
 
-有素材包的话，现在可以直接在「**系统 → 角色与对话**」里选 `.zip` 或文件夹导入，装好立即生效，不用重启；不想要了也在那里卸载。手动放也照样行：放到数据目录下的 `asset-pack/amadeus-original/`（根目录要有 `manifest.json`），重启应用。素材包单独分发，里面只有原作素材；应用自己生成的底纹和插画随仓库发布，来源登记在 [assets/PROVENANCE.md](assets/PROVENANCE.md)。
+手里有素材包的话，现在可以直接在「**系统 → 角色与对话**」里选 `.zip` 或文件夹导入，装上立刻生效，不用重启，不想要了也在同一个地方卸载。喜欢手动放也没问题：丢进数据目录下的 `asset-pack/amadeus-original/`（根目录要有 `manifest.json`），重启应用就行。素材包是单独分发的，里面只有原作素材；应用自己生成的底纹和插画随仓库发布，来源都登记在 [assets/PROVENANCE.md](assets/PROVENANCE.md)。
 
 ## 语音（可选）
 
-不配语音的话，她的台词就只以文字和字幕出现。
+不配语音也能正常聊，她的台词就是纯文字加字幕。
 
-- **语音合成**：用本机的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，声音模型推荐 bysq 训练的 [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise)（GPT-SoVITS v2pro，Apache-2.0）。仓库不带也不下载权重和参考音频，要自己准备：参考音频放进数据目录下的 `voice-pack/ref/`（`ref_neutral.wav`、`ref_happy.wav` 等 9 种情绪，完整列表见 `backend/app/config.py`，也可以用 `AMADEUS_REF_*` 逐个指定），起好 GPT-SoVITS 的 API 服务（默认 `http://127.0.0.1:9880`，`SOVITS_URL` 可改），再把 `SOVITS_GPT_WEIGHTS` 和 `SOVITS_SOVITS_WEIGHTS` 指向权重文件。
-- **语音识别**：后端已经接好了（其实前端麦克风页面还没做，哈哈）。第一次用时会从 [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 下载 SenseVoice int8（约 163 MB）和 Silero VAD 模型，核对 SHA-256 后存在数据目录的 `models/speech/`；也可以用 `SENSEVOICE_MODEL`、`SENSEVOICE_TOKENS` 和 `AMADEUS_VAD_MODEL` 指向本地已有的文件。
+- 语音合成接的是本机 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，声音模型推荐 bysq 训练的 [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise)（GPT-SoVITS v2pro，Apache-2.0）。仓库既不带也不会帮你下载权重和参考音频，这些要自己准备：把参考音频放进数据目录下的 `voice-pack/ref/`（`ref_neutral.wav`、`ref_happy.wav` 等 9 种情绪，完整清单见 `backend/app/config.py`，也可以用 `AMADEUS_REF_*` 逐个指定），起好 GPT-SoVITS 的 API 服务（默认 `http://127.0.0.1:9880`，`SOVITS_URL` 可改），再把 `SOVITS_GPT_WEIGHTS` 和 `SOVITS_SOVITS_WEIGHTS` 指到权重文件上就行。
+- 语音识别这边后端已经接好了（其实前端麦克风页面还没做，哈哈）。第一次用的时候会从 [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 自动下载 SenseVoice int8（约 163 MB）和 Silero VAD 模型，校验完 SHA-256 存在数据目录的 `models/speech/` 下；手头已经有文件的话，也可以用 `SENSEVOICE_MODEL`、`SENSEVOICE_TOKENS` 和 `AMADEUS_VAD_MODEL` 直接指过去。
 
 **关于声音的版权**：TTS-KurisuMakise 模仿的是《命运石之门》里牧濑红莉栖的声音。角色本身、原作录音以及声优的表演均归各自的权利人所有。模型页面上标注的 Apache-2.0 许可只覆盖上传者自己有权授权的部分，并不代表授予了角色、原作录音或声优表演的任何权利。AMADEUS 不会内置、下载或分发该模型及任何参考音频。请仅在个人、非商业场景下使用，不要用它去冒充声优本人，也不要制作让人误以为是官方出品的内容。权利人如果希望移除相关引用或内容，请在 GitHub 上提一个 issue，我们会第一时间处理。
 
