@@ -366,8 +366,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [draftProviderId, setDraftProviderId] = useState<string>(() => {
     try { return localStorage.getItem('amadeus_pc_provider') || 'deepseek'; } catch { return 'deepseek'; }
   });
-  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() =>
-    localStorage.getItem('amadeus_pc_reasoning_effort'));
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() => {
+    try { return localStorage.getItem(`amadeus_pc_reasoning_effort_${draftProviderId}_${model}`); } catch { return null; }
+  });
   const [audioError, setAudioError] = useState<string | null>(null);
   const [conversationCreateError, setConversationCreateError] = useState<string | null>(null);
   /** Why opening a history conversation failed: "HTTP <status>" or "network". */
