@@ -2325,6 +2325,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
       || Boolean(activeConversationTurns?.running)
       || queuedTurns.length > 0
     );
+    if (activeReplyBusy) {
+      if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+      setTruncateError(formatTruncateError('conversation_busy', queuedTurns.length > 0));
+      return;
+    }
     const closeAndReloadStale = () => {
       failedEditDraftRef.current = null;
       setTruncateTarget(null);
@@ -2340,38 +2345,34 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setTruncateBusy(true);
     setTruncateError(null);
     try {
-      let effectiveTarget = target;
-      if (!activeReplyBusy) {
-        const inflight = messageIdRefreshRef.current;
-        const hasInflightRefresh = Boolean(inflight && inflight.convId === convId && inflight.epoch === entryEpoch);
-        const rows = hasInflightRefresh ? await inflight!.promise : await fetchMessageIds(convId, true);
-        if (
-          activeConversationIdRef.current !== convId
-          || conversationEpochRef.current !== entryEpoch
-          || latestWorldlineRef.current !== wl
-        ) return;
-        if (!rows) {
-          if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
-          setTruncateError('回退对话时连接失败，请稍后再试。');
-          return;
-        }
-        const verified = resolveTruncateFromHistory(rows, target);
-        if (!verified) {
-          closeAndReloadStale();
-          return;
-        }
-        if (verified.deletedTurns !== target.deletedTurns || verified.fromMessageId !== target.fromMessageId) {
-          if (hasInflightRefresh) hydrateMessageIdsRef.current?.(rows, true);
-          if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
-          setTruncateTarget(verified);
-          setTruncateError(formatTruncateError('conversation_changed'));
-          return;
-        }
-        effectiveTarget = verified;
-        stopReplay(false);
-        audioPlayer.stopAll();
-        if (isPlaying) stopVoice();
+      const inflight = messageIdRefreshRef.current;
+      const hasInflightRefresh = Boolean(inflight && inflight.convId === convId && inflight.epoch === entryEpoch);
+      const rows = hasInflightRefresh ? await inflight!.promise : await fetchMessageIds(convId, true);
+      if (
+        activeConversationIdRef.current !== convId
+        || conversationEpochRef.current !== entryEpoch
+        || latestWorldlineRef.current !== wl
+      ) return;
+      if (!rows) {
+        if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+        setTruncateError('回退对话时连接失败，请稍后再试。');
+        return;
       }
+      const verified = resolveTruncateFromHistory(rows, target);
+      if (!verified) {
+        closeAndReloadStale();
+        return;
+      }
+      if (verified.deletedTurns !== target.deletedTurns || verified.fromMessageId !== target.fromMessageId) {
+        if (hasInflightRefresh) hydrateMessageIdsRef.current?.(rows, true);
+        if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+        setTruncateTarget(verified);
+        setTruncateError(formatTruncateError('conversation_changed'));
+        return;
+      }
+      stopReplay(false);
+      audioPlayer.stopAll();
+      if (isPlaying) stopVoice();
 
       const response = await apiFetch(
         `/api/conversations/${encodeURIComponent(convId)}/truncate?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(wl)}`,
@@ -2379,8 +2380,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from_message_id: effectiveTarget.fromMessageId,
-            expected_last_message_id: effectiveTarget.expectedLastMessageId,
+            from_message_id: verified.fromMessageId,
+            expected_last_message_id: verified.expectedLastMessageId,
           }),
         },
       );
@@ -2396,13 +2397,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }
         return;
       }
-      if (activeReplyBusy) {
-        stopReplay(false);
-        audioPlayer.stopAll();
-      }
       failedEditDraftRef.current = null;
       messageHistoryReadRef.current += 1;
-      applyTruncate?.(target.fromMessageId);
+      applyTruncate?.(verified.fromMessageId);
       setTruncateTarget(null);
       setTruncateError(null);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);

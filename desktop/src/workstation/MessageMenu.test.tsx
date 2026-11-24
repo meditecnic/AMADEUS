@@ -222,8 +222,6 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
   });
 
   it('preserves an edited draft when a queued turn blocks edit-and-resend', async () => {
-    truncateStatus = 409;
-    truncateBody = { detail: { code: 'conversation_busy' } };
     const view = await mountSelected();
     const composer = screen.getByLabelText('输入消息');
     fireEvent.change(composer, { target: { value: '原有输入稿' } });
@@ -237,7 +235,7 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改好的第二句' } });
     fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
     expect(await screen.findByText('这段对话有消息在排队，请先撤回排队的消息再试。')).toBeInTheDocument();
-    expect(callOrder).toContain('truncate:{"from_message_id":12,"expected_last_message_id":13}');
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
     expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('改好的第二句');
     expect(composer).toHaveValue('原有输入稿');
     expect(wsMock.applyTruncate).not.toHaveBeenCalled();
@@ -439,8 +437,6 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
   });
 
   it('rejects immediately with conversation_busy without stopping voice when first segment is playing before turn completes', async () => {
-    truncateStatus = 409;
-    truncateBody = { detail: { code: 'conversation_busy' } };
     wsMock.messages = [
       ...SAMPLE.map((m) => ({ ...m })),
       { id: 'u3', turnId: 't3', role: 'user', content: '第三轮问题' },
@@ -461,12 +457,7 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     expect(wsMock.stopAll).not.toHaveBeenCalled();
     expect(wsMock.stopVoice).not.toHaveBeenCalled();
     expect(wsMock.applyTruncate).not.toHaveBeenCalled();
-    const truncateCalls = callOrder.filter((call) => call.startsWith('truncate:'));
-    expect(truncateCalls).toHaveLength(1);
-    expect(JSON.parse(truncateCalls[0].slice('truncate:'.length))).toEqual({
-      from_message_id: 12,
-      expected_last_message_id: 13,
-    });
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
   });
 
   it('updates the confirm dialog count without stopping audio or posting truncate when scope changes while open', async () => {
@@ -570,8 +561,6 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
   });
 
   it('rejects immediately with conversation_busy without waiting or stopping voice when foreground reply is still writing', async () => {
-    truncateStatus = 409;
-    truncateBody = { detail: { code: 'conversation_busy' } };
     wsMock.messages = [
       ...SAMPLE.map((m) => ({ ...m })),
       { id: 'u3', turnId: 't3', role: 'user', content: '第三轮还在写' },
@@ -588,26 +577,26 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     wsMock.stopAll.mockClear();
     wsMock.stopVoice.mockClear();
 
-    // 1) Foreground still thinking: must not wait, must not stop voice, must surface busy and keep edit draft.
+    // 1) Foreground still thinking: rejects locally without posting truncate or stopping voice, keeping edit draft.
     openAction('u2', '改这句重发…');
     fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '前台忙时改句' } });
     fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
     expect(await screen.findByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument();
-    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(1);
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
     expect(wsMock.stopAll).not.toHaveBeenCalled();
     expect(wsMock.stopVoice).not.toHaveBeenCalled();
     expect(wsMock.applyTruncate).not.toHaveBeenCalled();
     expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('前台忙时改句');
 
-    // 2) Foreground streaming text without audio playing (including TTS synthesizing before playback): same immediate busy rejection.
+    // 2) Foreground streaming text without audio playing (including TTS synthesizing before playback): same local busy rejection.
     wsMock.isThinking = false;
     wsMock.isTurnActive = true;
     wsMock.isSynthesizing = true;
     wsMock.isPlaying = false;
     view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
-    await waitFor(() => expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(2));
     expect(screen.getByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument();
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
     expect(wsMock.stopAll).not.toHaveBeenCalled();
     expect(wsMock.stopVoice).not.toHaveBeenCalled();
 
@@ -617,8 +606,6 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
   });
 
   it('rejects immediately with conversation_busy when returning to a background-running conversation', async () => {
-    truncateStatus = 409;
-    truncateBody = { detail: { code: 'conversation_busy' } };
     wsMock.messages = [
       ...SAMPLE.map((m) => ({ ...m })),
       { id: 'u3', dbId: 14, role: 'user', content: '切走前发出的第三轮' },
@@ -641,7 +628,7 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '后台忙时改句' } });
     fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
     expect(await screen.findByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument();
-    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(1);
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
     expect(wsMock.stopAll).not.toHaveBeenCalled();
     expect(wsMock.stopVoice).not.toHaveBeenCalled();
     expect(wsMock.applyTruncate).not.toHaveBeenCalled();
@@ -650,6 +637,62 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(composer.value).toContain('后台忙时改句');
     expect(composer.value).toContain('原有草稿后台忙');
+  });
+
+  it('blocks truncate locally before error arrives after pre-save failure, then re-verifies history to 1 turn and truncates on re-confirm', async () => {
+    wsMock.messages = [
+      ...SAMPLE.map((m) => ({ ...m })),
+      { id: 'u-fail', turnId: 't-fail', role: 'user', content: '保存前异常的新一轮' },
+      { id: 'a-fail', turnId: 't-fail', role: 'assistant', streaming: true, content: '' },
+    ];
+    wsMock.isThinking = true;
+    wsMock.isTurnActive = true;
+    wsMock.isSynthesizing = false;
+    wsMock.isPlaying = false;
+    const view = await mountSelected();
+    callOrder = [];
+    wsMock.stopAll.mockClear();
+    wsMock.stopVoice.mockClear();
+
+    // Preview counts u2 + u-fail = 2 turns, while backend already failed before saving u-fail (history only has 10..13).
+    openAction('a1', '回到这里…');
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('2 轮')).toBeInTheDocument();
+
+    // 1) While frontend still considers the turn busy: rejects locally with zero POST so backend cannot delete 1 turn on a "2 turns" dialog.
+    fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
+    expect(await within(dialog).findByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument();
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
+    expect(wsMock.stopVoice).not.toHaveBeenCalled();
+    expect(wsMock.applyTruncate).not.toHaveBeenCalled();
+
+    // 2) Error frame arrives and clears busy state: clicking confirm reads history, updates dialog to 1 turn, still zero POST.
+    wsMock.isThinking = false;
+    wsMock.isTurnActive = false;
+    wsMock.messages = [
+      ...SAMPLE.map((m) => ({ ...m })),
+      { id: 'u-fail', turnId: 't-fail', role: 'user', content: '保存前异常的新一轮' },
+      { id: 'a-fail', turnId: 't-fail', role: 'assistant', streaming: false, content: '' },
+      { id: 'err-fail', role: 'assistant', content: 'SYSTEM ERROR: compile failed', systemError: true },
+    ];
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
+    expect(await within(dialog).findByText('对话内容刚刚有更新，请刷新画面确认后再试。')).toBeInTheDocument();
+    expect(within(dialog).getByText('1 轮')).toBeInTheDocument();
+    expect(within(dialog).getByText(/将删除之后的 1 轮对话/)).toBeInTheDocument();
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
+
+    // 3) Re-confirming after seeing the verified 1 turn sends truncate and succeeds (200, deletes 1 turn).
+    fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
+    await waitFor(() => expect(wsMock.applyTruncate).toHaveBeenCalledWith(12));
+    const truncateCalls = callOrder.filter((call) => call.startsWith('truncate:'));
+    expect(truncateCalls).toHaveLength(1);
+    expect(JSON.parse(truncateCalls[0].slice('truncate:'.length))).toEqual({
+      from_message_id: 12,
+      expected_last_message_id: 13,
+    });
   });
 
   it('stops playback, hydrates missing message ids, and truncates once when reply text is finished and only audio is playing', async () => {
