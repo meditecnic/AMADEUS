@@ -1094,12 +1094,13 @@ async def get_clean_text_stream(
                 ).strip()
                 if not foreign_tail:
                     foreign_tail = text_buffer.strip()
+                suffix = [] if rewrite_full_tail else post_language_segments
                 rendered = await _render_foreign_speech_to_japanese(
                     provider=provider,
                     provider_snapshot=provider_snapshot,
                     session=session,
                     source_text=foreign_tail,
-                    user_request=_latest_real_user_request(prompt_history),
+                    partial=bool(published_parts or suffix),
                 )
                 if rendered:
                     if buffer_ui_until_attempt_ok and on_text_delta is not None:
@@ -1111,7 +1112,6 @@ async def get_clean_text_stream(
                         callback_result = on_text_delta(rendered, last_emotion)
                         if asyncio.iscoroutine(callback_result):
                             await callback_result
-                    suffix = [] if rewrite_full_tail else post_language_segments
                     if on_text_delta is not None:
                         for segment in suffix:
                             callback_result = on_text_delta(segment.text, segment.emotion)
@@ -1233,16 +1233,26 @@ def _language_safe_prompt_history(active_history: list | None) -> list:
     return projected
 
 
-def _latest_real_user_request(active_history: list | None) -> str:
-    """Return the latest actual user message, skipping tool/system evidence."""
+def _renderer_register(session: SessionState) -> str:
+    """Match Kurisu's turn register (plain vs polite) without adding session state."""
+    compiled = getattr(session, "turn_compiled_prompt", None)
+    inputs = getattr(compiled, "inputs", None)
+    identity_mode = getattr(inputs, "identity_mode", None) or getattr(
+        session, "identity_mode", "okabe"
+    )
+    if identity_mode != "self":
+        return "plain"
+    familiarity = getattr(inputs, "familiarity", None)
+    return "polite" if familiarity in (None, "initial") else "plain"
 
-    for message in reversed(active_history or []):
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        content = str(message.get("content") or "").strip()
-        if content:
-            return content
-    return ""
+
+def _renderer_reasoning_effort(control) -> str | None:
+    """Use low reasoning when offered so voice/register holds; else protocol minimum."""
+    if control is None:
+        return None
+    if "low" in control.values:
+        return "low"
+    return control.options[0][0]
 
 
 async def _render_foreign_speech_to_japanese(
@@ -1251,7 +1261,7 @@ async def _render_foreign_speech_to_japanese(
     provider_snapshot: ProviderSnapshot | None,
     session: SessionState,
     source_text: str,
-    user_request: str,
+    partial: bool = False,
 ) -> str | None:
     """Render foreign draft data through an isolated, tool-free provider call.
 
@@ -1268,13 +1278,15 @@ async def _render_foreign_speech_to_japanese(
     provider_id = provider_snapshot.provider_id if provider_snapshot is not None else session.provider_id
     model_id = provider_snapshot.model_id if provider_snapshot is not None else session.model
     control = model_catalog.control_for(provider_id, model_id, getattr(provider, "base_url", None))
+    register = _renderer_register(session)
     digest = hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()[:12]
     for renderer_attempt in range(2):
         stream_kwargs = {
             "active_history": build_japanese_renderer_history(
                 source,
-                user_request,
                 strict=renderer_attempt > 0,
+                register=register,
+                partial=partial,
             ),
             "memory_summary": "",
             "api_key": session.api_key,
@@ -1283,7 +1295,7 @@ async def _render_foreign_speech_to_japanese(
             "tools": None,
             "tool_choice": None,
             "model": model_id,
-            "reasoning_effort": control.options[0][0] if control is not None else None,
+            "reasoning_effort": _renderer_reasoning_effort(control),
             "isolated": True,
         }
         signature = inspect.signature(provider.get_chat_stream)
@@ -1900,7 +1912,8 @@ async def processor_loop(
                 try:
                     speech_kwargs = (
                         {"quoted_source": user_msg}
-                        if tts_speech_surface(prepared.text, user_msg)[1] == "auto"
+                        if tts_speech_surface(prepared.text, user_msg)
+                        != tts_speech_surface(prepared.text)
                         else {}
                     )
                     return await tts_manager.synthesize_async(
