@@ -49,9 +49,12 @@ try {
   const withdraw = page.getByRole('button', { name: '撤回排队', exact: true });
   await withdraw.waitFor();
   assert.equal(await row(other).getByText('排队', { exact: true }).count(), 1);
+  assert.equal(await page.getByText('撤回验收', { exact: true }).count(), 1);
+  assert.equal(await page.getByText('这个会话还是空的。', { exact: true }).count(), 0);
   await withdraw.click();
   await withdraw.waitFor({ state: 'hidden' });
-  assert.equal(await page.getByText('撤回验收', { exact: true }).count(), 0);
+  assert.equal(await composer.inputValue(), '撤回验收');
+  assert.equal(await page.locator('.ws2-lines').getByText('撤回验收', { exact: true }).count(), 0);
   await select('lab-notes');
   await page.getByText('她还在回复。', { exact: true }).waitFor();
   await page.getByText(fullReply, { exact: true }).waitFor();

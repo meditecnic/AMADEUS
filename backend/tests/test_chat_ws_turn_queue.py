@@ -151,7 +151,9 @@ def shift(ws, worldline):
 
 def submit(ws, text, *, queued=False):
     ws.send_json({"type": "chat.send", "content": text})
-    return receive(ws, "turn.accepted", queued=queued)[-1]
+    if queued:
+        return receive(ws, "turn.accepted", queued=True)[-1]
+    return receive(ws, "turn.started")[-1]
 
 
 def test_background_saves_reply_and_followups_without_audio(chat):
@@ -164,13 +166,13 @@ def test_background_saves_reply_and_followups_without_audio(chat):
         assert gate.started.wait(5)
         select(ws, b)
         gate.finish.set()
-        frames = receive(ws, "turn.history_saved", conversation_id=a, turn_id=turn["task_id"])
+        frames = receive(ws, "turn.history_saved", conversation_id=a, turn_id=turn["turn_id"])
         assert not any(frame["type"] == "segment.audio" for frame in frames)
         receive(ws, "conversation.turn_state", conversation_id=a, running=False)
         rows = history(client, owner, a)
         assert [row["role"] for row in rows] == ["user", "assistant"]
         assert rows[-1]["content"].endswith(REPLY)
-        assert rows[-1]["turn_id"] == turn["task_id"] and rows[-1]["id"] > rows[0]["id"]
+        assert rows[-1]["turn_id"] == turn["turn_id"] and rows[-1]["id"] > rows[0]["id"]
         voice.assert_not_awaited()
         assert not (voice_cache.voice_cache_root() / a).exists()
         assert extraction.await_args.kwargs["conversation_id"] == a
@@ -311,7 +313,7 @@ def test_switch_back_to_running_turn_gets_one_complete_saved_reply(chat):
         assert [frame["type"] for frame in frames].count("turn.history_saved") == 1
         assert not any(frame["type"] in {"turn.started", "segment.ready"} for frame in frames)
         rows = history(client, owner, a)
-        assert [row["turn_id"] for row in rows] == [accepted["task_id"]] * 2
+        assert [row["turn_id"] for row in rows] == [accepted["turn_id"]] * 2
         assert rows[-1]["content"].endswith(REPLY)
 
 
@@ -427,11 +429,174 @@ def test_cancel_before_start_does_not_write_the_user_line(chat, monkeypatch):
     monkeypatch.setattr(chat_ws.ChatTurnQueue, "snapshot", pause_snapshot)
     with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
         ws = auth(socket, a)
-        submit(ws, "開始前に止める文")
+        ws.send_json({"type": "chat.send", "content": "開始前に止める文"})
         assert entered.wait(5)
         ws.send_json({"type": "turn.cancel"})
+        receive(ws, "turn.cancelled", conversation_id=a)
         receive(ws, "status", state="cancelled")
+        runner = chat_ws.sessions[owner].turn_queue.runners[SG]
         release.set()
-        receive(ws, "conversation.turn_state", conversation_id=a, running=False, queued=[])
+
+        async def finish():
+            await runner
+
+        client.portal.call(finish)
         assert not gate.started.is_set()
         assert history(client, owner, a) == []
+
+
+def test_completion_keeps_summary_invalidation_during_reply(chat, monkeypatch):
+    from app.services.session_manager import clear_working_summaries
+
+    client, owner, provider, *_ = chat
+    cid = conv(client, owner)
+    gate = provider.gate("要約を確認する")
+    summaries = []
+
+    async def record_compression(view, *_args, **_kwargs):
+        summaries.append((view.memory_summary, view.content_epoch))
+
+    compression = AsyncMock(side_effect=record_compression)
+    monkeypatch.setattr(chat_ws, "schedule_history_compression", compression)
+    with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
+        ws = auth(socket, cid)
+        view = chat_ws.sessions[owner]
+        view.memory_summary = "OLD-SUMMARY-WITH-DELETED-FACT"
+        submit(ws, "要約を確認する")
+        assert gate.started.wait(5)
+        previous_epoch = view.content_epoch
+        client.portal.call(clear_working_summaries, owner, SG, None)
+        assert view.content_epoch > previous_epoch and view.memory_summary == ""
+        gate.finish.set()
+        receive(ws, "turn.completed", conversation_id=cid)
+        runner = view.turn_queue.runners.get(SG)
+        if runner is not None:
+            async def finish():
+                await runner
+
+            client.portal.call(finish)
+        assert view.memory_summary == ""
+        assert view.content_epoch > previous_epoch
+        assert view.history[-1]["role"] == "assistant"
+        compression.assert_awaited_once()
+        assert summaries == [("", view.content_epoch)]
+
+
+@pytest.mark.parametrize(("worldline", "operation"), [(SG, "forget"), (BETA, "delete")])
+def test_erasing_visible_conversation_keeps_other_queued_turn(chat, monkeypatch, worldline, operation):
+    from app.routers import conversations
+
+    client, owner, provider, *_ = chat
+    visible = conv(client, owner)
+    first, queued = conv(client, owner, worldline), conv(client, owner, worldline)
+    earlier, later = provider.gate("先の観測"), provider.gate("残す観測")
+    erasing, release = Event(), Event()
+    original = getattr(conversation_service, operation)
+
+    async def hold_erasure(*args, **kwargs):
+        erasing.set()
+        while not release.is_set():
+            await asyncio.sleep(0.005)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(conversation_service, operation, hold_erasure)
+    with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
+        ws = auth(socket, visible)
+        if worldline == BETA:
+            shift(ws, BETA)
+        select(ws, first)
+        submit(ws, "先の観測")
+        assert earlier.started.wait(5)
+        select(ws, queued)
+        submit(ws, "残す観測", queued=True)
+        if worldline == BETA:
+            shift(ws, SG)
+        select(ws, visible)
+        if operation == "forget":
+            erasure = client.portal.start_task_soon(
+                conversations.forget_conversation, visible, conversations.ConversationForget(), owner, SG,
+            )
+        else:
+            erasure = client.portal.start_task_soon(
+                conversations.delete_conversation, visible, owner, SG, False,
+            )
+        try:
+            assert erasing.wait(5)
+            earlier.finish.set()
+            assert later.started.wait(5)
+            later.finish.set()
+            receive(ws, "turn.history_saved", conversation_id=queued)
+        finally:
+            release.set()
+            erasure.result(timeout=7)
+        assert [row["role"] for row in history(client, owner, queued, worldline)] == ["user", "assistant"]
+
+
+@pytest.mark.parametrize("action", ["turn.cancel", "turn.withdraw"])
+def test_queued_head_can_be_stopped_during_snapshot(chat, monkeypatch, action):
+    client, owner, provider, *_ = chat
+    a, b = conv(client, owner), conv(client, owner)
+    active, later = provider.gate("先に答える"), provider.gate("待機中に止める")
+    entered, release, withdrawing = Event(), Event(), Event()
+    original_snapshot = chat_ws.ChatTurnQueue.snapshot
+    original_withdraw = chat_ws.ChatTurnQueue.withdraw
+
+    async def pause_snapshot(queue, turn, record):
+        if turn.conversation_id == b:
+            entered.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+        return await original_snapshot(queue, turn, record)
+
+    async def observe_withdraw(*args):
+        withdrawing.set()
+        await original_withdraw(*args)
+
+    monkeypatch.setattr(chat_ws.ChatTurnQueue, "snapshot", pause_snapshot)
+    monkeypatch.setattr(chat_ws.ChatTurnQueue, "withdraw", observe_withdraw)
+    with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
+        ws = auth(socket, a)
+        submit(ws, "先に答える")
+        assert active.started.wait(5)
+        select(ws, b)
+        queued = submit(ws, "待機中に止める", queued=True)
+        active.finish.set()
+        try:
+            assert entered.wait(5)
+            if action == "turn.cancel":
+                ws.send_json({"type": action})
+                receive(ws, "status", state="cancelled")
+            else:
+                ws.send_json({"type": action, "task_id": queued["task_id"]})
+                assert withdrawing.wait(5)
+        finally:
+            later.finish.set()
+            release.set()
+        receive(ws, "conversation.turn_state", conversation_id=b, running=False, queued=[])
+        assert not later.started.is_set()
+        assert history(client, owner, b) == []
+
+
+def test_turn_starting_in_background_uses_target_identity_and_stays_silent(chat):
+    client, owner, provider, voice, _, extraction = chat
+    a = conv(client, owner)
+    b = conv(client, owner, identity_mode="self")
+    c = conv(client, owner, identity_mode="okabe")
+    first, background = provider.gate("先に返事する"), provider.gate("静かに返事する")
+    with client.websocket_connect(f"/ws/chat?session_id={owner}") as socket:
+        ws = auth(socket, a, tts=True)
+        submit(ws, "先に返事する")
+        assert first.started.wait(5)
+        select(ws, b)
+        submit(ws, "静かに返事する", queued=True)
+        select(ws, c)
+        first.finish.set()
+        assert background.started.wait(5)
+        background.finish.set()
+        receive(ws, "turn.history_saved", conversation_id=b)
+        receive(ws, "conversation.turn_state", conversation_id=b, running=False)
+        assert history(client, owner, b)[-1]["content"].endswith(REPLY)
+        scoped = [call.kwargs for call in extraction.await_args_list if call.kwargs["conversation_id"] == b]
+        assert [kwargs["identity_mode"] for kwargs in scoped] == ["self"]
+        voice.assert_not_awaited()
+        assert not (voice_cache.voice_cache_root() / b).exists()

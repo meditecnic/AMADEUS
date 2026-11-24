@@ -42,7 +42,7 @@ def test_accepts_8000_code_points(ready_chat, frame_type, content):
     ws.send_json({"type": frame_type, "content": content})
     frames = receive(ws, "test.processed")
     turn = session.turn_queue.active()
-    assert turn is not None and frames[0]["task_id"] == turn.id and not frames[0]["queued"]
+    assert turn is not None and frames == [{"type": "test.processed"}]
     assert turn.state.history[-1]["role"] == "user"
     assert turn.state.history[-1]["content"] == content.strip()
     processor.assert_awaited_once()

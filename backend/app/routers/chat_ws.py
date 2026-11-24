@@ -2646,6 +2646,7 @@ async def _dispatch_tts_sentences(
     epoch: int,
 ) -> str:
     sentence_queue = asyncio.Queue()
+    turn = getattr(session, "turn", None)
     full_ja_text_parts = []
 
     async def tts_send_callback(seq: int, payload):
@@ -2737,7 +2738,7 @@ async def _dispatch_tts_sentences(
                     full_ja_text_parts.append(forced)
                     tts_text = clean_text_for_tts(forced)
                     is_action_only = not is_meaningful_sentence(tts_text)
-                    if session.enable_tts and not is_action_only and not (session.turn and session.turn.hidden):
+                    if session.enable_tts and not is_action_only and not (turn and turn.hidden):
                         if not tts_status_sent:
                             await send_queue.put((epoch, {
                                 "type": "status",
@@ -2763,7 +2764,7 @@ async def _dispatch_tts_sentences(
             tts_text = clean_text_for_tts(text)
             is_action_only = not is_meaningful_sentence(tts_text)
 
-            if session.enable_tts and not is_action_only and not (session.turn and session.turn.hidden):
+            if session.enable_tts and not is_action_only and not (turn and turn.hidden):
                 if not tts_status_sent:
                     await send_queue.put((epoch, {
                         "type": "status",
@@ -2786,7 +2787,7 @@ async def _dispatch_tts_sentences(
             clean_len = len(re.sub(r'[\s。！？!?,.、…\-—]', '', tts_text))
             if clean_len < 2:
                 await tts_manager.queue_silent(session.tts_key, text, final_emotion, "too_short")
-            elif session.enable_tts and not is_action_only and not (session.turn and session.turn.hidden):
+            elif session.enable_tts and not is_action_only and not (turn and turn.hidden):
                 if not tts_status_sent:
                     await send_queue.put((epoch, {
                         "type": "status",
@@ -3228,10 +3229,14 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 
             if frame_type == "voice.stop":
                 active = turn_queue.active()
-                await stop_turn_voice(active.state if active is not None else session)
+                pending = turn_queue.pending_start() if active is None else None
+                if pending is not None:
+                    pending.voice_stopped = True
+                else:
+                    await stop_turn_voice(active.state if active is not None else session)
                 await send_queue.put((session.current_epoch, {
                     "type": "status",
-                    "dsk": "thinking" if active is not None or session.is_busy else "idle",
+                    "dsk": "thinking" if active is not None or pending is not None or session.is_busy else "idle",
                     "state": "voice_stopped",
                     "tts": "idle",
                 }))
@@ -3239,17 +3244,17 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 
             if frame_type == "turn.cancel":
                 active = turn_queue.active()
-                if active is None:
-                    turn_queue.cancel_pending_start()
+                pending = turn_queue.cancel_pending_start() if active is None else None
                 turn_state = active.state if active is not None else session
+                turn_id = pending.id if pending is not None else turn_state.active_turn_id
                 pipeline = turn_state.active_segment_pipeline
                 if pipeline is not None:
                     await pipeline.cancel(reason="user_turn_cancel")
-                elif session.protocol_version >= 2 and turn_state.active_turn_id:
+                elif session.protocol_version >= 2 and turn_id:
                     await send_queue.put((session.current_epoch, {
                         "type": "turn.cancelled",
                         "conversation_id": session.conversation_id,
-                        "turn_id": turn_state.active_turn_id,
+                        "turn_id": turn_id,
                         "generation": turn_state.revision,
                     }))
                 if active is not None:
@@ -3609,7 +3614,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     if session.erasure_pending:
                         await send_queue.put((session.current_epoch, {'type':'error', 'message':'正在清空会话，请稍后再试。'}))
                         continue
-                    if session.is_busy:
+                    if session.is_busy or (session.protocol_version < 2 and turn_queue.has_work()):
                         await send_queue.put((session.current_epoch, {"type": "error", "message": "系统正在处理中，请稍后再试"}))
                         continue
                     if session.conversation_id is None:

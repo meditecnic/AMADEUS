@@ -561,6 +561,7 @@
 .ws2 .history-sidebar-icon.is-new::after { content: ''; position: absolute; left: calc(50% + 7px); top: calc(50% - 7px); width: 5px; height: 5px; background: var(--ws-accent); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 .ws2 .conversation-rail-activity { position: absolute; right: calc(50% + 7px); width: 5px; height: 5px; border: 1px solid var(--ws-accent); border-radius: 50%; }
 .ws2 .conversation-rail-activity[data-running='true'] { background: var(--ws-accent); }
+.ws2 .conversation-rail-activity[data-running='false'] { right: calc(50% + 10px); }
 .ws2 .history-rail-more { margin-top: 6px; padding: 3px 4px; border: 0; background: none; font: 10px/1 var(--ws-mono); letter-spacing: .06em; color: var(--ws-ink-3); }
 .ws2 .history-rail-more:hover { color: var(--ws-ink); }
 

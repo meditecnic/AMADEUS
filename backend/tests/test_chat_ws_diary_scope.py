@@ -15,8 +15,6 @@ from test_chat_ws_turn_queue import chat as chat
 def test_background_history_trim_recompiles_its_own_diaries_and_leaves_foreground_prompt(
     chat, monkeypatch
 ):
-    if not hasattr(prompt_compiler, "recompile_session_diaries"):
-        pytest.skip("Requires the diary generation integration.")
     from app.services.memory_v11 import diary_generation
 
     client, owner, provider, *_ = chat

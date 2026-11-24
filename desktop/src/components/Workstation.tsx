@@ -2274,6 +2274,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
   const activeConversationTurns = activeConversationId ? conversationTurns?.[activeConversationId] : undefined;
   const queuedTurns = activeConversationTurns?.queued ?? [];
+  const listedTurns = activeConversationId && turnActive
+    ? { ...conversationTurns, [activeConversationId]: { running: true, queued: queuedTurns } }
+    : conversationTurns;
   const showRunningNotice = activeConversationTurns?.running && !messages.some((message) => message.streaming);
   const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown'
     || turnActive || isSynthesizing || queuedTurns.length > 0 || conversationBusy
@@ -2329,11 +2332,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       if (target.mode === 'edit' && editedText) {
         const restoreEditDraft = () => {
-          setInputText((current) => {
-            if (!current.trim()) return editedText;
-            return current.trim() === editedText.trim() ? current : `${editedText}\n\n${current}`;
-          });
-          window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+          restoreComposerDraft(editedText);
           setMessageNotice({
             text: '已回到这句之前，但消息未能发出，改好的话已留在输入框里。',
             kind: 'error',
@@ -2367,6 +2366,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setTruncateBusy(false);
     }
   };
+
+  function restoreComposerDraft(text: string) {
+    setInputText((current) => {
+      if (!current.trim()) return text;
+      return current.trim() === text.trim() ? current : `${text}\n\n${current}`;
+    });
+    window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
+  }
 
   return (
     <OverlayRootContext.Provider value={overlayRoot}>
@@ -2538,7 +2545,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen || isMemoryOpen}>
         <MotionConfig transition={wsTransition(worldline, 'base')} reducedMotion="user">
         <HistorySidebar
-          conversationTurns={conversationTurns}
+          conversationTurns={listedTurns}
           isCollapsed={isHistoryCollapsed}
           onToggle={() => setIsHistoryCollapsed((v) => !v)}
           conversations={conversations}
@@ -2583,7 +2590,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             data-scroll-start={transcriptScroll.atStart}
             data-scroll-end={transcriptScroll.atEnd}
           >
-            {visibleMessages.length === 0 ? (
+            {visibleMessages.length === 0 && queuedTurns.length === 0 ? (
               // An empty conversation is a note left on the sheet (SG: a scrap of notebook paper taped down; β: a framed
               // slip). "NO DATA" is what the original's empty save slots say.
               <div className="ws2-empty">
@@ -2709,14 +2716,26 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 ))}
               </div>
             )}
-            {queuedTurns.map((taskId) => (
-              <div key={taskId} className="ws2-replay-bar">
-                <span role="status">她在等另一段回复结束。</span>
-                <button type="button" onClick={() => withdrawTurn(taskId)}>撤回排队</button>
-              </div>
-            ))}
+            {queuedTurns.map((taskId) => {
+              const text = activeConversationTurns?.queuedTexts?.[taskId];
+              const previewId = text ? `queued-${taskId}` : undefined;
+              return (
+                <div key={taskId} className="ws2-turn-notice">
+                  {text && <p id={previewId} className="ws2-queued-message">{text}</p>}
+                  <div className="ws2-replay-bar">
+                    <span role="status">她在等另一段回复结束。</span>
+                    <button type="button" aria-describedby={previewId} onClick={() => {
+                      if (withdrawTurn(taskId) && text) {
+                        composerHandoffUntil.current = Date.now() + 3000;
+                        restoreComposerDraft(text);
+                      }
+                    }}>撤回排队</button>
+                  </div>
+                </div>
+              );
+            })}
             {showRunningNotice && (
-              <div className="ws2-replay-bar">
+              <div className="ws2-replay-bar ws2-turn-notice">
                 <span role="status">她还在回复。</span>
                 <button type="button" onClick={handleCancelTurn}>停止本轮</button>
               </div>

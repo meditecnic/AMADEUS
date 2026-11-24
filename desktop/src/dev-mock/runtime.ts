@@ -19,8 +19,10 @@ type MockTurn = {
   worldline: 'steins_gate' | 'beta';
   conversation: Conversation;
   content: string;
+  queued: boolean;
   generation?: number;
   hidden?: boolean;
+  reported?: boolean;
 };
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const fail = (status: number, code: string): Reply => ok({ detail: { code } }, status);
@@ -333,7 +335,10 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     };
     const hide = () => {
       const turn = active();
-      if (turn) turn.hidden = true;
+      if (turn && !turn.hidden) {
+        turn.hidden = true;
+        publish(turn);
+      }
     };
     const publish = (turn: MockTurn) => {
       const matching = (lanes.get(turn.worldline) ?? []).filter(item => item.conversation === turn.conversation);
@@ -343,7 +348,10 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
       const busy = state(name, client).busyConversations;
       if (running || queued.length) busy.add(id);
       else busy.delete(id);
-      emit({ type: 'conversation.turn_state', worldline: turn.worldline, conversation_id: id, running, queued });
+      if (turn.queued || turn.hidden || turn.reported) {
+        matching.forEach(item => { item.reported = true; });
+        emit({ type: 'conversation.turn_state', worldline: turn.worldline, conversation_id: id, running, queued });
+      }
     };
     const remove = (turn: MockTurn) => {
       const lane = lanes.get(turn.worldline);
@@ -489,12 +497,15 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
         }
         const lane = lanes.get(worldline) ?? [];
         lanes.set(worldline, lane);
-        const turn = { id: `mock-turn-${++counter}`, worldline, conversation, content: frame.content.trim() };
         const queued = lane.length > 0;
+        const turn = { id: `mock-turn-${++counter}`, worldline, conversation, content: frame.content.trim(), queued };
         lane.push(turn);
-        emit({ type: 'turn.accepted', task_id: turn.id, conversation_id: conversation.id, worldline, queued });
-        if (queued) publish(turn);
-        else start(turn);
+        if (queued) {
+          emit({ type: 'turn.accepted', task_id: turn.id, conversation_id: conversation.id, worldline, queued });
+          publish(turn);
+        } else {
+          start(turn);
+        }
       }
       // voice.stop / tts_debug intentionally emit no audio in this silent mock.
     }

@@ -265,19 +265,24 @@ it('shows replying, queued and unread states beside the correct conversations', 
 it('withdraws a queued message by task ID and keeps it out of the transcript', async () => {
   rows = [oldRow, newRow];
   await startOld(false);
+  wireHistory.set('new', []);
   await clickHistory('new');
   sendText('撤回这句');
   act(() => {
     latest().emit({ type: 'turn.accepted', conversation_id: 'new', task_id: 'queued-id', queued: true });
     latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: ['queued-id'] });
   });
-  expect(screen.queryByText('撤回这句')).not.toBeInTheDocument();
+  expect(screen.getByText('撤回这句')).toBeInTheDocument();
+  expect(document.querySelector('.ws2-lines')).not.toHaveTextContent('撤回这句');
+  expect(screen.queryByText('这个会话还是空的。')).not.toBeInTheDocument();
   expect(screen.getByLabelText('输入消息')).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '已有草稿' } });
   fireEvent.click(screen.getByRole('button', { name: '撤回排队' }));
   expect(latest().sent.at(-1)).toEqual({ type: 'turn.withdraw', task_id: 'queued-id' });
   act(() => latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: [] }));
   expect(screen.queryByRole('button', { name: '撤回排队' })).not.toBeInTheDocument();
   expect(screen.getByLabelText('输入消息')).toBeEnabled();
+  expect(screen.getByLabelText('输入消息')).toHaveValue('撤回这句\n\n已有草稿');
 });
 
 it('restores the saved user line when the queued reply runs in the foreground', async () => {
@@ -289,7 +294,7 @@ it('restores the saved user line when the queued reply runs in the foreground', 
     latest().emit({ type: 'turn.accepted', conversation_id: 'new', task_id: 'queued-id', queued: true });
     latest().emit({ type: 'conversation.turn_state', conversation_id: 'new', running: false, queued: ['queued-id'] });
   });
-  expect(screen.queryByText('排队后开始这句')).not.toBeInTheDocument();
+  expect(document.querySelector('.ws2-lines')).not.toHaveTextContent('排队后开始这句');
   wireHistory.set('new', [
     { id: 14, role: 'user', turn_id: 'queued-id', content: '排队后开始这句' },
     { id: 15, role: 'assistant', turn_id: 'queued-id', content: '今は返事できるわ。', translation: '现在可以回了。' },
@@ -304,6 +309,26 @@ it('restores the saved user line when the queued reply runs in the foreground', 
   await flush(100);
   expect(screen.getAllByText('排队后开始这句')).toHaveLength(1);
   expect(screen.getAllByText('今は返事できるわ。')).toHaveLength(1);
+});
+
+it('keeps the queued preview when its acceptance arrives during a conversation switch', async () => {
+  rows = [oldRow, newRow];
+  await startOld(false);
+  sendText('切换中确认的排队原文');
+  FakeWebSocket.autoSwitch = false;
+  await clickHistory('new');
+  const request = latest().sent.filter(frame => frame.type === 'conversation.switch').at(-1);
+  act(() => {
+    latest().emit({ type: 'turn.accepted', conversation_id: 'old', task_id: 'late-ack', queued: true });
+    latest().emit({ type: 'conversation.turn_state', conversation_id: 'old', running: false, queued: ['late-ack'] });
+    latest().emit({ type: 'conversation.switched', request_id: request?.request_id,
+      conversation_id: 'new', worldline: 'steins_gate', generation: 3 });
+  });
+  expect(active()).toBe('new');
+  expect(screen.queryByText('切换中确认的排队原文')).not.toBeInTheDocument();
+  FakeWebSocket.autoSwitch = true;
+  await clickHistory('old');
+  expect(screen.getByText('切换中确认的排队原文')).toBeInTheDocument();
 });
 
 it.each([false, true])('reconciles a full reply after returning, completion before ACK=%s', async (beforeAck) => {

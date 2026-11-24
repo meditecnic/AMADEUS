@@ -37,6 +37,8 @@ class ChatTurn:
     task: asyncio.Task | None = None
     hidden: bool = False
     cancelled: bool = False
+    voice_stopped: bool = False
+    reported: bool = False
 
     async def put(self, message: tuple[int, dict]) -> bool:
         if self.hidden:
@@ -75,16 +77,27 @@ class ChatTurnQueue:
             None,
         )
 
-    def cancel_pending_start(self) -> None:
-        for turn in self.turns(self.view.worldline):
+    def pending_start(self) -> ChatTurn | None:
+        lane = self.lanes.get(self.view.worldline)
+        if lane:
+            turn = lane[0]
             if (
-                not turn.queued
-                and turn.task is None
+                turn.task is None
+                and not turn.cancelled
                 and turn.owner == self.owner
                 and turn.conversation_id == self.view.conversation_id
             ):
-                turn.cancelled = True
-                return
+                return turn
+        return None
+
+    def cancel_pending_start(self) -> ChatTurn | None:
+        turn = self.pending_start()
+        if turn is not None:
+            turn.cancelled = True
+        return turn
+
+    def has_work(self) -> bool:
+        return any(turn.task is None or not turn.task.done() for turn in self.turns())
 
     def busy(self, worldline: str, conversation_id: str) -> bool:
         return any(turn.conversation_id == conversation_id for turn in self.turns(worldline))
@@ -103,11 +116,15 @@ class ChatTurnQueue:
             )
 
     def publish(self, turn: ChatTurn) -> None:
+        if not (turn.queued or turn.hidden or turn.reported):
+            return
         matching = [
             other
             for other in self.turns(turn.worldline)
             if other.owner == turn.owner and other.conversation_id == turn.conversation_id
         ]
+        for other in matching:
+            other.reported = True
         self.emit(
             turn,
             {
@@ -128,11 +145,11 @@ class ChatTurnQueue:
             content,
             outbox,
             view.protocol_version,
-            queued=bool(lane),
+            queued=any(other.task is None or not other.task.done() for other in lane),
         )
         lane.append(turn)
-        self.emit(turn, {"type": "turn.accepted", "task_id": turn.id, "queued": turn.queued})
         if turn.queued:
+            self.emit(turn, {"type": "turn.accepted", "task_id": turn.id, "queued": True})
             self.publish(turn)
         if turn.worldline not in self.runners:
             self.runners[turn.worldline] = asyncio.create_task(self.run(turn.worldline))
@@ -145,7 +162,9 @@ class ChatTurnQueue:
 
     async def withdraw(self, owner: str, task_id: str) -> None:
         for turn in self.turns():
-            if turn.owner == owner and turn.id == task_id:
+            if turn.owner == owner and turn.id == task_id and turn.task is None:
+                # Mark intent before waiting for the admission lock held during preparation.
+                turn.cancelled = True
                 async with conversation_admission(
                     turn.worldline, self.view.session_id, turn.conversation_id
                 ):
@@ -194,6 +213,7 @@ class ChatTurnQueue:
         from app.routers.chat_ws import stop_turn_voice
 
         turn.hidden = True
+        self.publish(turn)
         if turn.state is not None:
             await stop_turn_voice(turn.state)
 
@@ -201,10 +221,13 @@ class ChatTurnQueue:
         view = self.view
         state = copy.copy(view)
         state.turn = turn
+        state.erasure_pending = False
+        state.is_busy = False
+        state.active_task = None
+        state.active_task_connection_id = None
         state.active_turn_id = turn.id
         state.active_streams = set()
         state.active_segment_pipeline = None
-        state.voice_stopped_turn_id = None
         state.lock = asyncio.Lock()
         state.worldline = turn.worldline
         state.conversation_id = turn.conversation_id
@@ -275,6 +298,7 @@ class ChatTurnQueue:
                         view.conversation_id,
                     ) != (worldline, turn.conversation_id)
                     turn.state = state
+                    state.voice_stopped_turn_id = turn.id if turn.voice_stopped else None
                     turn.task = state.active_task = asyncio.create_task(
                         process_queued_turn(
                             state,
@@ -295,8 +319,9 @@ class ChatTurnQueue:
                         == (worldline, turn.conversation_id)
                     ):
                         view.history = state.history
-                        view.memory_summary = state.memory_summary
-                        view.content_epoch = state.content_epoch
+                        if view.content_epoch <= state.content_epoch:
+                            view.memory_summary = state.memory_summary
+                            view.content_epoch = state.content_epoch
                         view.last_assistant_emotion = state.last_assistant_emotion
                         view.consecutive_no_emo_tags = state.consecutive_no_emo_tags
                         if turn.provider is not None:

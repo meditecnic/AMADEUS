@@ -12,7 +12,7 @@
 .ws2 { --log-rule: rgba(216, 52, 59, .34); }
 .ws2[data-wl='beta'] { --log-rule: rgba(227, 84, 42, .36); }
 /* the names column is the margin left of the rule; the line starts 14px right of it */
-.ws2 :is(.ws2-lines, .ws2-composer) { --log-names: 96px; --log-gutter: calc(var(--log-names) + 17px); --log-right: 84px; }
+.ws2 :is(.ws2-lines, .ws2-composer, .ws2-turn-notice) { --log-names: 96px; --log-gutter: calc(var(--log-names) + 17px); --log-right: 84px; }
 /* a sentence pointed at, and the one it pairs with: a pencil line under it (SG red, β amber) */
 .ws2 { --log-pencil: rgba(222, 62, 66, .8); }
 .ws2[data-wl='beta'] { --log-pencil: rgba(240, 156, 88, .85); }
@@ -162,6 +162,8 @@
   text-decoration-color: var(--ws-line-2);
 }
 .ws2-replay-bar button:is(:hover, :focus-visible) { color: var(--ws-ink); text-decoration-color: var(--log-pencil); outline: none; }
+.ws2-turn-notice { margin-left: var(--log-gutter); margin-right: var(--log-right); }
+.ws2-queued-message { margin: 8px 0 0; color: var(--ws-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Edit-and-resend field inside ConfirmDialog. */
 .ws2-truncate-edit { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
@@ -345,7 +347,7 @@
   .ws2 .ws2-guide > span:last-child { display: none; }
 }
 @container (max-width: 440px) {
-  .ws2 :is(.ws2-lines, .ws2-composer) { --log-names: 28px; --log-right: 22px; }
+  .ws2 :is(.ws2-lines, .ws2-composer, .ws2-turn-notice) { --log-names: 28px; --log-right: 22px; }
   .ws2-line { --first: 14px; }
   .ws2-line-error { --first: 25px; }
   .ws2-line > header { position: relative; top: auto; right: auto; left: auto; width: auto; flex-direction: row; margin-bottom: 8px; text-align: left; }
