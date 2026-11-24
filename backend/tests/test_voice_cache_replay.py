@@ -868,3 +868,18 @@ def test_ws_history_saved_follows_interruption_notice_persistence(
                 release_notice.set()
     finally:
         chat_ws.sessions.pop(owner, None)
+
+
+def test_remove_tree_logs_winerror_when_present(tmp_path, monkeypatch, caplog):
+    target = tmp_path / "000.wav"
+    target.write_bytes(_wav(8))
+
+    def raise_sharing_violation(self):
+        err = PermissionError("sharing violation")
+        err.winerror = 32  # type: ignore[attr-defined]
+        raise err
+
+    monkeypatch.setattr(Path, "unlink", raise_sharing_violation)
+    with caplog.at_level("WARNING", logger="app.services.voice_cache"):
+        assert voice_cache._remove_tree_best_effort(target) is False
+    assert "PermissionError, winerror=32" in caplog.text

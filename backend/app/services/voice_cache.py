@@ -167,10 +167,12 @@ def _remove_tree_best_effort(path: Path) -> bool:
     except FileNotFoundError:
         return True
     except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
         logger.warning(
-            "[VoiceCache] could not remove %s (%s); deferred to startup sweep",
+            "[VoiceCache] could not remove %s (%s%s); deferred to startup sweep",
             path.name,
             type(exc).__name__,
+            f", winerror={winerror}" if winerror is not None else "",
         )
         return False
 

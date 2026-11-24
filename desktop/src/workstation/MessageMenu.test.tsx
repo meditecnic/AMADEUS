@@ -7,7 +7,7 @@ import { MessageMenu, resolveTruncateTarget } from './MessageMenu';
 import { deriveFactReadingArchive } from '../memory-space/readingDetails';
 
 const wsMock = vi.hoisted(() => ({
-  messages: [] as Message[], isPlaying: false,
+  messages: [] as Message[], isPlaying: false, isTurnActive: false, isSynthesizing: false,
   callbacks: {} as Pick<UseAmadeusWSParams, 'onTurnStarted' | 'onTurnCompleted' | 'onTurnHistorySaved' | 'onAudioChunk'>,
   sendChat: vi.fn<(content: string, onAccepted?: () => void, onRejected?: () => void) => boolean>(() => true),
   canSendChat: vi.fn<(content: string) => boolean>(() => true),
@@ -28,8 +28,8 @@ vi.mock('../hooks/useAmadeusWS', () => ({
       return true;
     });
     return {
-      status: 'READY', sessionState: 'ready', messages: wsMock.messages, isThinking: false, isTurnActive: false,
-      isSynthesizing: false, activeTool: null, activeNotice: null, emotion: 'neutral',
+      status: 'READY', sessionState: 'ready', messages: wsMock.messages, isThinking: false, isTurnActive: wsMock.isTurnActive,
+      isSynthesizing: wsMock.isSynthesizing, activeTool: null, activeNotice: null, emotion: 'neutral',
       sendChat: wsMock.sendChat, canSendChat: wsMock.canSendChat, stopVoice: wsMock.stopVoice, cancelTurn: wsMock.cancelTurn,
       sendDebugTts: wsMock.sendDebugTts, updateConfig: wsMock.updateConfig, reconnect: wsMock.reconnect,
       applyTruncate: wsMock.applyTruncate, hydrateMessageIds: wsMock.hydrateMessageIds,
@@ -119,6 +119,8 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     localStorage.clear();
     wsMock.messages = SAMPLE.map((m) => ({ ...m }));
     wsMock.isPlaying = false;
+    wsMock.isTurnActive = false;
+    wsMock.isSynthesizing = false;
     wsMock.sendChat.mockReset().mockReturnValue(true);
     wsMock.canSendChat.mockReset().mockReturnValue(true);
     wsMock.stopVoice.mockReset();
@@ -370,6 +372,97 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     expect(screen.queryByRole('group', { name: 'Current response controls' })).not.toBeInTheDocument();
     const lastArticle = document.querySelector('[data-message-id="a2"]');
     expect(lastArticle?.querySelector('[data-speaking-id]')).toHaveAttribute('data-speaking-id', '');
+  });
+
+  it('waits for an active foreground turn to settle and sends truncate once with the hydrated last message id', async () => {
+    wsMock.messages = [
+      ...SAMPLE.map((m) => ({ ...m })),
+      { id: 'u3', turnId: 't3', role: 'user', content: '第三轮问题' },
+      { id: 'a3', turnId: 't3', role: 'assistant', streaming: true, content: '三つ目の答えよ。', translation: '第三个回答。' },
+    ];
+    wsMock.isPlaying = true;
+    wsMock.isTurnActive = true;
+    wsMock.isSynthesizing = true;
+    await mountSelected();
+    const existing = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (String(url).includes('/api/conversations/conv-1/messages?')) {
+        return Promise.resolve(Response.json([
+          ...SAMPLE.map((m) => ({ id: m.dbId, role: m.role, content: m.content, translation: m.translation })),
+          { id: 14, role: 'user', turn_id: 't3', content: '第三轮问题' },
+          { id: 15, role: 'assistant', turn_id: 't3', content: '三つ目の答えよ。', translation: '第三个回答。' },
+          // Unseen turn not present on screen must not be adopted into expected_last_message_id.
+          { id: 16, role: 'user', turn_id: 't-unseen', content: '未看到的轮次' },
+        ]));
+      }
+      return existing(url, init);
+    });
+    callOrder = [];
+
+    openAction('a1', '回到这里…');
+    fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
+    expect(wsMock.stopAll).toHaveBeenCalled();
+    expect(wsMock.stopVoice).toHaveBeenCalled();
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
+
+    act(() => wsMock.callbacks.onTurnCompleted?.());
+    await waitFor(() => expect(wsMock.applyTruncate).toHaveBeenCalledWith(12));
+    const truncateCalls = callOrder.filter((call) => call.startsWith('truncate:'));
+    expect(truncateCalls).toHaveLength(1);
+    expect(JSON.parse(truncateCalls[0].slice('truncate:'.length))).toEqual({
+      from_message_id: 12,
+      expected_last_message_id: 15,
+    });
+  });
+
+  it('preserves edited text and existing composer draft on truncate 409 and network error', async () => {
+    await mountSelected();
+    const composer = screen.getByLabelText('输入消息') as HTMLTextAreaElement;
+
+    // 1) 409 conversation_changed closes the modal and merges edited text + existing draft into composer.
+    truncateStatus = 409;
+    truncateBody = { detail: { code: 'conversation_changed' } };
+    fireEvent.change(composer, { target: { value: '原有草稿409' } });
+    openAction('u2', '改这句重发…');
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改好的话409' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(await screen.findByTestId('message-action-toast')).toHaveTextContent('改好的话已留在输入框里');
+    expect(screen.queryByTestId('truncate-edit-textarea')).not.toBeInTheDocument();
+    expect(composer.value).toContain('改好的话409');
+    expect(composer.value).toContain('原有草稿409');
+
+    // 2) Other non-2xx (e.g. 409 conversation_busy) keeps both texts alive and preserves both on cancel.
+    truncateStatus = 409;
+    truncateBody = { detail: { code: 'conversation_busy' } };
+    fireEvent.change(composer, { target: { value: '原有草稿忙' } });
+    openAction('u2', '改这句重发…');
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改好的话忙' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(await screen.findByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument();
+    expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('改好的话忙');
+    expect(composer).toHaveValue('原有草稿忙');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(composer.value).toContain('改好的话忙');
+    expect(composer.value).toContain('原有草稿忙');
+
+    // 3) Network failure keeps both texts alive while open and preserves both in composer if cancelled.
+    const existing = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (String(url).includes('/api/conversations/conv-1/truncate')) {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      return existing(url, init);
+    });
+    fireEvent.change(composer, { target: { value: '原有草稿断网' } });
+    openAction('u2', '改这句重发…');
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改好的话断网' } });
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(await screen.findByText('回退对话时连接失败，请稍后再试。')).toBeInTheDocument();
+    expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('改好的话断网');
+    expect(composer).toHaveValue('原有草稿断网');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(composer.value).toContain('改好的话断网');
+    expect(composer.value).toContain('原有草稿断网');
   });
 
   it('lists voice_cache separately in DataPanel disk usage', async () => {
