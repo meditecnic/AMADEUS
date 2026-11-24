@@ -1094,7 +1094,6 @@ async def get_clean_text_stream(
                     provider_snapshot=provider_snapshot,
                     session=session,
                     source_text=foreign_tail,
-                    user_request="",
                     partial=bool(published_parts or suffix),
                 )
                 if rendered:
@@ -1228,18 +1227,6 @@ def _language_safe_prompt_history(active_history: list | None) -> list:
     return projected
 
 
-def _latest_real_user_request(active_history: list | None) -> str:
-    """Return the latest actual user message, skipping tool/system evidence."""
-
-    for message in reversed(active_history or []):
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        content = str(message.get("content") or "").strip()
-        if content:
-            return content
-    return ""
-
-
 def _renderer_register(session: SessionState) -> str:
     """Match Kurisu's turn register (plain vs polite) without adding session state."""
     compiled = getattr(session, "turn_compiled_prompt", None)
@@ -1268,7 +1255,6 @@ async def _render_foreign_speech_to_japanese(
     provider_snapshot: ProviderSnapshot | None,
     session: SessionState,
     source_text: str,
-    user_request: str = "",
     partial: bool = False,
 ) -> str | None:
     """Render foreign draft data through an isolated, tool-free provider call.
@@ -1292,7 +1278,6 @@ async def _render_foreign_speech_to_japanese(
         stream_kwargs = {
             "active_history": build_japanese_renderer_history(
                 source,
-                user_request,
                 strict=renderer_attempt > 0,
                 register=register,
                 partial=partial,

@@ -88,6 +88,13 @@ def _run_ws_turn(app_client, monkeypatch, *, user_msg: str, draft: str, rendered
     return provider, ready, history_body, tts_calls
 
 
+PARTIAL_CONTROL_NOTE = (
+    "これは応答の一部だけの断片なので、元の末尾記号（……・、・。）を保ち、"
+    "この断片の意味だけを簡潔な日本語に直すこと。"
+    "余計な文や補完、単語だけの断片への無理な述語化や語尾追加はしないこと。"
+)
+
+
 def test_320_h09_t8_leading_fragment_isolates_user_request_and_keeps_order_and_tts(
     app_client, monkeypatch
 ):
@@ -114,7 +121,7 @@ def test_320_h09_t8_leading_fragment_isolates_user_request_and_keeps_order_and_t
     assert "original_user_request" not in renderer_call["active_history"][0]["content"]
     assert "一个人下没意思" not in str(renderer_call["active_history"])
     assert "平时摸鱼都干嘛" not in str(renderer_call["active_history"])
-    assert "断片" in renderer_call["active_history"][1]["content"]
+    assert PARTIAL_CONTROL_NOTE in renderer_call["active_history"][1]["content"]
     assert "常体" in renderer_call["active_history"][1]["content"]
 
     expected = rendered_head + tail_ja
@@ -150,7 +157,7 @@ def test_320_h14_t6_leading_fragment_never_completes_from_user_and_preserves_ord
     assert payload == {"assistant_draft": "泡面啊……"}
     assert "别念了" not in str(renderer_call["active_history"])
     assert "现在几点了" not in str(renderer_call["active_history"])
-    assert "断片" in renderer_call["active_history"][1]["content"]
+    assert PARTIAL_CONTROL_NOTE in renderer_call["active_history"][1]["content"]
 
     expected = rendered_head + tail_ja
     assert "".join(ready) == expected
@@ -315,3 +322,111 @@ async def test_320_quoted_chinese_tts_boundary_handles_stage2_cases_and_keeps_ui
     ws_payload = client.post.await_args.kwargs["json"]
     assert ws_payload["text_lang"] == "auto"
     assert "「\u200b将功补过\u200b」" in ws_payload["text"]
+
+
+@pytest.mark.parametrize(
+    "japanese_line",
+    [
+        "それが「所以」よ。",
+        "先に「充塡して」おきなさい。",
+        "研究に「没頭」していただけよ。",
+        "来週の「発表」に備えるわ。",
+    ],
+)
+def test_320_quoted_japanese_stays_ja_without_false_auto_switch(japanese_line):
+    """[321] P2-1: Japanese kanji quotes (incl. non-CP932 JIS X 0213 and 所以) stay ja."""
+    surf, lang = tts_speech_surface(japanese_line)
+    assert lang == "ja"
+    assert "\u200b" not in surf
+
+
+def test_320_mixed_adjacent_kanji_marks_only_chinese_subspan():
+    """[321] P2-1: adjacent Japanese kanji like 職場 must stay outside the Chinese marker."""
+    surf_no_src, lang_no_src = tts_speech_surface("「職場摸鱼」ってこと？")
+    assert lang_no_src == "auto"
+    assert surf_no_src == "「職場\u200b摸鱼\u200b」ってこと？"
+
+    surf_narrow, lang_narrow = tts_speech_surface("「会社摸鱼」ってこと？", "平时摸鱼")
+    assert lang_narrow == "auto"
+    assert surf_narrow == "「会社\u200b摸鱼\u200b」ってこと？"
+
+
+def test_320_quoted_chinese_preserves_baseline_source_matching_and_stage2_turns():
+    """[321] P2-2: preserve baseline pure-Chinese source matching and ambiguous-word ja guard."""
+    # Bare quoted Chinese user message must still match and switch to auto.
+    surf_boss, lang_boss = tts_speech_surface("その「老板」はやめなさい。", "「老板」")
+    assert lang_boss == "auto"
+    assert surf_boss == "その「\u200b老板\u200b」はやめなさい。"
+
+    # Mixed Chinese+kana user message quoting ambiguous 了解 must stay ja.
+    surf_ambig, lang_ambig = tts_speech_surface(
+        "その「了解」は余計よ。", "我刚才说『了解』，不是『いいよ』"
+    )
+    assert lang_ambig == "ja"
+    assert "\u200b" not in surf_ambig
+
+    # All 13 stage-2 quoted Chinese utterances remain auto-bounded.
+    stage2_pairs = [
+        ("助手“酱”じゃないの。", "嘿嘿，助手酱~", "“\u200b酱\u200b”"),
+        ("「嘿嘿」だけ送ってくるあたり。", "嘿嘿，助手酱~", "「\u200b嘿嘿\u200b」"),
+        ("「反正你也没别的事」って、よく言うわね。", "反正你也没别的事", "「\u200b反正你也没别的事\u200b」"),
+        ("誰が「会过日子」よ。", "你倒是会过日子。", "「\u200b会过日子\u200b」"),
+        ("「正经的」な話をしたいなら。", "多跟你说点正经的？", "「\u200b正经的\u200b」"),
+        (
+            "正確に言うと、「没发生过」とは少し違うの。",
+            "你刚才那句「会話が切れれば止まる」……算不算「没发生过」？",
+            "「\u200b没发生过\u200b」",
+        ),
+        ("「机关的阴谋」なんて力説するから。", "这一切都是机关的阴谋！", "「\u200b机关的阴谋\u200b」"),
+        ("それを「鸡关」に聞こえたのは。", "鸡关！就是鸡关！", "「\u200b鸡关\u200b」"),
+        ("……今の「瘫着」したい気分は分かりますが。", "我现在只想瘫着。", "「\u200b瘫着\u200b」"),
+        ("「将功补过」って、甘いわね。", "算不算将功补过", "「\u200b将功补过\u200b」"),
+        ("今の「算了、不说了」で畳まないで。", "我这边……算了，不说了。", "「\u200b算了、不说了\u200b」"),
+        ("「全部が菜鸡互啄」って言い切るのは乱暴よ。", "会不会全是菜鸡互啄啊", "「全部が\u200b菜鸡互啄\u200b」"),
+    ]
+    for spoken, user_text, expected_fragment in stage2_pairs:
+        surf, lang = tts_speech_surface(spoken, user_text)
+        assert lang == "auto", spoken
+        assert expected_fragment in surf, (spoken, surf)
+
+
+@pytest.mark.asyncio
+async def test_320_self_initial_compile_to_renderer_uses_polite_register(
+    tmp_path, monkeypatch
+):
+    """[321] suggestion: real prompt compilation for self-initial flows into polite renderer."""
+    from app.db import init_db, reset_initialization_cache
+    from app.services.conversations import conversation_service
+    from app.services.prompt_compiler import compile_for_session
+
+    monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
+    reset_initialization_cache()
+    await init_db()
+
+    session = SessionState(f"self-init-{uuid4()}")
+    session.api_key = "test-key"
+    session.identity_mode = "self"
+    conv = await conversation_service.create_and_select(
+        session.session_id,
+        session.worldline,
+        provider_id="deepseek",
+        model_id="deepseek-flash",
+        identity_mode="self",
+    )
+    session.conversation_id = str(conv["id"])
+    session.system_prompt = await compile_for_session(session, "初次见面，请多指教")
+
+    provider = _FakeProvider("[EMO:neutral] 你好，初次见面。", "はじめまして。よろしくお願いします。")
+    monkeypatch.setattr(chat_ws, "deepseek_service", provider)
+
+    await get_clean_text_stream(
+        [{"role": "user", "content": "初次见面，请多指教"}], "", session
+    )
+
+    assert len(provider.calls) == 2
+    assert (
+        "口調はさっぱりと対等な敬体（です・ます。過剰な敬語は不可）。"
+        in provider.calls[1]["active_history"][1]["content"]
+    )
+

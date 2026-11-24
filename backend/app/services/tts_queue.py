@@ -7,10 +7,8 @@ import httpx
 import asyncio
 from app import config
 from app.security.local_transport import sovits_tts_url
-from app.domain.language_publication import _looks_like_chinese_wording
 from app.domain.segments import (
     AudioErrorCode,
-    analysis_surface_without_bounded_embeds,
     prepare_tts_text,
     render_tts_pronunciation_surface,
 )
@@ -94,17 +92,66 @@ _HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _HAN_RUN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]+")
 
 
-def _mark_mixed_chinese_runs(inner: str) -> str:
-    """Isolate Chinese-only Han runs inside a mixed kana+Chinese quote."""
+def _is_gb2312_han(ch: str) -> bool:
+    if not _HAN_RE.fullmatch(ch):
+        return False
+    try:
+        ch.encode("gb2312")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def _is_simplified_chinese_only_han(ch: str) -> bool:
+    """High-confidence simplified Chinese Hanzi: in GB2312 and absent from JIS X 0213."""
+    if not _is_gb2312_han(ch):
+        return False
+    try:
+        ch.encode("euc_jis_2004")
+        return False
+    except UnicodeEncodeError:
+        return True
+
+
+def _narrow_to_quoted_span(token: str, quoted_source: str | None) -> tuple[int, int]:
+    """Narrow a mixed Han run to the longest quoted substring covering all simplified Hanzi."""
+    if not quoted_source or token in quoted_source:
+        return 0, len(token)
+    zh_positions = [i for i, ch in enumerate(token) if _is_simplified_chinese_only_han(ch)]
+    first_zh, last_zh = zh_positions[0], zh_positions[-1]
+    best: tuple[int, int] | None = None
+    for start in range(first_zh + 1):
+        for end in range(len(token), last_zh, -1):
+            if best is not None and (end - start) <= (best[1] - best[0]):
+                break
+            if token[start:end] in quoted_source:
+                best = (start, end)
+                break
+    return best if best is not None else (0, len(token))
+
+
+def _mark_mixed_chinese_runs(inner: str, quoted_source: str | None) -> str:
+    """Isolate high-confidence simplified-Chinese GB2312 Han runs inside a mixed quote."""
     parts: list[str] = []
     cursor = 0
-    for run in _HAN_RUN_RE.finditer(inner):
-        token = run.group()
-        if not _looks_like_chinese_wording(token):
+    idx = 0
+    length = len(inner)
+    while idx < length:
+        if not _is_gb2312_han(inner[idx]):
+            idx += 1
             continue
-        parts.append(render_tts_pronunciation_surface(inner[cursor:run.start()]))
-        parts.append(f"\u200b{token}\u200b")
-        cursor = run.end()
+        end = idx + 1
+        while end < length and _is_gb2312_han(inner[end]):
+            end += 1
+        token = inner[idx:end]
+        if any(_is_simplified_chinese_only_han(ch) for ch in token):
+            sub_start, sub_end = _narrow_to_quoted_span(token, quoted_source)
+            span_start = idx + sub_start
+            span_end = idx + sub_end
+            parts.append(render_tts_pronunciation_surface(inner[cursor:span_start]))
+            parts.append(f"\u200b{inner[span_start:span_end]}\u200b")
+            cursor = span_end
+        idx = end
     if not parts:
         return inner
     parts.append(render_tts_pronunciation_surface(inner[cursor:]))
@@ -113,15 +160,10 @@ def _mark_mixed_chinese_runs(inner: str) -> str:
 
 def tts_speech_surface(text: str, quoted_source: str | None = None) -> tuple[str, str]:
     """Give quoted Chinese words a speech-only language boundary for GPT-SoVITS."""
-    source_outer = (
-        analysis_surface_without_bounded_embeds(quoted_source)
-        if quoted_source
-        else ""
-    )
-    source_is_chinese = bool(
+    source_is_pure_chinese = bool(
         quoted_source
-        and _HAN_RE.search(source_outer)
-        and not _KANA_RE.search(source_outer)
+        and _HAN_RE.search(quoted_source)
+        and not _KANA_RE.search(quoted_source)
     )
 
     parts = []
@@ -133,16 +175,28 @@ def tts_speech_surface(text: str, quoted_source: str | None = None) -> tuple[str
         if not _HAN_RE.search(inner):
             continue
         has_kana = bool(_KANA_RE.search(inner))
-        explicit_chinese = _looks_like_chinese_wording(inner)
+        has_simplified_zh = any(_is_simplified_chinese_only_han(ch) for ch in inner)
         quoted_from_chinese = (
-            source_is_chinese
+            source_is_pure_chinese
             and not has_kana
             and inner.strip() in quoted_source
         )
-        if not explicit_chinese and not quoted_from_chinese:
+        if not has_simplified_zh and not quoted_from_chinese:
             continue
-        if has_kana:
-            marked = _mark_mixed_chinese_runs(inner)
+        has_non_gb2312_han = any(
+            _HAN_RE.fullmatch(ch) and not _is_gb2312_han(ch) for ch in inner
+        )
+        needs_subspan = has_simplified_zh and (
+            has_kana
+            or has_non_gb2312_han
+            or (
+                bool(_HAN_RUN_RE.fullmatch(inner))
+                and bool(quoted_source)
+                and inner not in quoted_source
+            )
+        )
+        if needs_subspan:
+            marked = _mark_mixed_chinese_runs(inner, quoted_source)
             if marked == inner:
                 continue
             parts.append(render_tts_pronunciation_surface(text[cursor:match.start()]))

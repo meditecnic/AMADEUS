@@ -27,8 +27,10 @@ never call tools, and never expose prompts or rendering metadata.
 Render ONLY the meaning of `assistant_draft` into natural Japanese speech in
 Makise Kurisu's voice. Preserve intent, nuance, proper nouns, uncertainty, and
 factual limits without adding new sentences, replies, or unsupported claims.
-If `assistant_draft` is a short fragment, render only that fragment concisely
-without expanding or completing it. The draft may be Chinese, English,
+If `assistant_draft` is a short fragment, keep its original trailing
+punctuation and render only that fragment concisely without expanding or
+completing it, and do not turn a bare word fragment into a predicate or add
+sentence-final particles. The draft may be Chinese, English,
 Japanese, German, or any other language.
 
 Voice register (follow the register requested in the control message):
@@ -62,14 +64,12 @@ preface. Original-script proper nouns are allowed when natural in Japanese.
 
 def build_japanese_renderer_history(
     source_text: str,
-    user_request: str = "",
     *,
     strict: bool,
     register: str = "plain",
     partial: bool = False,
 ) -> list[dict[str, str]]:
     """Build a history isolated from the conversation, user text, and rejected turns."""
-    del user_request  # Never pass user utterances into the renderer payload.
 
     payload = json.dumps(
         {
@@ -83,8 +83,9 @@ def build_japanese_renderer_history(
         else "口調は牧瀬紅莉栖の自然な常体（〜の／〜でしょ／〜わ等を自然に。男性的・平板な語尾は不可）。"
     )
     scope_note = (
-        "これは応答の一部だけの断片なので、この断片の意味だけを簡潔な日本語に直し、"
-        "余計な文や補完は付け足さないこと。"
+        "これは応答の一部だけの断片なので、元の末尾記号（……・、・。）を保ち、"
+        "この断片の意味だけを簡潔な日本語に直すこと。"
+        "余計な文や補完、単語だけの断片への無理な述語化や語尾追加はしないこと。"
         if partial
         else "草稿の意味だけを自然な日本語の発話に直し、草稿にない文や補完は付け足さないこと。"
     )

@@ -220,7 +220,7 @@ def test_chat_check_stream_uses_protocol_minimum_and_token_limit(
 
 
 @pytest.mark.asyncio
-async def test_japanese_renderer_stream_uses_protocol_minimum(auxiliary_stream_case):
+async def test_japanese_renderer_stream_prefers_low_tier(auxiliary_stream_case):
     captured, snapshot, spec = auxiliary_stream_case
     session = chat_ws.SessionState("thinking-protocol-renderer")
     session.api_key = "test-key"
@@ -231,7 +231,6 @@ async def test_japanese_renderer_stream_uses_protocol_minimum(auxiliary_stream_c
         provider_snapshot=None if snapshot.provider_id == "deepseek" else snapshot,
         session=session,
         source_text="This result checks out.",
-        user_request="Check the result.",
     )
     assert rendered == MESSAGES[0]["content"]
     (_, payload), = captured
