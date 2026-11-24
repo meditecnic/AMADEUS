@@ -3,13 +3,18 @@
 import asyncio
 from contextlib import ExitStack
 import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+from anyio import CancelScope
+from fastapi import WebSocketDisconnect
 import pytest
 
 from app.routers import chat_ws, voice_ws
-from app.services.session_manager import cancel_inflight
+from app.security import local_transport
+from app.services import data_startup
+from app.services.session_manager import SessionCoordinator, cancel_inflight
 
 REPLY = "次の回答は正常に完了したわ。"
 
@@ -63,6 +68,42 @@ def rows(client, session_id):
     )
     assert response.status_code == 200
     return response.json()
+
+
+async def test_scope_cancellation_during_writer_shutdown_releases_chat_lease(monkeypatch):
+    coordinator = SessionCoordinator()
+    sessions = {}
+    session_id = str(uuid4())
+    scope = CancelScope()
+    writer_started = asyncio.Event()
+    writer_finished = asyncio.Event()
+
+    async def writer(*args):
+        try:
+            writer_started.set()
+            await asyncio.Future()
+        finally:
+            scope.cancel()
+            writer_finished.set()
+
+    async def disconnect():
+        await writer_started.wait()
+        session = sessions[session_id]
+        await coordinator.acquire_lease(session_id, session.worldline, websocket)
+        raise WebSocketDisconnect(1000)
+
+    websocket = SimpleNamespace(query_params={"session_id": session_id}, receive_json=disconnect)
+    monkeypatch.setattr(chat_ws, "sessions", sessions)
+    monkeypatch.setattr(chat_ws, "session_coordinator", coordinator)
+    monkeypatch.setattr(chat_ws, "writer_loop", writer)
+    monkeypatch.setattr(local_transport, "accept_local_websocket", AsyncMock(return_value=True))
+    monkeypatch.setattr(data_startup, "available", lambda: True)
+
+    with scope:
+        await chat_ws.websocket_chat_endpoint(websocket)
+
+    assert writer_finished.is_set()
+    assert not coordinator._leases
 
 
 @pytest.mark.timeout(15)

@@ -195,6 +195,8 @@ class ChatTurnQueue:
         owned = [turn for turn in self.turns() if turn.owner == owner]
         if self.owner == owner:
             self.owner = None
+        if not owned:
+            return False
         for turn in owned:
             turn.hidden = True
         # Cancel active turns across worldlines before waiting on their writes.
@@ -204,7 +206,7 @@ class ChatTurnQueue:
                 turn.worldline, self.view.session_id, turn.conversation_id
             ):
                 self.remove(turn)
-        return bool(owned)
+        return True
 
     async def hide_active(self) -> None:
         turn = self.active()

@@ -9,6 +9,7 @@ from uuid import uuid4
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 import starlette
+from anyio import CancelScope
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from app import config
@@ -3647,17 +3648,29 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 type(notify_exc).__name__,
             )
     finally:
-        if memory_unsubscribe is not None:
-            memory_unsubscribe()
-        # Cancel running Processor and Writer tasks on disconnect
-        tasks_to_gather = [writer_task]
-        writer_task.cancel()
-        await turn_queue.disconnect(connection_id)
-        if session.active_task and session.active_task_connection_id == connection_id:
-            if not session.active_task.done():
-                session.active_task.cancel()
-            tasks_to_gather.append(session.active_task)
-        await asyncio.gather(*tasks_to_gather, return_exceptions=True)
-        if session.active_task_connection_id == connection_id:
-            session.is_busy = False
-        await session_coordinator.release_lease(session.session_id, session.worldline, websocket)
+        async def disconnect():
+            tasks = {writer_task}
+            writer_task.cancel()
+            try:
+                if memory_unsubscribe is not None:
+                    memory_unsubscribe()
+                await turn_queue.disconnect(connection_id)
+            finally:
+                if session.active_task and session.active_task_connection_id == connection_id:
+                    if not session.active_task.done():
+                        session.active_task.cancel()
+                    tasks.add(session.active_task)
+                try:
+                    await asyncio.wait(tasks)
+                finally:
+                    if session.active_task_connection_id == connection_id:
+                        session.is_busy = False
+                    await session_coordinator.release_lease(session.session_id, session.worldline, websocket)
+
+        # Finish cleanup before propagating cancellation of the connection.
+        cleanup = asyncio.create_task(disconnect())
+        try:
+            await asyncio.shield(cleanup)
+        finally:
+            with CancelScope(shield=True):
+                await cleanup
