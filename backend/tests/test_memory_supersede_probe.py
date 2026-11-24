@@ -79,6 +79,7 @@ def fake_run(tmp_path_factory):
     assert proc.returncode == 0, stderr.decode()
     return directory, probe.b5.read_json(directory / 'results.json'), proc.pid
 
+@pytest.mark.timeout(90)
 def test_fake_all_cases_isolated_offline(fake_run):
     directory, rows, runner_pid = fake_run
     assert len(rows) == 12
@@ -278,6 +279,7 @@ def test_v11_classification_tracks_ids_and_versions(category, changed, new_value
 
 
 @pytest.mark.parametrize('count', [1, 2, 3])
+@pytest.mark.timeout(90)
 def test_probe_aggregate_manual_counts_and_no_comparison_gate(tmp_path, fake_run, count):
     source, rows, _ = fake_run
     paths = []
