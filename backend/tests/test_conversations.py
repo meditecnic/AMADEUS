@@ -70,7 +70,7 @@ async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isol
     ):
         prompt = await compile_for_session(session, "こんにちは")
 
-    assert "「岡部」や「あんた」と呼びかける" in prompt
+    assert "普段は「あんた」か呼びかけなしで話し、「岡部」は挨拶や本気で向き合う時など節目だけに留める" in prompt
     assert "新しく出会った現代の対話相手" not in prompt
 
     # Switch authority: self conversation row drives self rules.
@@ -86,7 +86,7 @@ async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isol
     ):
         self_prompt = await compile_for_session(session, "こんにちは")
     assert "新しく出会った現代の対話相手" in self_prompt
-    assert "「岡部」や「あんた」と呼びかける" not in self_prompt
+    assert "普段は「あんた」か呼びかけなしで話し、「岡部」は挨拶や本気で向き合う時など節目だけに留める" not in self_prompt
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
 
     assert "恋愛めいた話は、私の柄じゃない" in self_prompt
     assert "対等な「です・ます」で話す" in self_prompt
-    assert "「岡部」や「あんた」と呼びかける" not in self_prompt
+    assert "普段は「あんた」か呼びかけなしで話し、「岡部」は挨拶や本気で向き合う時など節目だけに留める" not in self_prompt
 
     okabe_conv = await conversation_service.create(
         "s3-okabe", "steins_gate", title="Okabe", identity_mode="okabe"
@@ -134,7 +134,7 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     ):
         okabe_prompt = await compile_for_session(okabe_session, "こんにちは")
 
-    assert "「岡部」や「あんた」と呼びかける" in okabe_prompt
+    assert "普段は「あんた」か呼びかけなしで話し、「岡部」は挨拶や本気で向き合う時など節目だけに留める" in okabe_prompt
     assert "恋愛めいた話は、私の柄じゃない" not in okabe_prompt
 
     # Legacy / missing field → okabe (never infer from nicknames etc.)
@@ -149,7 +149,7 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
         new=AsyncMock(return_value=emotion),
     ):
         legacy_prompt = await compile_for_session(bare, "hi")
-    assert "「岡部」や「あんた」と呼びかける" in legacy_prompt
+    assert "普段は「あんた」か呼びかけなしで話し、「岡部」は挨拶や本気で向き合う時など節目だけに留める" in legacy_prompt
 
 
 @pytest.mark.asyncio
