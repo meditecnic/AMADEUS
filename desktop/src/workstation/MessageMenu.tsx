@@ -14,7 +14,6 @@ export interface TruncateTarget {
   fromMessageId: number;
   expectedLastMessageId: number;
   deletedTurns: number;
-  pendingTurnIds: string[];
 }
 export interface ReplayStatus {
   messageId: string;
@@ -51,27 +50,37 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
     (last, msg, i) => (!msg.systemError && typeof msg.dbId === 'number' && msg.dbId > 0 ? i : last),
     -1,
   );
-  let deletedTurns = 0;
-  const pendingTurnIds: string[] = [];
-  for (let i = cutIndex; i < messages.length; i += 1) {
-    const msg = messages[i];
-    if (msg.systemError || msg.role !== 'user') continue;
-    const persisted = typeof msg.dbId === 'number' && msg.dbId > 0;
-    const confirmedPending = !persisted
-      && Boolean(msg.turnId)
-      && i > lastPersistedIndex
+  const deletedTurns = messages.slice(cutIndex).filter((msg, offset) => {
+    if (msg.systemError || msg.role !== 'user') return false;
+    if (typeof msg.dbId === 'number' && msg.dbId > 0) return true;
+    return Boolean(msg.turnId)
+      && (cutIndex + offset) > lastPersistedIndex
       && hasReplyTextForTurn(messages, msg.turnId!);
-    if (!persisted && !confirmedPending) continue;
-    deletedTurns += 1;
-    if (msg.turnId) {
-      const turnNeedsId = !persisted || messages.some(
-        (other) => !other.systemError && other.turnId === msg.turnId && other.dbId === undefined,
-      );
-      if (turnNeedsId && !pendingTurnIds.includes(msg.turnId)) pendingTurnIds.push(msg.turnId);
-    }
-  }
+  }).length;
+  return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
+}
+
+/** Recompute the truncation point, last id, and deleted turn count directly from persisted history rows. */
+export function resolveTruncateFromHistory(
+  rows: ReadonlyArray<{ id?: number; role: string }>,
+  target: TruncateTarget,
+): TruncateTarget | null {
+  const targetDbId = target.message.dbId;
+  if (!targetDbId) return null;
+  const persisted = rows
+    .filter((row): row is { id: number; role: string } => typeof row.id === 'number' && row.id > 0)
+    .sort((a, b) => a.id - b.id);
+  if (!persisted.length) return null;
+  const targetRow = persisted.find((row) => row.id === targetDbId);
+  if (!targetRow) return null;
+  const fromRow = target.mode === 'edit'
+    ? (targetRow.role === 'user' ? targetRow : undefined)
+    : persisted.find((row) => row.id > targetRow.id && row.role === 'user');
+  if (!fromRow) return null;
+  const expectedLastMessageId = persisted[persisted.length - 1].id;
+  const deletedTurns = persisted.filter((row) => row.id >= fromRow.id && row.role === 'user').length;
   return deletedTurns > 0
-    ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns, pendingTurnIds }
+    ? { mode: target.mode, message: target.message, fromMessageId: fromRow.id, expectedLastMessageId, deletedTurns }
     : null;
 }
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConversationTurnState, Message, UseAmadeusWSParams } from '../hooks/useAmadeusWS';
 import { Workstation } from '../components/Workstation';
 import { DataPanel } from './DataPanel';
-import { MessageMenu, resolveTruncateTarget } from './MessageMenu';
+import { MessageMenu, resolveTruncateFromHistory, resolveTruncateTarget } from './MessageMenu';
 import { deriveFactReadingArchive } from '../memory-space/readingDetails';
 
 const wsMock = vi.hoisted(() => ({
@@ -85,7 +85,7 @@ describe('resolveTruncateTarget & MessageMenu keyboard access', () => {
       { id: 'err-failed-save', role: 'assistant', content: 'SYSTEM ERROR: compile failed', systemError: true },
     ];
     expect(resolveTruncateTarget(withPreSaveFailure, 'a1', 'rollback')).toMatchObject({
-      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 1, pendingTurnIds: [],
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 1,
     });
 
     const withStaleUnpersistedBeforeSaved: Message[] = [
@@ -96,7 +96,7 @@ describe('resolveTruncateTarget & MessageMenu keyboard access', () => {
       { id: 'a3-saved', dbId: 15, role: 'assistant', content: '保存済み。' },
     ];
     expect(resolveTruncateTarget(withStaleUnpersistedBeforeSaved, 'a1', 'rollback')).toMatchObject({
-      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 15, deletedTurns: 2, pendingTurnIds: [],
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 15, deletedTurns: 2,
     });
 
     const withActiveTurn: Message[] = [
@@ -105,11 +105,28 @@ describe('resolveTruncateTarget & MessageMenu keyboard access', () => {
       { id: 'a3', turnId: 't3', role: 'assistant', streaming: true, content: '三つ目の答えよ。', translation: '第三个回答。' },
     ];
     expect(resolveTruncateTarget(withActiveTurn, 'a1', 'rollback')).toMatchObject({
-      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 2, pendingTurnIds: ['t3'],
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 2,
     });
     expect(resolveTruncateTarget(withActiveTurn, 'u1', 'edit')).toMatchObject({
-      mode: 'edit', fromMessageId: 10, expectedLastMessageId: 13, deletedTurns: 3, pendingTurnIds: ['t3'],
+      mode: 'edit', fromMessageId: 10, expectedLastMessageId: 13, deletedTurns: 3,
     });
+  });
+  it('recomputes cutoff, last id, and user turn count directly from persisted history rows', () => {
+    const initial = resolveTruncateTarget(SAMPLE, 'a1', 'rollback')!;
+    const rowsWithZeroOutput = [
+      { id: 10, role: 'user' },
+      { id: 11, role: 'assistant' },
+      { id: 12, role: 'user' },
+      { id: 13, role: 'assistant' },
+      { id: 14, role: 'user' },
+      { id: 15, role: 'assistant' },
+      { id: 16, role: 'user' },
+      { id: 17, role: 'assistant' },
+    ];
+    expect(resolveTruncateFromHistory(rowsWithZeroOutput, initial)).toMatchObject({
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 17, deletedTurns: 3,
+    });
+    expect(resolveTruncateFromHistory([{ id: 10, role: 'user' }], initial)).toBeNull();
   });
   it('opens menu via keyboard on assistant message with required actions', () => {
     render(<div className="ws2"><MessageMenu message={SAMPLE[1]} messages={SAMPLE} replay={null} onReplay={vi.fn()} onCopy={vi.fn()} onTruncateRequest={vi.fn()} /></div>);
@@ -611,7 +628,6 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
           ...SAMPLE.map((m) => ({ id: m.dbId, role: m.role, content: m.content, translation: m.translation })),
           { id: 14, role: 'user', turn_id: 't3', content: '第三轮问题' },
           { id: 15, role: 'assistant', turn_id: 't3', content: '三つ目の答えよ。', translation: '第三个回答。' },
-          { id: 16, role: 'user', turn_id: 't-unseen', content: '未看到的轮次' },
         ]));
       }
       return existing(url, init);
@@ -628,6 +644,82 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     expect(JSON.parse(truncateCalls[0].slice('truncate:'.length))).toEqual({
       from_message_id: 12,
       expected_last_message_id: 15,
+    });
+  });
+
+  it('re-verifies deleted turn count from delayed history when a persisted zero-output turn precedes a newly completed turn', async () => {
+    wsMock.messages = [
+      { id: 'u1', dbId: 101, role: 'user', content: '第一轮问题' },
+      { id: 'a1', dbId: 102, role: 'assistant', content: '一。', translation: '一。' },
+      { id: 'u2', dbId: 105, role: 'user', content: '第二轮问题' },
+      { id: 'a2', dbId: 106, role: 'assistant', content: '二。', translation: '二。' },
+      { id: 'u3', turnId: 't3', role: 'user', content: '保存后零输出的第三轮' },
+      { id: 'a3', turnId: 't3', role: 'assistant', streaming: false, content: '', translation: '', segments: [] },
+      { id: 'err3', role: 'assistant', content: 'SYSTEM ERROR: provider error', systemError: true },
+      { id: 'u4', turnId: 't4', role: 'user', content: '刚完成的第四轮' },
+      { id: 'a4', turnId: 't4', role: 'assistant', streaming: false, content: '四。', translation: '四。' },
+    ];
+    wsMock.isPlaying = true;
+    wsMock.isThinking = false;
+    wsMock.isTurnActive = false;
+    wsMock.isSynthesizing = false;
+    await mountSelected();
+    const existing = vi.mocked(fetch).getMockImplementation()!;
+    const fullHistory = [
+      { id: 101, role: 'user', content: '第一轮问题' },
+      { id: 102, role: 'assistant', content: '一。', translation: '一。' },
+      { id: 105, role: 'user', content: '第二轮问题' },
+      { id: 106, role: 'assistant', content: '二。', translation: '二。' },
+      { id: 107, role: 'user', turn_id: 't3', content: '保存后零输出的第三轮' },
+      { id: 108, role: 'assistant', turn_id: 't3', content: '中断。', translation: '已中断。' },
+      { id: 109, role: 'user', turn_id: 't4', content: '刚完成的第四轮' },
+      { id: 110, role: 'assistant', turn_id: 't4', content: '四。', translation: '四。' },
+    ];
+    let resolveDelayedHistory: ((res: Response) => void) | null = null;
+    vi.mocked(fetch).mockImplementation((url, init) => {
+      if (String(url).includes('/api/conversations/conv-1/messages?')) {
+        if (!resolveDelayedHistory) {
+          return new Promise<Response>((resolve) => { resolveDelayedHistory = resolve; });
+        }
+        return Promise.resolve(Response.json(fullHistory));
+      }
+      return existing(url, init);
+    });
+    callOrder = [];
+    wsMock.stopAll.mockClear();
+    wsMock.stopVoice.mockClear();
+
+    // Edit on u2: initially displays 2 turns (u2 + u4, missing zero-output u3 until history arrives).
+    openAction('u2', '改这句重发…');
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('2 轮')).toBeInTheDocument();
+    expect(within(dialog).getByText(/将删除从这句起的 2 轮对话/)).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '保留改句零输出回归' } });
+
+    // Confirm triggers delayed history read; once history arrives with 3 persisted user turns, must NOT post truncate yet.
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    await waitFor(() => expect(resolveDelayedHistory).not.toBeNull());
+    await act(async () => resolveDelayedHistory!(Response.json(fullHistory)));
+
+    expect(await within(dialog).findByText('对话内容刚刚有更新，请刷新画面确认后再试。')).toBeInTheDocument();
+    expect(within(dialog).getByText('3 轮')).toBeInTheDocument();
+    expect(within(dialog).getByText(/将删除从这句起的 3 轮对话/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/她会忘掉只在这 3 轮里说过的事/)).toBeInTheDocument();
+    expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('保留改句零输出回归');
+    expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
+    expect(wsMock.stopVoice).not.toHaveBeenCalled();
+
+    // Re-confirming after seeing the verified count of 3 turns sends from=105, last=110 and succeeds.
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    await waitFor(() => expect(wsMock.applyTruncate).toHaveBeenCalledWith(105));
+    expect(wsMock.stopAll).toHaveBeenCalled();
+    expect(wsMock.stopVoice).toHaveBeenCalled();
+    const truncateCalls = callOrder.filter((call) => call.startsWith('truncate:'));
+    expect(truncateCalls).toHaveLength(1);
+    expect(JSON.parse(truncateCalls[0].slice('truncate:'.length))).toEqual({
+      from_message_id: 105,
+      expected_last_message_id: 110,
     });
   });
 
