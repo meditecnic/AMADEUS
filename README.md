@@ -62,6 +62,10 @@ flowchart LR
 - **安全**：WebSocket 会校验 Origin。安装版的 API 密钥存在 Windows 凭据管理器里，源码运行默认只放在内存里。
 - **怎么开发的**：这个项目由我一个人维护，产品方向、架构取舍和最终验收都是我自己在管。代码大多由 AI 编程代理分小批写，合并前一般会让另一个代理对着规格审一遍；代码改动要过测试，界面改动看实机截图，安装包改动上干净的 Windows 跑一遍。
 
+## 这个项目是怎么做出来的
+
+这个项目是我一个人当 operator，带着多家厂商的 AI 编程代理分角色协作做出来的——拆包派单、写码、异厂盲审、Windows 真机实跑和带预算上限的真实模型复跑，每一步都有可核对的记录。如果你对这套多厂商 agent 工程实践感兴趣，想看我们踩过哪些单测漏掉的坑、怎么把问题拽出来的，可以看 [工程实践与案例总览](docs/engineering/README.md)（含真实 PR 案例与脱敏样板）。
+
 ## 安装与常见问题
 
 桌面版只支持 **Windows 10/11（64 位）**。v0.1.0 发布后，从 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下载安装包。
@@ -221,7 +225,7 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - **Measured recall.** In an end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
 - **Installer.** The Tauri shell bundles the PyInstaller backend (with the embedding model) into an NSIS installer, starts it on a system-assigned loopback port, allows one instance per data directory and stops it on exit. Every packaging run in CI (`.github/workflows/release.yml`, `packaging/windows/`) self-checks the frozen backend, then runs `install_smoke.py` on a clean Windows runner: silent install, login and a local model endpoint going online, single instance, full process exit on close, no external network connections, and an uninstall that keeps user data. Release builds also verify the update signature with `verify_update_signature.py`.
 - **Security.** WebSocket connections are origin-checked. Installed builds keep API keys in the Windows Credential Manager; source runs keep them in memory by default.
-- **How it was built.** One developer owns the product direction, architecture and acceptance testing. Most code is written by AI coding agents in small batches, and a second agent usually reviews each batch against its specification. Code changes must pass the test suite, UI changes are checked with screenshots, and installer changes on a clean Windows machine.
+- **How it was built.** One developer owns the product direction, architecture and acceptance testing. Most code is written by AI coding agents in small batches, and a second agent usually reviews each batch against its specification. Code changes must pass the test suite, UI changes are checked with screenshots, and installer changes on a clean Windows machine. For the full multi-vendor agent workflow, real bug cases, and sanitized templates (in Chinese), see [docs/engineering/README.md](docs/engineering/README.md).
 
 ### Install and troubleshooting
 
@@ -361,7 +365,7 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 
 この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
-デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。
+デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。複数ベンダーの AI エージェント協業による開発フローと実例（中国語）は [docs/engineering/README.md](docs/engineering/README.md) にまとめている。
 
 コードは MIT。インストーラーには CC BY-NC 4.0 の jina 埋め込みモデルが含まれるため、インストーラー全体は非商用利用に限る。音声コンポーネントには eSpeak NG（GPLv3）が含まれ、対応するソース `amadeus-0.1.0-speech-sources.zip` は各バージョンと一緒に Releases で公開する。詳細は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照。
 
