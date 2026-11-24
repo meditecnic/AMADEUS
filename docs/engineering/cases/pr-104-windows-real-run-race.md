@@ -1,7 +1,7 @@
 # 案例：PR #104 —— 单测和 CI 全绿后，Windows 真机实跑抓出 409 竞态
 
 - **日期**：2026-11-23
-- **公开记录**：[PR #104](https://github.com/meditecnic/AMADEUS/pull/104)（`[288]` 消息菜单与原声重播）｜作者 `Gemini 4 Neon`（`[303]` 返工由 `Codex GPT-6.2 Sol` 完成）｜修复 [`855e74f`](https://github.com/meditecnic/AMADEUS/commit/855e74f3ce0108af288547f894133516189f1d06)｜合并 [`ad447e5`](https://github.com/meditecnic/AMADEUS/commit/ad447e5807408c3835fa5f604fe62f60ea859cd9)
+- **公开记录**：[PR #104](https://github.com/meditecnic/AMADEUS/pull/104)（`[288]` 消息菜单与原声重播）｜作者 `Gemini 4 Neon`（`[303]` 返工如 [`03ea85c`](https://github.com/meditecnic/AMADEUS/commit/03ea85cb018b46f22d66f09c1774d29e8fa75d9a) 由 `Codex GPT-6.2 Sol` 完成；合并说明 `ad447e5` 误写成「all by Gemini 4 Neon」系总调度写错，以提交为准）｜修复 [`855e74f`](https://github.com/meditecnic/AMADEUS/commit/855e74f3ce0108af288547f894133516189f1d06)｜合并 [`ad447e5`](https://github.com/meditecnic/AMADEUS/commit/ad447e5807408c3835fa5f604fe62f60ea859cd9)
 
 ## 现象
 
@@ -25,16 +25,16 @@ PR #104 新增消息菜单（重播、复制、回退、改句重发）和原声
 
 作者 `Gemini 4 Neon` 提交 [`855e74f`](https://github.com/meditecnic/AMADEUS/commit/855e74f3ce0108af288547f894133516189f1d06)（`[315]`，4 文件，+288/−24）：
 
-1. 扩展 `fetchMessageIds` 唤醒截断等待器（带单调 `readId` 与 15 秒超时）：确认时若有活跃前台轮次，先停播等落库补齐 ID，再只发一次 `POST /truncate`；
-2. 仅按已上屏轮次匹配 ID（`resolveExpectedLastMessageId`），不采纳未上屏新消息，409 保护不放松；
-3. 抽出 `preserveEditDraft`，`409` 或失败取消时将改稿合并回输入框；`voice_cache.py` 失败日志补打 `exc.winerror`。
+1. 扩展 `fetchMessageIds` 唤醒截断等待器（单调 `readId` + 15s 超时）：前台活跃时先停播等落库补齐 ID，再只发一次 `POST /truncate`；
+2. 仅按已上屏轮次匹配 ID（`resolveExpectedLastMessageId`），不采未上屏新消息，409 保护不放松；
+3. 抽出 `preserveEditDraft`，`409` 或取消时把改稿合并回输入框；`voice_cache.py` 补打 `exc.winerror`。
 
 ## 怎么验
 
-- 新增 3 条组件/后端测试并做逐条改坏验证，Windows [CI run](https://github.com/meditecnic/AMADEUS/actions/runs/45317025471) 6/6 全绿；
-- 同台 Windows 11 真机定向复跑（私有协作仓 `[311]` 复跑节，333.69 秒）：**2a 3/3 通过、2b 3/3 通过**，6 次首击均只发一次 `POST /truncate` 且直接 HTTP 200（563–672 ms），0 控制台错误，重开后数据与 WAV 归档 SHA-256 一致；
+- 新增 3 条测试并逐条改坏验证，Windows [CI run](https://github.com/meditecnic/AMADEUS/actions/runs/45317025471) 6/6 全绿；
+- 同台 Windows 11 真机复跑（私有仓 `[311]`，333.69s）：**2a 3/3、2b 3/3 全过**，6 次首击均直接 HTTP 200（563–672 ms），0 控制台错误，重开后数据与 WAV 归档 SHA-256 一致；
 - 经我批合，merge commit [`ad447e5`](https://github.com/meditecnic/AMADEUS/commit/ad447e5807408c3835fa5f604fe62f60ea859cd9) 进 `main`。
 
 ## 代价
 
-首跑 514.56 秒 + 复跑 333.69 秒（约 14 分钟真机自动化）加一次 4 文件小修，把单测同步桩撞不出来的百毫秒级实机竞态拦在了合并前。
+首跑 514.56s + 复跑 333.69s（约 14 分钟真机自动化）加 4 文件小修，把单测同步桩撞不出来的百毫秒级实机竞态拦在合并前。

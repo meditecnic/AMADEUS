@@ -5,13 +5,13 @@
 
 ## 现象
 
-PR #106 过完三方审查和返工，在 `7f6b56e` 的 [CI run](https://github.com/meditecnic/AMADEUS/actions/runs/45324049714) 上，`backend-py313` 挂了 1 项：`test_chat_deprecated_message_rejected` 在退出 `websocket_connect` 时抛出 `concurrent.futures.CancelledError`。
+PR #106 过完三方审查和返工，在 `7f6b56e` 的 [首次 CI 尝试](https://github.com/meditecnic/AMADEUS/actions/runs/45324049714/attempts/1) 上，`backend-py313` 挂了 1 项：`test_chat_deprecated_message_rejected` 在退出 `websocket_connect` 时抛出 `concurrent.futures.CancelledError`。
 
-总调度第一时间在 [PR 评论 1](https://github.com/meditecnic/AMADEUS/pull/106#issuecomment-7121955694) 写下初判：Linux 上 py3.11 跑 5 次、py3.13 跑 10 次全绿，作者 Windows py3.11 全量也绿，看起来像「只在 Windows py3.13 出现的偶发时序问题」。半小时后合入新 `main` 到 `6760e3a`，[下一次 CI](https://github.com/meditecnic/AMADEUS/actions/runs/45327590026) 同错误暴涨到 **7 项**（1 failed、6 errors），而期间后端只改了一行日志。
+总调度第一时间在 [PR 评论 1](https://github.com/meditecnic/AMADEUS/pull/106#issuecomment-7121955694) 写下初判：Linux 上 py3.11 跑 5 次、py3.13 跑 10 次全绿，作者 Windows py3.11 全量也绿，看起来像「只在 Windows py3.13 出现的偶发时序问题」。半小时后合入新 `main` 到 `6760e3a`，[下一次 CI 的 py3.13 job](https://github.com/meditecnic/AMADEUS/actions/runs/45327590026/job/138220791269) 同错误暴涨到 **7 项**（1 failed、6 errors），而期间后端只改了一行日志。`backend-py313` 设了 `continue-on-error`，红了本来就不挡合并，但我们照样当真追到底，没有放过去。
 
 ## 怎么查
 
-既然空载跑太快撞不上窗口，就刻意抢占 CPU。总调度在 Linux 用 `taskset -c 0` 把测试绑在单核，再开两个空转进程占满 CPU，连跑 `test_chat_message_length.py` 和 `test_e2e_contract.py`，稳定复现后立刻在 [PR 评论 2](https://github.com/meditecnic/AMADEUS/pull/106#issuecomment-7122486706) 公开更正：
+既然空载跑太快撞不上窗口，就刻意抢占 CPU。总调度在 Linux 用 `taskset -c 0` 绑单核、再开两个空转进程占满 CPU，连跑 `test_chat_message_length.py` 和 `test_e2e_contract.py`，稳定复现后在 [PR 评论 2](https://github.com/meditecnic/AMADEUS/pull/106#issuecomment-7122486706) 公开更正：
 
 | 被测代码 | Python 3.13 | Python 3.11 |
 |---|---|---|
@@ -23,7 +23,7 @@ PR #106 过完三方审查和返工，在 `7f6b56e` 的 [CI run](https://github.
 
 ## 根因
 
-`Starlette` 测试客户端退出 `websocket_connect` 时，发出断开紧接着取消服务端 `anyio` cancel scope。本 PR 在 `chat_ws.py` 的 `finally` 里新加了 `await turn_queue.disconnect(connection_id)`；CPU 紧张时取消正好打在这个挂起点上，既漏出 `CancelledError`，又会跳过后面的子任务收尾和 `session_coordinator.release_lease(...)`。
+`Starlette` 测试客户端退出 `websocket_connect` 时，发出断开紧接着取消服务端 `anyio` cancel scope。本 PR 在 `chat_ws.py` 的 `finally` 里新加了 `await turn_queue.disconnect(connection_id)`；CPU 紧张时取消正好打在这个挂起点上，既漏出 `CancelledError`，还可能跳过后面的子任务收尾和 `session_coordinator.release_lease(...)`。
 
 ## 怎么改
 
@@ -35,10 +35,10 @@ PR #106 过完三方审查和返工，在 `7f6b56e` 的 [CI run](https://github.
 
 ## 怎么验
 
-- **改前改后对照**（记录在私有协作仓）：同样单核 + 双空转负载，改后 `b3a3ce9` 跑 py3.13 **10 次 0 错**、py3.11 **6 次 0 错**；对照组 `6760e3a` 3 次 2 错；
+- **前后对照**（私有仓记录）：同单核 + 双空转负载，改后 `b3a3ce9` py3.13 **10 次 0 错**、py3.11 **6 次 0 错**；对照组 `6760e3a` 3 次 2 错；
 - **确定性单测**：改前稳定报 `CancelledError`，改后通过；
 - **Windows CI**：`b3a3ce9` [PR CI](https://github.com/meditecnic/AMADEUS/actions/runs/45337593157) 与合入后 [`715b9a3` main CI](https://github.com/meditecnic/AMADEUS/actions/runs/45341281793) 均 6/6 绿。
 
 ## 代价
 
-多一轮返工与约两小时等待，避免了把间歇红灯带进 `main`，也把「误判 → 更正 → 根治」的完整链路公开留在 PR 里。
+多一轮返工与约两小时等待，挡下间歇红灯进 `main`，也把「初判误判 → 公开更正 → 根治」完整留在 PR 里。

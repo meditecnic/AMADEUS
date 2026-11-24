@@ -38,10 +38,10 @@ PR #101 实现对话截断、长期记忆重算与会话准入锁。头提交 [`
 
 ## 怎么验
 
-- 返工 diff 由总调度（Anthropic）逐行复核（记录在私有协作仓）；
+- 返工 diff 由总调度（Anthropic）逐行复核（私有仓记录）；
 - `60ae9fa` 的 Windows [CI run](https://github.com/meditecnic/AMADEUS/actions/runs/45036873519) 6/6 全绿；
 - 经我批合，merge commit [`a00f177`](https://github.com/meditecnic/AMADEUS/commit/a00f177a7a93725cdddd49fd46ea15bb15b69f27) 进 `main`。
 
 ## 代价
 
-多付两份异厂审查和一轮 155 行净增返工；挡下了一个单测和 CI 均绿、但用户边聊边删记忆就会吞回复并卡死界面的严重回归。
+两份异厂审查加一轮 155 行净增返工，挡下了一个单测和 CI 全绿、但边聊边删记忆就会吞回复并卡死界面的严重回归。
