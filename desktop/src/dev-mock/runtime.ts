@@ -29,9 +29,8 @@ const fail = (status: number, code: string): Reply => ok({ detail: { code } }, s
 const worldlineOf = (value: unknown) => value === 'beta' ? 'beta' : 'steins_gate';
 const summary = ({ messages: _messages, ...conversation }: Conversation) => ({ ...conversation });
 
-/** Synthesize a tiny valid 0.8 s silent PCM WAV (16 kHz mono 16-bit) as base64 for dev-mock replay. */
-function makeMockSilentWavBase64(durationSec = 0.8): string {
-  const sampleRate = 16000;
+/** Synthesize a tiny valid silent PCM WAV (mono 16-bit) as base64 for dev-mock replay. */
+function makeMockSilentWavBase64(durationSec = 0.8, sampleRate = 16000): string {
   const numSamples = Math.round(sampleRate * durationSec);
   const dataSize = numSamples * 2;
   const buf = new ArrayBuffer(44 + dataSize);
@@ -58,6 +57,16 @@ function makeMockSilentWavBase64(durationSec = 0.8): string {
   return btoa(binary);
 }
 const MOCK_WAV_B64 = makeMockSilentWavBase64(0.8);
+const SILENT_WAV_CACHE = new Map<number, string>();
+function replayWavFor(durationSec?: number): string {
+  if (!durationSec) return MOCK_WAV_B64;
+  let cached = SILENT_WAV_CACHE.get(durationSec);
+  if (!cached) {
+    cached = makeMockSilentWavBase64(durationSec, 8000);
+    SILENT_WAV_CACHE.set(durationSec, cached);
+  }
+  return cached;
+}
 
 export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) {
   const clients = new Map<string, {
@@ -235,13 +244,14 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
       const msgId = Number(replayMatch[2]);
       const targetMsg = conversation.messages.find((msg) => msg.id === msgId);
       if (!targetMsg || targetMsg.role !== 'assistant') return fail(404, 'message_not_found');
+      const replayWav = replayWavFor(scenario.replayDurationSec);
       const cacheKey = `${conversation.id}:${msgId}`;
       const existing = clientState.replayCache.get(cacheKey);
       if (existing) {
-        return ok({ message_id: msgId, source: existing, cached: true, segments: [MOCK_WAV_B64] });
+        return ok({ message_id: msgId, source: existing, cached: true, segments: [replayWav] });
       }
       clientState.replayCache.set(cacheKey, 'synthesized');
-      return { ...ok({ message_id: msgId, source: 'synthesized', cached: false, segments: [MOCK_WAV_B64] }), delayMs: 120 };
+      return { ...ok({ message_id: msgId, source: 'synthesized', cached: false, segments: [replayWav] }), delayMs: 120 };
     }
     const match = path.match(/^\/api\/conversations\/([^/]+)(?:\/(messages|forget|truncate))?$/);
     const conversation = rows.find(row => row.id === match?.[1]);
@@ -484,7 +494,8 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
           if (turn) remove(turn);
         }
       } else if (frame.type === 'chat.send' && typeof frame.content === 'string' && frame.content.trim()) {
-        if (scenario.chatError) {
+        const trimmed = frame.content.trim();
+        if (scenario.chatError && (!scenario.chatErrorTrigger || trimmed.includes(scenario.chatErrorTrigger))) {
           emit({ type: 'error', message: scenario.chatError, recoverable: true });
           return;
         }
