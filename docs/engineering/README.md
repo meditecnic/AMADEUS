@@ -1,15 +1,15 @@
 # AMADEUS 是怎么用多厂商 Agent 协作做出来的
 
-**5 个月、102 个已合 PR、后端 3,965 条加前端 1,036 条自动化测试、Windows CI 6 个 job、#82 起连续 24 个已合 PR 全部异厂审查**——这是我一个人当 operator，指挥多家厂商模型（OpenAI、Anthropic、Google 等）把 AMADEUS（Tauri 2 + React 19 + FastAPI + 本地长期记忆）推到 v0.1.0 发布前的完整工程账本。PR 和提交标题里的 `[NNN]`（如 `[310]`、`[320]`）是私有协作仓的派单号，把派单、审查、返工和裁定串成闭环。
+**5 个月、104 个已合 PR、后端 3,979 条加前端 1,037 条自动化测试、Windows CI 6 个 job、#82 起连续 26 个已合 PR 全部异厂审查**——这是我一个人当 operator，指挥多家厂商模型（OpenAI、Anthropic、Google 等）把 AMADEUS（Tauri 2 + React 19 + FastAPI + 本地长期记忆）推到 v0.1.0 发布前的工程记录。PR 和提交标题里的 `[NNN]`（如 `[310]`、`[320]`）是私有协作仓的派单号，把一次改动从派单、审查、返工到裁定串起来。
 
-这不是「把需求丢给 AI 全自动写完」，而是把多模型当成一支分工明确、互相牵制的工程小队来带：模型负责写码、写探针、跑测试和实机脚本，方向、门禁、预算和最终体验由人把关。
+不是把需求丢给 AI 全自动跑完。我是把几家厂商的模型按角色分开用、互相牵制：模型写码、写探针、跑测试和实机脚本，方向、门禁、预算和最终体验由我拍板。
 
 ## 可以点开核对的数字（截至 2026-11-24）
 
-- **已合 PR**：**102 个**（`#1`–`#106` 中已合 102 个，见 [Merged PRs](https://github.com/meditecnic/AMADEUS/pulls?q=is%3Apr+is%3Amerged)）。
-- **跨厂审查**：2026-11-17 起在合并提交显式标模型名，`#82`–`#106`（`#102` 为未合 Draft）连续 **24/24 个已合 PR** 均在 `main` merge commit 写明作者与异厂审查模型，见 [main 提交历史](https://github.com/meditecnic/AMADEUS/commits/main)（早期 `#5`、`#7`、`#12` 等也有交叉审码）。
+- **已合 PR**：**104 个**（`#1`–`#109` 中已合 104 个，见 [Merged PRs](https://github.com/meditecnic/AMADEUS/pulls?q=is%3Apr+is%3Amerged)）。
+- **跨厂审查**：2026-11-17 起在合并提交显式标模型名，`#82`–`#109`（`#102`、`#108` 为未合 Draft）连续 **26/26 个已合 PR** 均在 `main` merge commit 写明作者与异厂审查模型，见 [main 提交历史](https://github.com/meditecnic/AMADEUS/commits/main)（早期 `#5`、`#7`、`#12` 等也有交叉审码）。
 - **CI 矩阵（6 个 job）**：见 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)——Ubuntu 跑 `lint`、`backend-lock`、`eol`；Windows 跑 `frontend`（Node 22 + Vitest）、`backend`（py3.11，中文空格临时路径 + `cp1252`）、`backend-py313`（设了 `continue-on-error: true`，红了也不挡合并）。另有 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) 跑安装包与干净 Windows `install_smoke.py`。
-- **测试规模**：2026-11-24 `main` [`715b9a3`](https://github.com/meditecnic/AMADEUS/commit/715b9a3fa0bca16f3116645db6e61b9a3ce9e50f) 的 [CI 运行记录](https://github.com/meditecnic/AMADEUS/actions/runs/45341281793)：后端 **3,965 条**（3,961 passed, 2 skipped, 2 xfailed，py3.11/3.13 双绿），前端 **1,036 条**（全过）。
+- **测试规模**：2026-11-24 `main` [`c27b2ab`](https://github.com/meditecnic/AMADEUS/commit/c27b2ab8965ce04766b23e43256cca0cff00ed8d) 的 [CI 运行记录](https://github.com/meditecnic/AMADEUS/actions/runs/45372472156)：后端 **3,979 条**（3,975 passed, 2 skipped, 2 xfailed，py3.11/3.13 双绿），前端 **1,037 条**（全过）。
 
 ## 角色与一张单的流程
 
@@ -59,7 +59,7 @@ flowchart LR
 
 - [PR #106：CI 偶发 `CancelledError`，从初判误判到公开更正根治](cases/pr-106-py313-teardown-cancel.md)（2026-11-24）
 - [PR #101：CI 全绿后，两家异厂盲审撞出同一个静默丢回复 bug](cases/pr-101-dual-review-same-bug.md)（2026-11-22）
-- [PR #107：日语重写器，¥0.051 真模型复跑与先写死判法](cases/pr-107-renderer-real-replay.md)（2026-11-24，Draft 未合）
+- [PR #107：日语重写器，¥0.072 真模型复跑与先写死判法](cases/pr-107-renderer-real-replay.md)（2026-11-24）
 - [PR #104：CI 全绿后，Windows 真机抓出播放中截断 409 竞态](cases/pr-104-windows-real-run-race.md)（2026-11-23）
 
 ## 协作样板（摘录自私有协作仓，已脱敏）
