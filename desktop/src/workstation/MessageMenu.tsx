@@ -14,11 +14,21 @@ export interface TruncateTarget {
   fromMessageId: number;
   expectedLastMessageId: number;
   deletedTurns: number;
+  pendingTurnIds: string[];
 }
 export interface ReplayStatus {
   messageId: string;
   phase: 'loading' | 'playing';
   source?: 'original' | 'synthesized';
+}
+
+function hasReplyTextForTurn(messages: readonly Message[], turnId: string): boolean {
+  return messages.some(
+    (msg) => !msg.systemError
+      && msg.role === 'assistant'
+      && msg.turnId === turnId
+      && (Boolean(msg.segments?.length) || Boolean(msg.content.trim()) || Boolean(msg.translation?.trim())),
+  );
 }
 
 /** Resolve the backend truncation point and affected turn count for one message action. */
@@ -37,11 +47,32 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
     : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user' && !!msg.dbId);
   const fromMessageId = cutIndex >= 0 ? messages[cutIndex].dbId : undefined;
   if (!fromMessageId) return null;
-  const deletedTurns = messages
-    .slice(cutIndex)
-    .filter((msg) => !msg.systemError && msg.role === 'user' && Boolean(msg.dbId || msg.turnId))
-    .length;
-  return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
+  const lastPersistedIndex = messages.reduce(
+    (last, msg, i) => (!msg.systemError && typeof msg.dbId === 'number' && msg.dbId > 0 ? i : last),
+    -1,
+  );
+  let deletedTurns = 0;
+  const pendingTurnIds: string[] = [];
+  for (let i = cutIndex; i < messages.length; i += 1) {
+    const msg = messages[i];
+    if (msg.systemError || msg.role !== 'user') continue;
+    const persisted = typeof msg.dbId === 'number' && msg.dbId > 0;
+    const confirmedPending = !persisted
+      && Boolean(msg.turnId)
+      && i > lastPersistedIndex
+      && hasReplyTextForTurn(messages, msg.turnId!);
+    if (!persisted && !confirmedPending) continue;
+    deletedTurns += 1;
+    if (msg.turnId) {
+      const turnNeedsId = !persisted || messages.some(
+        (other) => !other.systemError && other.turnId === msg.turnId && other.dbId === undefined,
+      );
+      if (turnNeedsId && !pendingTurnIds.includes(msg.turnId)) pendingTurnIds.push(msg.turnId);
+    }
+  }
+  return deletedTurns > 0
+    ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns, pendingTurnIds }
+    : null;
 }
 
 export function formatTruncateError(code: string | null | undefined, hasQueuedTurn = false): string {
@@ -162,7 +193,7 @@ export function TruncateConfirmDialog({
   const isEdit = target.mode === 'edit';
   const [draft, setDraft] = useState(target.message.content);
   const [localError, setLocalError] = useState<string | null>(null);
-  useEffect(() => { setDraft(target.message.content); setLocalError(null); }, [target]);
+  useEffect(() => { setDraft(target.message.content); setLocalError(null); }, [target.mode, target.message.id]);
 
   return (
     <ConfirmDialog

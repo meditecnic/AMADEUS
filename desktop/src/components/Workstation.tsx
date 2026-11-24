@@ -68,6 +68,7 @@ import {
   copyText,
   formatReplayError,
   formatTruncateError,
+  resolveTruncateTarget,
   type ReplayStatus,
   type TruncateTarget,
 } from '../workstation/MessageMenu';
@@ -279,7 +280,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<HistoryMessageRow>, reconcile?: boolean) => void) | undefined>(undefined);
   const messageHistoryReadRef = useRef(0);
   const messageIdRefreshRef = useRef<{ convId: string; epoch: number; promise: Promise<HistoryMessageRow[] | null> } | null>(null);
-  const truncateTurnWaiterRef = useRef<{ convId: string; epoch: number; afterReadId: number; resolve: (rows: HistoryMessageRow[] | null) => void; timer: number } | null>(null);
   const failedEditDraftRef = useRef<string | null>(null);
   const presentationScope = `${sessionId}:${worldline}:${activeConversationId ?? 'draft'}`;
   const presentationScopeRef = useRef<string | null>(presentationScope);
@@ -1566,18 +1566,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
       .catch(() => null)
       .then((rows) => {
         if (messageIdRefreshRef.current?.promise === promise) messageIdRefreshRef.current = null;
-        const waiter = truncateTurnWaiterRef.current;
-        if (
-          waiter
-          && waiter.convId === conversationId
-          && waiter.epoch === entryEpoch
-          && readId === messageHistoryReadRef.current
-          && readId > waiter.afterReadId
-        ) {
-          window.clearTimeout(waiter.timer);
-          truncateTurnWaiterRef.current = null;
-          waiter.resolve(rows);
-        }
         return rows;
       });
     messageIdRefreshRef.current = { convId: conversationId, epoch: entryEpoch, promise };
@@ -2324,56 +2312,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (noticeText) setMessageNotice({ text: noticeText, kind: 'error' });
   };
 
-  useEffect(() => {
-    const waiter = truncateTurnWaiterRef.current;
-    if (!waiter) return;
-    if (activeConversationIdRef.current !== waiter.convId || conversationEpochRef.current !== waiter.epoch) {
-      window.clearTimeout(waiter.timer);
-      truncateTurnWaiterRef.current = null;
-      waiter.resolve(null);
-      return;
-    }
-    if (!turnActive && !isSynthesizing && !messageIdRefreshRef.current) {
-      const wake = window.setTimeout(() => {
-        const current = truncateTurnWaiterRef.current;
-        if (current === waiter && !messageIdRefreshRef.current) {
-          window.clearTimeout(current.timer);
-          truncateTurnWaiterRef.current = null;
-          current.resolve(null);
-        }
-      }, 50);
-      return () => window.clearTimeout(wake);
-    }
-  }, [activeConversationId, isSynthesizing, status, turnActive]);
-
-  useEffect(() => () => {
-    const waiter = truncateTurnWaiterRef.current;
-    if (waiter) {
-      window.clearTimeout(waiter.timer);
-      truncateTurnWaiterRef.current = null;
-      waiter.resolve(null);
-    }
-  }, []);
-
   const resolveExpectedLastMessageId = (
-    baseline: number,
+    target: TruncateTarget,
     currentMessages: readonly Message[],
     rows?: ReadonlyArray<HistoryMessageRow> | null,
   ): number => {
-    let maxId = baseline;
+    let maxId = target.expectedLastMessageId;
+    if (!target.pendingTurnIds.length) return maxId;
+    const allowedTurns = new Set(target.pendingTurnIds);
     const byTurnAndRole = new Map<string, number | null>();
     if (rows) {
       for (const row of rows) {
-        if (!row.turn_id || typeof row.id !== 'number' || row.id <= 0
+        if (!row.turn_id || !allowedTurns.has(row.turn_id) || typeof row.id !== 'number' || row.id <= 0
           || (row.role !== 'user' && row.role !== 'assistant')) continue;
         const key = `${row.role}:${row.turn_id}`;
         byTurnAndRole.set(key, byTurnAndRole.has(key) ? null : row.id);
       }
     }
     for (const msg of currentMessages) {
-      if (msg.systemError) continue;
+      if (msg.systemError || !msg.turnId || !allowedTurns.has(msg.turnId)) continue;
       if (typeof msg.dbId === 'number' && msg.dbId > maxId) maxId = msg.dbId;
-      if (msg.dbId === undefined && msg.turnId) {
+      if (msg.dbId === undefined) {
         const matchedId = byTurnAndRole.get(`${msg.role}:${msg.turnId}`);
         if (typeof matchedId === 'number' && matchedId > maxId) maxId = matchedId;
       }
@@ -2391,58 +2350,36 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     const entryEpoch = conversationEpochRef.current;
     const wl = latestWorldlineRef.current;
-    const isReplaying = replayStatus?.phase === 'playing';
-    const foregroundVoicePlaying = isPlaying && !isReplaying;
-    const hasStreamingMessage = latestVisibleMessagesRef.current.some((msg) => !msg.systemError && msg.streaming);
-    const backgroundRunning = Boolean(activeConversationTurns?.running) && !hasStreamingMessage;
-    const waitForPlaybackTurn = (
-      !isThinking
-      && !backgroundRunning
-      && queuedTurns.length === 0
-      && (turnActive || isSynthesizing)
-      && foregroundVoicePlaying
-    );
     const activeReplyBusy = (
-      !waitForPlaybackTurn
-      && (turnActive || isSynthesizing || backgroundRunning || queuedTurns.length > 0)
-    );
-    const hasUnhydratedTurn = latestVisibleMessagesRef.current.some(
-      (msg) => !msg.systemError && (msg.streaming || msg.dbId === undefined),
+      turnActive
+      || isSynthesizing
+      || Boolean(activeConversationTurns?.running)
+      || queuedTurns.length > 0
     );
     if (!activeReplyBusy) {
+      const latestTarget = resolveTruncateTarget(latestVisibleMessagesRef.current, target.message.id, target.mode);
+      if (latestTarget && (
+        latestTarget.deletedTurns !== target.deletedTurns
+        || latestTarget.fromMessageId !== target.fromMessageId
+      )) {
+        if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+        setTruncateTarget(latestTarget);
+        setTruncateError(formatTruncateError('conversation_changed'));
+        return;
+      }
       stopReplay(false);
       audioPlayer.stopAll();
-      if (isPlaying || isSynthesizing || turnActive) stopVoice();
+      if (isPlaying) stopVoice();
     }
     setTruncateBusy(true);
     setTruncateError(null);
     try {
       let hydratedRows: HistoryMessageRow[] | null = null;
-      if (waitForPlaybackTurn) {
-        const afterReadId = messageHistoryReadRef.current;
-        hydratedRows = await new Promise<HistoryMessageRow[] | null>((resolve) => {
-          const existing = truncateTurnWaiterRef.current;
-          if (existing) {
-            window.clearTimeout(existing.timer);
-            existing.resolve(null);
-          }
-          const timer = window.setTimeout(() => {
-            if (truncateTurnWaiterRef.current?.resolve === resolve) truncateTurnWaiterRef.current = null;
-            resolve(null);
-          }, 15000);
-          truncateTurnWaiterRef.current = { convId, epoch: entryEpoch, afterReadId, resolve, timer };
-        });
-        if (
-          activeConversationIdRef.current !== convId
-          || conversationEpochRef.current !== entryEpoch
-          || latestWorldlineRef.current !== wl
-        ) return;
-        if (!hydratedRows && latestVisibleMessagesRef.current.some(
-          (msg) => !msg.systemError && msg.dbId === undefined && msg.turnId,
-        )) {
-          hydratedRows = await fetchMessageIds(convId);
-        }
-      } else if (!activeReplyBusy && hasUnhydratedTurn) {
+      const pendingTurnSet = new Set(target.pendingTurnIds);
+      const needsPendingIds = pendingTurnSet.size > 0 && latestVisibleMessagesRef.current.some(
+        (msg) => !msg.systemError && msg.turnId && pendingTurnSet.has(msg.turnId) && msg.dbId === undefined,
+      );
+      if (!activeReplyBusy && needsPendingIds) {
         const inflight = messageIdRefreshRef.current;
         hydratedRows = (inflight && inflight.convId === convId && inflight.epoch === entryEpoch)
           ? await inflight.promise
@@ -2455,7 +2392,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
 
       const expectedLastMessageId = resolveExpectedLastMessageId(
-        target.expectedLastMessageId,
+        target,
         latestVisibleMessagesRef.current,
         hydratedRows,
       );

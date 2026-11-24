@@ -154,6 +154,7 @@ try {
 
   // --- Stage 1b: Busy rejection when returning to a background-running conversation ---
   await select('rollback-busy');
+  const bgLinesBefore = await lines.count();
   await send('后台续跑忙态验证');
   await row('rollback-busy').getByText('回复中', { exact: true }).waitFor();
   await select('rollback-main');
@@ -177,6 +178,10 @@ try {
   await dialog.waitFor({ state: 'hidden' });
   allowBusy409 = false;
   await row('rollback-busy').getByText('回复中', { exact: true }).waitFor({ state: 'hidden' });
+  await lines.nth(bgLinesBefore + 1).waitFor();
+  assert.equal(await lines.count(), bgLinesBefore + 2);
+  assert.match(await lines.nth(bgLinesBefore).innerText(), /后台续跑忙态验证/);
+  assert.match(await lines.nth(bgLinesBefore + 1).innerText(), /别急着下结论，等下一次结果。/);
   await select('rollback-main');
 
   // --- Stage 2: Rollback ("回到这里") + rollback confirmation copy ---

@@ -75,19 +75,40 @@ describe('resolveTruncateTarget & MessageMenu keyboard access', () => {
     expect(resolveTruncateTarget(SAMPLE, 'a2', 'rollback')).toBeNull();
     expect(resolveTruncateTarget(SAMPLE, 'u1', 'edit')).toMatchObject({ mode: 'edit', fromMessageId: 10, expectedLastMessageId: 13, deletedTurns: 2 });
   });
-  it('counts an unhydrated active turn with turnId in deletedTurns without counting rejected unpersisted sends', () => {
-    const withActiveTurn: Message[] = [
+  it('counts only persisted turns or an unhydrated tail turn confirmed by reply text, excluding pre-save failed turns', () => {
+    const withPreSaveFailure: Message[] = [
       ...SAMPLE,
       { id: 'u-rejected', role: 'user', content: '被拒收的消息' },
       { id: 'err-rejected', role: 'assistant', content: 'SYSTEM ERROR: too long', systemError: true },
+      { id: 'u-failed-save', turnId: 't-fail', role: 'user', content: '保存前异常的消息' },
+      { id: 'a-failed-save', turnId: 't-fail', role: 'assistant', streaming: false, content: '', translation: '', segments: [] },
+      { id: 'err-failed-save', role: 'assistant', content: 'SYSTEM ERROR: compile failed', systemError: true },
+    ];
+    expect(resolveTruncateTarget(withPreSaveFailure, 'a1', 'rollback')).toMatchObject({
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 1, pendingTurnIds: [],
+    });
+
+    const withStaleUnpersistedBeforeSaved: Message[] = [
+      ...SAMPLE,
+      { id: 'u-stale', turnId: 't-stale', role: 'user', content: '历史里不存在的旧未落库气泡' },
+      { id: 'a-stale', turnId: 't-stale', role: 'assistant', streaming: false, content: '旧残余文本。' },
+      { id: 'u3-saved', dbId: 14, role: 'user', content: '更新的已落库第三轮' },
+      { id: 'a3-saved', dbId: 15, role: 'assistant', content: '保存済み。' },
+    ];
+    expect(resolveTruncateTarget(withStaleUnpersistedBeforeSaved, 'a1', 'rollback')).toMatchObject({
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 15, deletedTurns: 2, pendingTurnIds: [],
+    });
+
+    const withActiveTurn: Message[] = [
+      ...withPreSaveFailure,
       { id: 'u3', turnId: 't3', role: 'user', content: '正在播的第三轮' },
       { id: 'a3', turnId: 't3', role: 'assistant', streaming: true, content: '三つ目の答えよ。', translation: '第三个回答。' },
     ];
     expect(resolveTruncateTarget(withActiveTurn, 'a1', 'rollback')).toMatchObject({
-      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 2,
+      mode: 'rollback', fromMessageId: 12, expectedLastMessageId: 13, deletedTurns: 2, pendingTurnIds: ['t3'],
     });
     expect(resolveTruncateTarget(withActiveTurn, 'u1', 'edit')).toMatchObject({
-      mode: 'edit', fromMessageId: 10, expectedLastMessageId: 13, deletedTurns: 3,
+      mode: 'edit', fromMessageId: 10, expectedLastMessageId: 13, deletedTurns: 3, pendingTurnIds: ['t3'],
     });
   });
   it('opens menu via keyboard on assistant message with required actions', () => {
@@ -421,38 +442,65 @@ describe('Workstation message menu, truncate flow, replay & DataPanel', () => {
     expect(lastArticle?.querySelector('[data-speaking-id]')).toHaveAttribute('data-speaking-id', '');
   });
 
-  it('waits for an active foreground turn to settle and sends truncate once with the hydrated last message id', async () => {
+  it('rejects immediately with conversation_busy without stopping voice when first segment is playing before turn completes', async () => {
+    truncateStatus = 409;
+    truncateBody = { detail: { code: 'conversation_busy' } };
     wsMock.messages = [
       ...SAMPLE.map((m) => ({ ...m })),
       { id: 'u3', turnId: 't3', role: 'user', content: '第三轮问题' },
       { id: 'a3', turnId: 't3', role: 'assistant', streaming: true, content: '三つ目の答えよ。', translation: '第三个回答。' },
     ];
     wsMock.isPlaying = true;
+    wsMock.isThinking = false;
     wsMock.isTurnActive = true;
     wsMock.isSynthesizing = true;
     await mountSelected();
-    const existing = vi.mocked(fetch).getMockImplementation()!;
-    vi.mocked(fetch).mockImplementation((url, init) => {
-      if (String(url).includes('/api/conversations/conv-1/messages?')) {
-        return Promise.resolve(Response.json([
-          ...SAMPLE.map((m) => ({ id: m.dbId, role: m.role, content: m.content, translation: m.translation })),
-          { id: 14, role: 'user', turn_id: 't3', content: '第三轮问题' },
-          { id: 15, role: 'assistant', turn_id: 't3', content: '三つ目の答えよ。', translation: '第三个回答。' },
-          // Unseen turn not present on screen must not be adopted into expected_last_message_id.
-          { id: 16, role: 'user', turn_id: 't-unseen', content: '未看到的轮次' },
-        ]));
-      }
-      return existing(url, init);
-    });
     callOrder = [];
+    wsMock.stopAll.mockClear();
+    wsMock.stopVoice.mockClear();
 
     openAction('a1', '回到这里…');
     fireEvent.click(screen.getByRole('button', { name: '确认回到这里' }));
-    expect(wsMock.stopAll).toHaveBeenCalled();
-    expect(wsMock.stopVoice).toHaveBeenCalled();
+    expect(await screen.findByText('她正在回复这一轮，请先停掉当前回复后再试。')).toBeInTheDocument();
+    expect(wsMock.stopAll).not.toHaveBeenCalled();
+    expect(wsMock.stopVoice).not.toHaveBeenCalled();
+    expect(wsMock.applyTruncate).not.toHaveBeenCalled();
+    const truncateCalls = callOrder.filter((call) => call.startsWith('truncate:'));
+    expect(truncateCalls).toHaveLength(1);
+    expect(JSON.parse(truncateCalls[0].slice('truncate:'.length))).toEqual({
+      from_message_id: 12,
+      expected_last_message_id: 13,
+    });
+  });
+
+  it('updates the confirm dialog count and requires re-confirmation when a new turn lands while the dialog is open', async () => {
+    const view = await mountSelected();
+    callOrder = [];
+
+    openAction('u2', '改这句重发…');
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText('1 轮')).toBeInTheDocument();
+    expect(within(dialog).getByText(/将删除从这句起的 1 轮对话/)).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('truncate-edit-textarea'), { target: { value: '改好的第二句' } });
+
+    // A background turn completes and appears while the confirm dialog is still open.
+    wsMock.messages = [
+      ...SAMPLE.map((m) => ({ ...m })),
+      { id: 'u3', dbId: 14, turnId: 't3', role: 'user', content: '后台新落库的第三轮' },
+      { id: 'a3', dbId: 15, turnId: 't3', role: 'assistant', content: '新しい答えよ。', translation: '新回答。' },
+    ];
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
+    expect(await within(dialog).findByText('对话内容刚刚有更新，请刷新画面确认后再试。')).toBeInTheDocument();
+    expect(within(dialog).getByText('2 轮')).toBeInTheDocument();
+    expect(within(dialog).getByText(/将删除从这句起的 2 轮对话/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/她会忘掉只在这 2 轮里说过的事/)).toBeInTheDocument();
+    expect(screen.getByTestId('truncate-edit-textarea')).toHaveValue('改好的第二句');
     expect(callOrder.filter((call) => call.startsWith('truncate:'))).toHaveLength(0);
 
-    act(() => wsMock.callbacks.onTurnCompleted?.());
+    // Re-confirming after seeing the updated count sends the new last message id.
+    fireEvent.click(screen.getByRole('button', { name: '截断并重发' }));
     await waitFor(() => expect(wsMock.applyTruncate).toHaveBeenCalledWith(12));
     const truncateCalls = callOrder.filter((call) => call.startsWith('truncate:'));
     expect(truncateCalls).toHaveLength(1);
