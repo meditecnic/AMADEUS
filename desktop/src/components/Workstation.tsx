@@ -69,7 +69,6 @@ import {
   formatReplayError,
   formatTruncateError,
   resolveTruncateFromHistory,
-  resolveTruncateTarget,
   type ReplayStatus,
   type TruncateTarget,
 } from '../workstation/MessageMenu';
@@ -2301,9 +2300,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
 
-  const latestVisibleMessagesRef = useRef(visibleMessages);
-  latestVisibleMessagesRef.current = visibleMessages;
-
   const preserveEditDraft = (editedText: string, noticeText?: string) => {
     setInputText((current) => {
       if (!current.trim()) return editedText;
@@ -2329,49 +2325,49 @@ export const Workstation: React.FC<WorkstationProps> = ({
       || Boolean(activeConversationTurns?.running)
       || queuedTurns.length > 0
     );
+    const closeAndReloadStale = () => {
+      failedEditDraftRef.current = null;
+      setTruncateTarget(null);
+      if (target.mode === 'edit' && editedText) {
+        preserveEditDraft(editedText);
+        setMessageNotice({ text: '对话内容刚刚有更新，改好的话已留在输入框里，请重新选择消息后再确认。', kind: 'info' });
+      } else {
+        setMessageNotice({ text: '对话内容刚刚有更新，请重新选择消息后再确认。', kind: 'info' });
+      }
+      const currentConv = conversations.find((row) => row.id === convId);
+      if (currentConv) void selectConversation(currentConv, true);
+    };
     setTruncateBusy(true);
     setTruncateError(null);
     try {
       let effectiveTarget = target;
       if (!activeReplyBusy) {
-        const hasUnhydratedMessage = latestVisibleMessagesRef.current.some(
-          (msg) => !msg.systemError && msg.dbId === undefined,
-        );
         const inflight = messageIdRefreshRef.current;
         const hasInflightRefresh = Boolean(inflight && inflight.convId === convId && inflight.epoch === entryEpoch);
-        if (hasUnhydratedMessage || hasInflightRefresh) {
-          const rows = hasInflightRefresh ? await inflight!.promise : await fetchMessageIds(convId, true);
-          if (
-            activeConversationIdRef.current !== convId
-            || conversationEpochRef.current !== entryEpoch
-            || latestWorldlineRef.current !== wl
-          ) return;
-          if (rows) {
-            const verified = resolveTruncateFromHistory(rows, target);
-            if (verified && (
-              verified.deletedTurns !== target.deletedTurns
-              || verified.fromMessageId !== target.fromMessageId
-            )) {
-              if (hasInflightRefresh) hydrateMessageIdsRef.current?.(rows, true);
-              if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
-              setTruncateTarget(verified);
-              setTruncateError(formatTruncateError('conversation_changed'));
-              return;
-            }
-            if (verified) effectiveTarget = verified;
-          }
-        } else {
-          const latestTarget = resolveTruncateTarget(latestVisibleMessagesRef.current, target.message.id, target.mode);
-          if (latestTarget && (
-            latestTarget.deletedTurns !== target.deletedTurns
-            || latestTarget.fromMessageId !== target.fromMessageId
-          )) {
-            if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
-            setTruncateTarget(latestTarget);
-            setTruncateError(formatTruncateError('conversation_changed'));
-            return;
-          }
+        const rows = hasInflightRefresh ? await inflight!.promise : await fetchMessageIds(convId, true);
+        if (
+          activeConversationIdRef.current !== convId
+          || conversationEpochRef.current !== entryEpoch
+          || latestWorldlineRef.current !== wl
+        ) return;
+        if (!rows) {
+          if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+          setTruncateError('回退对话时连接失败，请稍后再试。');
+          return;
         }
+        const verified = resolveTruncateFromHistory(rows, target);
+        if (!verified) {
+          closeAndReloadStale();
+          return;
+        }
+        if (verified.deletedTurns !== target.deletedTurns || verified.fromMessageId !== target.fromMessageId) {
+          if (hasInflightRefresh) hydrateMessageIdsRef.current?.(rows, true);
+          if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+          setTruncateTarget(verified);
+          setTruncateError(formatTruncateError('conversation_changed'));
+          return;
+        }
+        effectiveTarget = verified;
         stopReplay(false);
         audioPlayer.stopAll();
         if (isPlaying) stopVoice();
@@ -2393,16 +2389,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         const body = await response.json().catch(() => null);
         const code = body?.detail?.code as string | undefined;
         if (code === 'conversation_changed') {
-          failedEditDraftRef.current = null;
-          setTruncateTarget(null);
-          if (target.mode === 'edit' && editedText) {
-            preserveEditDraft(editedText);
-            setMessageNotice({ text: '对话内容刚刚有更新，改好的话已留在输入框里，请重新选择消息后再确认。', kind: 'info' });
-          } else {
-            setMessageNotice({ text: '对话内容刚刚有更新，请重新选择消息后再确认。', kind: 'info' });
-          }
-          const currentConv = conversations.find((row) => row.id === convId);
-          if (currentConv) void selectConversation(currentConv, true);
+          closeAndReloadStale();
         } else {
           if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
           setTruncateError(formatTruncateError(code, queuedTurns.length > 0));

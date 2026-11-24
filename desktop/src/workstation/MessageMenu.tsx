@@ -21,16 +21,7 @@ export interface ReplayStatus {
   source?: 'original' | 'synthesized';
 }
 
-function hasReplyTextForTurn(messages: readonly Message[], turnId: string): boolean {
-  return messages.some(
-    (msg) => !msg.systemError
-      && msg.role === 'assistant'
-      && msg.turnId === turnId
-      && (Boolean(msg.segments?.length) || Boolean(msg.content.trim()) || Boolean(msg.translation?.trim())),
-  );
-}
-
-/** Resolve the backend truncation point and affected turn count for one message action. */
+/** Resolve the backend truncation point and preview turn count for one message action. */
 export function resolveTruncateTarget(messages: readonly Message[], targetId: string, mode: TruncateMode): TruncateTarget | null {
   const index = messages.findIndex((msg) => msg.id === targetId);
   if (index < 0) return null;
@@ -46,17 +37,10 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
     : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user' && !!msg.dbId);
   const fromMessageId = cutIndex >= 0 ? messages[cutIndex].dbId : undefined;
   if (!fromMessageId) return null;
-  const lastPersistedIndex = messages.reduce(
-    (last, msg, i) => (!msg.systemError && typeof msg.dbId === 'number' && msg.dbId > 0 ? i : last),
-    -1,
-  );
-  const deletedTurns = messages.slice(cutIndex).filter((msg, offset) => {
-    if (msg.systemError || msg.role !== 'user') return false;
-    if (typeof msg.dbId === 'number' && msg.dbId > 0) return true;
-    return Boolean(msg.turnId)
-      && (cutIndex + offset) > lastPersistedIndex
-      && hasReplyTextForTurn(messages, msg.turnId!);
-  }).length;
+  const deletedTurns = messages
+    .slice(cutIndex)
+    .filter((msg) => !msg.systemError && msg.role === 'user' && Boolean(msg.dbId || msg.turnId))
+    .length;
   return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
 }
 
