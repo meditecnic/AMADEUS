@@ -834,6 +834,7 @@ async def _update_pending_window(
 
 async def default_diary_completion(**kwargs: Any) -> Mapping[str, Any]:
     from app.services.credentials import credential_store
+    from app.services.model_catalog import model_catalog
     from app.services.model_usage import usage_scope
     from app.services.provider_adapters import ProviderRequestError
     from app.services.provider_registry import ProviderTask
@@ -889,6 +890,12 @@ async def default_diary_completion(**kwargs: Any) -> Mapping[str, Any]:
             }
         )
 
+    completion_options: dict[str, str] = {}
+    if provider_id == "deepseek":
+        control = model_catalog.control_for(provider_id, snapshot.model_id, snapshot.adapter.base_url)
+        if control is not None and any(effort == "low" for effort, _ in control.options):
+            completion_options["reasoning_effort"] = "low"
+
     try:
         with usage_scope(
             source="diary",
@@ -900,6 +907,7 @@ async def default_diary_completion(**kwargs: Any) -> Mapping[str, Any]:
                 api_key=api_key,
                 model=snapshot.model_id,
                 temperature=0.3,
+                **completion_options,
             )
     except (NotImplementedError, json.JSONDecodeError) as exc:
         raise _UnsupportedJsonOutputError("json_unsupported") from exc
