@@ -334,7 +334,9 @@ async def test_1_three_synthetic_segments_write_non_overlapping_complete_diaries
     assert [message["role"] for message in first] == ["system", "user"]
     assert "日中どちらの本文にも鉤括弧や引用符を使わない" in first[0]["content"]
     assert "誰が誰に何を頼んだか" in first[0]["content"]
+    assert "私の頼みを相手の発言や承諾に変えない" in first[0]["content"]
     assert "頼みや提案、予定は、実際に済んだこととして書かない" in first[0]["content"]
+    assert "私が直接見聞きしたことにはしない" in first[0]["content"]
     assert "相手の話として書く" in json.loads(first[1]["content"])["mode_note"]
     assert rewrite[:2] == first
     assert "両方の本文から鉤括弧や引用符をすべて外し" in rewrite[2]["content"]
