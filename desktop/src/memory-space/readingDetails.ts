@@ -29,6 +29,7 @@ export type FactVersionRow = {
   previous_version: number | null;
   valid_from: string | null;
   invalid_at: string | null;
+  restored_from_version?: number | null;
   is_active: boolean;
 };
 
@@ -163,6 +164,7 @@ function isValidFactVersionRow(row: unknown): boolean {
     && isNumberOrNull(candidate.previous_version)
     && isStringOrNull(candidate.valid_from)
     && isStringOrNull(candidate.invalid_at)
+    && (candidate.restored_from_version === undefined || isNumberOrNull(candidate.restored_from_version))
     && typeof candidate.is_active === 'boolean'
   );
 }
@@ -416,31 +418,49 @@ function factReadingCore(
   const activeSources = payload.provenance
     .filter((row) => row.version_no === activeVersion)
     .map(sourceLine);
-  const historyVersions: HistoryVersion[] = payload.versions.map((version) => ({
-    versionNo: version.version_no,
-    displayText: version.display_text,
-    changeKind: version.change_kind,
-    changeKindHuman: changeKindHuman(version.change_kind),
-    validFromHuman: formatTimeHuman(version.valid_from),
-    invalidAtHuman: formatTimeHuman(version.invalid_at),
-    isActive: version.is_active,
-    sources: payload.provenance
-      .filter((row) => row.version_no === version.version_no)
-      .map(sourceLine),
-  }));
+  const historyVersions: HistoryVersion[] = payload.versions.map((version) => {
+    const restoredFrom = typeof version.restored_from_version === 'number' ? version.restored_from_version : null;
+    return {
+      versionNo: version.version_no,
+      displayText: version.display_text,
+      changeKind: version.change_kind,
+      changeKindHuman: restoredFrom !== null
+        ? `回退对话后恢复（沿用第 ${restoredFrom} 版）`
+        : changeKindHuman(version.change_kind),
+      restoredFromVersion: restoredFrom,
+      validFromHuman: formatTimeHuman(version.valid_from),
+      invalidAtHuman: formatTimeHuman(version.invalid_at),
+      isActive: version.is_active,
+      sources: payload.provenance
+        .filter((row) => row.version_no === version.version_no)
+        .map(sourceLine),
+    };
+  });
   const latestVersion =
     payload.versions.find((version) => version.is_active)
     ?? payload.versions[payload.versions.length - 1]
     ?? null;
+  const latestRestoredFrom =
+    latestVersion && typeof latestVersion.restored_from_version === 'number'
+      ? latestVersion.restored_from_version
+      : null;
+  const revisionSummary = (() => {
+    if (!latestVersion) return null;
+    if (latestRestoredFrom !== null) {
+      return payload.versions.length > 1
+        ? `${payload.versions.length} 个版本 · 已在回退对话后恢复到早期说法`
+        : '已在回退对话后恢复到早期说法';
+    }
+    return payload.versions.length > 1
+      ? `${payload.versions.length} 个版本 · 最新变更：${changeKindHuman(latestVersion.change_kind)}`
+      : null;
+  })();
   return {
     kind: 'fact',
     primaryText: payload.fact.display_text,
     isPinned: payload.fact.is_pinned,
     versionCount: payload.versions.length,
-    revisionSummary:
-      payload.versions.length > 1 && latestVersion
-        ? `${payload.versions.length} 个版本 · 最新变更：${changeKindHuman(latestVersion.change_kind)}`
-        : null,
+    revisionSummary,
     activeSources,
     historyVersions,
     correctionNotice: CORRECTION_NOTICE,
@@ -483,6 +503,7 @@ export type HistoryVersion = {
   displayText: string;
   changeKind: string;
   changeKindHuman: string;
+  restoredFromVersion: number | null;
   validFromHuman: string | null;
   invalidAtHuman: string | null;
   isActive: boolean;

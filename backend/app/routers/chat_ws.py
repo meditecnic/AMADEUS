@@ -1655,12 +1655,13 @@ async def processor_loop(
     expected_erasure = 0
     turn_worldline = session.worldline
     segment_pipeline = None
+    turn_audio = None
     diagnostic_observer = None
     segment_count = 0
     history_translation = ""
     user_message_id = None
     assistant_message_id = None
-    aborted_turn_written = False
+    interrupted_history_settled = False
     needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
@@ -1681,6 +1682,25 @@ async def processor_loop(
         nonlocal deadline_handle, turn_deadline
         turn_deadline = turn_loop.time() + TURN_TIMEOUT_SECONDS
         deadline_handle = turn_loop.call_at(turn_deadline, expire_turn)
+
+    async def settle_interrupted_history() -> None:
+        if assistant_message_id is None:
+            await _persist_aborted_turn(
+                session=session,
+                worldline=turn_worldline,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                revision=epoch,
+                history_epoch=start_history_epoch,
+                expected_erasure=expected_erasure,
+            )
+        if segment_pipeline is not None:
+            await send_queue.put((epoch, {
+                "type": "turn.history_saved",
+                "conversation_id": conversation_id,
+                "turn_id": turn_id,
+                "generation": segment_pipeline.identity.generation,
+            }))
 
     pending_user = session._history[-1] if session._history else None
     if pending_user is not None and (
@@ -1749,7 +1769,12 @@ async def processor_loop(
         expected_erasure = await history_erasure_cursor(turn_worldline, session.session_id, conversation_id)
         active_history = session.history
         if session.protocol_version >= 2:
+            from app.services.voice_cache import TurnAudioRecorder
+
+            turn_audio = TurnAudioRecorder(foreground=True)
+
             async def emit_segment_event(event: dict):
+                turn_audio.on_event(event)
                 payload = dict(event)
                 if isinstance(payload.get("data"), bytes):
                     payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
@@ -2304,11 +2329,34 @@ async def processor_loop(
                             translation=history_translation or None,
                         )
                 if assistant_message_id is None:
-                    aborted_turn_written = True
+                    interrupted_history_settled = True
                     if segment_pipeline is not None:
                         await segment_pipeline.cancel(reason="superseded_generation")
                     await send_queue.put((epoch, {"type": "status", "dsk": "idle", "state": "done", "tts": "idle"}))
                     return
+                if turn_audio is not None and segment_pipeline is not None:
+                    staged_segments = turn_audio.complete_segments(
+                        voice_stopped=bool(
+                            getattr(segment_pipeline, "_voice_stopped", False)
+                            or session.voice_stopped_turn_id == turn_id
+                        ),
+                        tts_enabled=bool(session.enable_tts),
+                    )
+                    if staged_segments:
+                        try:
+                            from app.services.voice_cache import archive_audio
+
+                            await archive_audio(
+                                worldline=turn_worldline,
+                                session_id=session.session_id,
+                                conversation_id=conversation_id,
+                                message_id=int(assistant_message_id),
+                                expected_erasure=expected_erasure,
+                                segments=staged_segments,
+                                source="original",
+                            )
+                        except Exception as exc:
+                            logger.warning("[VoiceCache] archive failed (%s); chat continues", type(exc).__name__)
                 session.append_message(
                     {
                         "role": "assistant",
@@ -2401,6 +2449,7 @@ async def processor_loop(
                     turn_record.sent_recall_fact_ids,
                 )
             await segment_pipeline.complete(segment_count=segment_count)
+            interrupted_history_settled = True
 
         if (
             needs_translation_repair
@@ -2462,24 +2511,15 @@ async def processor_loop(
         if deadline_expired:
             processor_task.uncancel()
         if (
-            not aborted_turn_written
+            not interrupted_history_settled
             and isinstance(user_message_id, int)
             and user_message_id > 0
-            and assistant_message_id is None
             and conversation_id
         ):
-            aborted_turn_written = True
+            interrupted_history_settled = True
             # Held by the session: if a second cancel interrupts the shield,
             # the notice keeps running and must not be garbage-collected.
-            notice = _schedule_background_task(session, _persist_aborted_turn(
-                session=session,
-                worldline=turn_worldline,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                revision=epoch,
-                history_epoch=start_history_epoch,
-                expected_erasure=expected_erasure,
-            ))
+            notice = _schedule_background_task(session, settle_interrupted_history())
             try:
                 await asyncio.shield(notice)
             except asyncio.CancelledError:
@@ -2530,21 +2570,12 @@ async def processor_loop(
             if deadline_handle is not None:
                 deadline_handle.cancel()
             if (
-                not aborted_turn_written
+                not interrupted_history_settled
                 and isinstance(user_message_id, int)
                 and user_message_id > 0
-                and assistant_message_id is None
                 and conversation_id
             ):
-                await _persist_aborted_turn(
-                    session=session,
-                    worldline=turn_worldline,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    revision=epoch,
-                    history_epoch=start_history_epoch,
-                    expected_erasure=expected_erasure,
-                )
+                await settle_interrupted_history()
             if session.active_segment_pipeline is segment_pipeline:
                 session.active_segment_pipeline = None
         finally:

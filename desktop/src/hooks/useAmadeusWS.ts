@@ -10,6 +10,8 @@ import {
 } from '../memory-space/chatMarkers';
 import {
   ALLOWED_EMOTIONS,
+  parseLeadingEmotion,
+  stripHistoryEmotionTags,
   resolveConversationEmotion,
   type AmadeusEmotion,
 } from '../workstation/emotion';
@@ -77,6 +79,7 @@ export interface UseAmadeusWSParams {
   }) => void;
   onTurnStarted?: (conversationId?: string | null) => void;
   onTurnCompleted?: () => void;
+  onTurnHistorySaved?: (conversationId: string) => void;
   /** Decorative cue after this client actually writes chat.send, never on history/ACK. */
   onLocalSend?: (messageId: string) => void;
   /** Backend-normalized config after config_update (e.g. reasoning_effort aliases). */
@@ -89,6 +92,8 @@ export type WSStatus = 'CONNECTING' | 'READY' | 'ERROR' | 'CLOSED';
 
 export interface Message {
   id: string;
+  /** Persistent history DB primary key. */
+  dbId?: number;
   role: 'user' | 'assistant';
   content: string;
   translation?: string;
@@ -104,6 +109,14 @@ export interface Message {
   memoryRefs?: MemoryRefs;
   /** memory.recorded from this user line, merged by record id. In memory only. */
   memoryRecorded?: MemoryChange[];
+}
+
+export interface HistoryMessageRow {
+  id?: number;
+  role: string;
+  turn_id?: string | null;
+  content: string;
+  translation?: string | null;
 }
 
 export const RECONNECT_ATTEMPTS = 5;
@@ -130,7 +143,7 @@ export interface UseAmadeusWSReturn {
   activeNotice: string | null;
   emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
-  sendChat: (content: string) => boolean;
+  sendChat: (content: string, onAccepted?: () => void, onRejected?: () => void) => boolean;
   /** Same gate sendChat uses, without side effects. Optional so existing test doubles keep compiling. */
   canSendChat?: (content: string) => boolean;
   stopVoice: () => void;
@@ -148,6 +161,10 @@ export interface UseAmadeusWSReturn {
   resetToDraft?: () => void;
   /** Remove failed-entry notices (conversationEntryError) once a runtime change reconnects the source conversation. */
   clearConversationEntryErrors?: () => void;
+  /** Attach backend numeric message IDs onto matching in-memory transcript rows without disrupting segments/marks. */
+  hydrateMessageIds?: (rows: ReadonlyArray<HistoryMessageRow>) => void;
+  /** Drop messages from the truncated point onward and restore emotion from the last retained assistant line. */
+  applyTruncate?: (fromDbId: number) => void;
   switchConversation: (conversationId: string, history: Message[], requestEpoch?: number) => boolean;
   switchWorldline: (worldline: 'steins_gate' | 'beta', requestId?: string) => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
@@ -203,6 +220,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   messagesRef.current = messages;
 
   const lastSentenceIdRef = useRef<number>(-1);
+  const pendingSendRef = useRef<{ id: string; onAccepted?: () => void; onRejected?: () => void; cancelled?: true } | null>(null);
   const activeTurnIdRef = useRef<string>('');
   const activeGenerationRef = useRef<number>(-1);
   const activeConversationIdRef = useRef<string | null>(params.conversationId || null);
@@ -363,6 +381,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     voiceStoppedRef.current = false;
     audioDegradedNotifiedRef.current = false;
     audioDegradedV2Ref.current = null;
+    pendingSendRef.current = null;
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
     activeConversationIdRef.current = null;
@@ -576,7 +595,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             break;
           }
 
-          case 'turn.started':
+          case 'turn.started': {
             if (paramsRef.current.pendingConversation
               && confirmedConversationEpochRef.current !== paramsRef.current.pendingConversation.requestEpoch) break;
             clearWatchdog();
@@ -584,6 +603,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             if (msg.conversation_id) {
               activeConversationIdRef.current = msg.conversation_id;
             }
+            const pendingSend = pendingSendRef.current;
+            pendingSendRef.current = null;
             paramsRef.current.onTurnStarted?.(msg.conversation_id || null);
             activeTurnIdRef.current = msg.turn_id;
             activeGenerationRef.current = msg.generation;
@@ -596,7 +617,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             setIsThinking(true);
             setIsTurnActive(true);
             setMessages((prev) => [
-              ...prev,
+              ...prev.map((message) => message.id === pendingSend?.id
+                ? { ...message, turnId: msg.turn_id } : message),
               {
                 id: activeAssistantMessageId,
                 role: 'assistant',
@@ -608,7 +630,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
                 emotion: 'neutral',
               },
             ]);
+            pendingSend?.onAccepted?.();
             break;
+          }
 
           case 'segment.ready': {
             if (
@@ -754,6 +778,17 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             paramsRef.current.onTurnCompleted?.();
             break;
 
+          case 'turn.history_saved':
+            if (typeof msg.turn_id === 'string' && typeof msg.conversation_id === 'string'
+              && msg.conversation_id === activeConversationIdRef.current) {
+              setMessages((prev) => prev.map((message) =>
+                message.role === 'assistant' && message.turnId === msg.turn_id && message.streaming
+                  ? { ...message, streaming: false } : message
+              ));
+              paramsRef.current.onTurnHistorySaved?.(msg.conversation_id);
+            }
+            break;
+
           case 'turn.cancelled':
             if (msg.turn_id !== activeTurnIdRef.current) break;
             clearWatchdog();
@@ -793,6 +828,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           }
 
           case 'status':
+            if (msg.state === 'cancelled' && pendingSendRef.current?.cancelled) {
+              const cancelledSend = pendingSendRef.current;
+              pendingSendRef.current = null;
+              cancelledSend.onRejected?.();
+            }
             if (msg.notice) {
               setActiveNotice(msg.notice);
               clearWatchdog();
@@ -825,6 +865,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             break;
 
           case 'text_chunk':
+            pendingSendRef.current?.onAccepted?.();
+            pendingSendRef.current = null;
             startWatchdog();
             setIsThinking(false);
             setActiveTool(null);
@@ -896,7 +938,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             });
             break;
 
-          case 'error':
+          case 'error': {
+            const rejectedSend = pendingSendRef.current;
+            pendingSendRef.current = null;
+            rejectedSend?.onRejected?.();
             if (authTarget && sessionStateRef.current !== 'ready') {
               const code = msg.code || (msg.message === '请求的会话不存在或不属于当前世界线。'
                 ? 'conversation_not_found' : 'switch_failed');
@@ -946,6 +991,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               }
             ]);
             break;
+          }
 
           default:
             break;
@@ -958,6 +1004,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       setSessionReady(false);
+      const droppedSend = pendingSendRef.current;
+      pendingSendRef.current = null;
+      droppedSend?.onRejected?.();
       const turnWasActive = Boolean(activeTurnIdRef.current);
       stopHeartbeat();
       clearWatchdog();
@@ -1045,35 +1094,23 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     const pending = paramsRef.current.pendingConversation;
     if ((pending && confirmedConversationEpochRef.current !== pending.requestEpoch)
       || pendingConversationSwitchRef.current?.requestEpoch !== undefined) return false;
-    if (!content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
+    if (pendingSendRef.current || !content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
     return true;
   }, []);
 
-  const sendChat = useCallback((content: string) => {
+  const sendChat = useCallback((content: string, onAccepted?: () => void, onRejected?: () => void) => {
     const ws = wsRef.current;
     if (!canSendChat(content) || !ws) return false;
 
-    // Start 30s watchdog wait immediately on sending chat
-    startWatchdog();
-    // Legacy v1 per-send flag only. The v2 slot is bound to the accepted
-    // turn.started, so a busy-rejected resend cannot re-arm the old turn.
-    audioDegradedNotifiedRef.current = false;
-    
-    // Add user message to state
-    const userMsgId = `user_${Date.now()}`;
-    setMessages((prev) => [
-      ...prev,
-      { id: userMsgId, role: 'user', content: content.trim() }
-    ]);
-    
+    const text = content.trim();
+    ws.send(JSON.stringify({ type: 'chat.send', content: text }));
+    const id = createRequestId('user');
+    pendingSendRef.current = { id, onAccepted, onRejected };
+    setMessages((prev) => [...prev, { id, role: 'user', content: text }]);
     setIsThinking(true);
-
-    // Send chat frame
-    ws.send(JSON.stringify({
-      type: 'chat.send',
-      content: content.trim()
-    }));
-    paramsRef.current.onLocalSend?.(userMsgId);
+    startWatchdog();
+    audioDegradedNotifiedRef.current = false;
+    paramsRef.current.onLocalSend?.(id);
     return true;
   }, [canSendChat]);
 
@@ -1085,6 +1122,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   }, []);
 
   const cancelTurn = useCallback(() => {
+    if (pendingSendRef.current) pendingSendRef.current.cancelled = true;
     // Clear the watchdog before dropping identity: the server turn.cancelled
     // ACK can no longer match (and therefore clear) it afterwards.
     clearWatchdog();
@@ -1099,7 +1137,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     // never stays live when the ACK is ignored.
     if (cancelledTurnId) {
       setMessages((prev) => prev.map((message) =>
-        message.turnId === cancelledTurnId ? { ...message, streaming: false } : message
+        message.role === 'assistant' && message.turnId === cancelledTurnId ? { ...message, streaming: false } : message
       ));
     }
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -1155,6 +1193,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   /** Local-only: drop the visible transcript after the selected conversation was deleted.
    *  The caller reconnects without a conversation id so the server opens an empty draft. */
   const resetToDraft = useCallback(() => {
+    pendingSendRef.current = null;
     activeConversationIdRef.current = null;
     activeTurnIdRef.current = '';
     setIsTurnActive(false);
@@ -1171,6 +1210,48 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setMessages((prev) => prev.filter((message) => !message.conversationEntryError));
   }, []);
 
+  const hydrateMessageIds = useCallback((rows: ReadonlyArray<HistoryMessageRow>) => {
+    const byTurnAndRole = new Map<string, HistoryMessageRow | null>();
+    for (const row of rows) {
+      if (!row.turn_id || typeof row.id !== 'number' || row.id <= 0
+        || (row.role !== 'user' && row.role !== 'assistant')) continue;
+      const key = row.role + ':' + row.turn_id;
+      byTurnAndRole.set(key, byTurnAndRole.has(key) ? null : row);
+    }
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((message) => {
+        if (message.systemError || message.streaming || message.dbId !== undefined || !message.turnId) return message;
+        const row = byTurnAndRole.get(message.role + ':' + message.turnId);
+        if (!row) return message;
+        changed = true;
+        const content = message.role === 'assistant' ? stripHistoryEmotionTags(row.content) : row.content;
+        if (message.content === content) return { ...message, dbId: row.id };
+        return {
+          ...message,
+          dbId: row.id,
+          content,
+          translation: row.translation ?? undefined,
+          segments: undefined,
+          emotion: message.role === 'assistant' ? parseLeadingEmotion(row.content) : undefined,
+        };
+      });
+      if (changed) messagesRef.current = next;
+      return changed ? next : prev;
+    });
+  }, []);
+
+  /** Remove truncated suffix messages (along with their in-memory marks) and refresh the portrait emotion. */
+  const applyTruncate = useCallback((fromDbId: number) => {
+    setMessages((prev) => {
+      const cutIndex = prev.findIndex((message) => message.dbId !== undefined && message.dbId >= fromDbId);
+      const retained = cutIndex >= 0 ? prev.slice(0, cutIndex) : prev;
+      messagesRef.current = retained;
+      setEmotion(resolveConversationEmotion(undefined, retained));
+      return retained;
+    });
+  }, []);
+
   const switchConversation = useCallback((conversationId: string, history: Message[], requestEpoch?: number) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       paramsRef.current.onConversationSwitchError?.({
@@ -1182,6 +1263,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     }
     const requestId = createRequestId('conversation-switch');
     clearWatchdog();
+    pendingSendRef.current = null;
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
     voiceStoppedRef.current = false;
@@ -1230,6 +1312,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     }
     const requestId = hostRequestId || createRequestId('worldline-switch');
     clearWatchdog();
+    pendingSendRef.current = null;
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
     activeConversationIdRef.current = null;
@@ -1297,6 +1380,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     reconnectStopReason,
     resetToDraft,
     clearConversationEntryErrors,
+    hydrateMessageIds,
+    applyTruncate,
     canSendChat,
     switchConversation,
     switchWorldline,

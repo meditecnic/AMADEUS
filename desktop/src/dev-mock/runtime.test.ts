@@ -200,8 +200,8 @@ describe('dev mock protocol v2', () => {
     expect(frames.slice(2).every(frame => frame.turn_id === turn.turn_id && frame.generation === turn.generation)).toBe(true);
     const history = mock.rest(url(`/api/conversations/${turn.conversation_id}/messages${scope}`), 'GET').body;
     expect(history).toEqual([
-      { role: 'user', content: 'こんにちは' },
-      expect.objectContaining({ role: 'assistant', content: scenarios.streaming.dialogue.sentences.map(s => s.ja).join('') }),
+      expect.objectContaining({ id: expect.any(Number), role: 'user', content: 'こんにちは' }),
+      expect.objectContaining({ id: expect.any(Number), role: 'assistant', content: scenarios.streaming.dialogue.sentences.map(s => s.ja).join('') }),
     ]);
     socket.close();
   });
@@ -319,7 +319,7 @@ describe('dev mock protocol v2', () => {
     const length = frames.length;
     vi.runAllTimers();
     expect(frames).toHaveLength(length);
-    expect(frames.at(-1)?.type).toBe('turn.cancelled');
+    expect(frames.slice(-2).map((frame) => frame.type)).toEqual(['turn.cancelled', 'turn.history_saved']);
     slow.receive({ type: 'ping' });
     expect(frames.at(-1)?.type).toBe('pong');
     slow.close();

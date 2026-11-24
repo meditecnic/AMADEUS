@@ -159,6 +159,10 @@ class TTSQueueManager:
         self.sovits_url = config.SOVITS_URL
         self.timeout = config.TTS_TIMEOUT
         self.semaphore = asyncio.Semaphore(3)  # 并行度提升到 3（GPU 显存允许范围内）
+        self._foreground_active = 0
+        self._foreground_idle = asyncio.Event()
+        self._foreground_idle.set()
+        self._replay_lock = asyncio.Lock()
         self.client = None                     # Async client managed by lifespan
         self.is_online = True                  # Kept for backward compatibility
 
@@ -281,34 +285,89 @@ class TTSQueueManager:
 
         await self.init_client()
 
-        async with self.semaphore:
-            try:
-                audio_bytes = await asyncio.wait_for(
-                    self._async_tts_call(
-                        prepared.text, ref_config, sovits_url=sovits_url,
-                        quoted_source=quoted_source,
-                    ),
-                    timeout=self.timeout
+        self._foreground_active += 1
+        self._foreground_idle.clear()
+        try:
+            async with self.semaphore:
+                return await self._run_tts_call(
+                    prepared.text,
+                    ref_config,
+                    text_len=len(text),
+                    sovits_url=sovits_url,
+                    quoted_source=quoted_source,
                 )
-                return audio_bytes
-            except asyncio.TimeoutError as exc:
-                print(f"[TTS Timeout] Synthesis timed out ({self.timeout}s) for text (len={len(text)})")
-                raise TTSServiceError(
-                    AudioErrorCode.TIMEOUT,
-                    retryable=True,
-                    diagnostic="manager_timeout",
-                ) from exc
-            except asyncio.CancelledError:
-                print(f"[TTS Cancelled] Task cancelled for text (len={len(text)})")
-                raise
-            except TTSServiceError:
-                raise
-            except Exception as exc:
-                print(f"[TTS Error] Synthesis failed ({type(exc).__name__})")
-                raise TTSServiceError(
-                    AudioErrorCode.SYNTHESIS_FAILED,
-                    diagnostic="unexpected_manager_error",
-                ) from exc
+        finally:
+            self._foreground_active = max(0, self._foreground_active - 1)
+            if self._foreground_active == 0:
+                self._foreground_idle.set()
+
+    async def synthesize_replay_async(
+        self, text: str, emotion_tag: str, sovits_url: str = None,
+    ) -> bytes:
+        """Synthesize one replay utterance behind any active foreground speech."""
+        prepared = prepare_tts_text(text)
+        if prepared.error is not None:
+            raise TTSServiceError(prepared.error)
+
+        ref_config = self.emotion_ref_map.get(emotion_tag)
+        if ref_config is None:
+            raise TTSServiceError(
+                AudioErrorCode.SERVICE_UNAVAILABLE,
+                f"No valid reference audio configured for emotion '{emotion_tag}'",
+                diagnostic=f"no_ref:{emotion_tag}",
+            )
+
+        await self.init_client()
+
+        async with self._replay_lock:
+            while True:
+                await self._foreground_idle.wait()
+                async with self.semaphore:
+                    if self._foreground_active > 0:
+                        continue
+                    return await self._run_tts_call(
+                        prepared.text,
+                        ref_config,
+                        text_len=len(text),
+                        sovits_url=sovits_url,
+                    )
+
+    async def _run_tts_call(
+        self,
+        prepared_text: str,
+        ref_config: dict,
+        *,
+        text_len: int,
+        sovits_url: str | None = None,
+        quoted_source: str | None = None,
+    ) -> bytes:
+        try:
+            audio_bytes = await asyncio.wait_for(
+                self._async_tts_call(
+                    prepared_text, ref_config, sovits_url=sovits_url,
+                    quoted_source=quoted_source,
+                ),
+                timeout=self.timeout,
+            )
+            return audio_bytes
+        except asyncio.TimeoutError as exc:
+            print(f"[TTS Timeout] Synthesis timed out ({self.timeout}s) for text (len={text_len})")
+            raise TTSServiceError(
+                AudioErrorCode.TIMEOUT,
+                retryable=True,
+                diagnostic="manager_timeout",
+            ) from exc
+        except asyncio.CancelledError:
+            print(f"[TTS Cancelled] Task cancelled for text (len={text_len})")
+            raise
+        except TTSServiceError:
+            raise
+        except Exception as exc:
+            print(f"[TTS Error] Synthesis failed ({type(exc).__name__})")
+            raise TTSServiceError(
+                AudioErrorCode.SYNTHESIS_FAILED,
+                diagnostic="unexpected_manager_error",
+            ) from exc
 
     async def stream_pcm(
         self, text: str, emotion_tag: str, sovits_url: str = None,

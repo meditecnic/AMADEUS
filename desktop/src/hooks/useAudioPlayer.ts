@@ -16,16 +16,19 @@ const readPersistedVoiceVolume = () => {
   }
 };
 
+type PlaybackCallbacks = { onEnded?: () => void; onSettled?: () => void };
+type DecodedSegment = PlaybackCallbacks & { buffer: AudioBuffer | null };
+
 export class AudioPlayerManager {
   public ctx: AudioContext | null = null;
   public analyser: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
   private currentSource: AudioBufferSourceNode | null = null;
-  private audioQueue: Array<{ buffer: AudioBuffer; onEnded?: () => void }> = [];
-  private decodedQueue = new Map<number, { buffer: AudioBuffer | null; onEnded?: () => void }>();
+  private audioQueue: DecodedSegment[] = [];
+  private decodedQueue = new Map<number, DecodedSegment>();
   private nextDecodeSequence = 0;
   private decodeSequence = 0;
-  private encodedBacklog: Array<{ base64Data: string; onEnded?: () => void }> = [];
+  private encodedBacklog: Array<PlaybackCallbacks & { base64Data: string }> = [];
   private isPlaying = false;
   private onVolumeCallback: ((vol: number) => void) | null = null;
   private onPlayStateChange: ((isPlaying: boolean) => void) | null = null;
@@ -55,8 +58,8 @@ export class AudioPlayerManager {
 
     this.gainNode.gain.setValueAtTime(this.isMuted ? 0 : this.voiceVolume, this.ctx.currentTime);
     const backlog = this.encodedBacklog.splice(0);
-    backlog.forEach(({ base64Data, onEnded }) => {
-      void this.playBase64(base64Data, onEnded);
+    backlog.forEach(({ base64Data, onEnded, onSettled }) => {
+      void this.playBase64(base64Data, onEnded, onSettled);
     });
     return true;
   }
@@ -126,9 +129,10 @@ export class AudioPlayerManager {
     this.onDecodeError = cb;
   }
 
-  async playBase64(base64Data: string, onEnded?: () => void) {
+  /** onSettled runs after the segment plays or is skipped, in queue order. */
+  async playBase64(base64Data: string, onEnded?: () => void, onSettled?: () => void) {
     if (!this.init() || !this.ctx || !this.analyser) {
-      this.encodedBacklog.push({ base64Data, onEnded });
+      this.encodedBacklog.push({ base64Data, onEnded, onSettled });
       if (this.encodedBacklog.length > 32) this.encodedBacklog.shift();
       return;
     }
@@ -154,11 +158,11 @@ export class AudioPlayerManager {
         return;
       }
 
-      this.decodedQueue.set(sequence, { buffer: audioBuffer, onEnded });
+      this.decodedQueue.set(sequence, { buffer: audioBuffer, onEnded, onSettled });
     } catch (err) {
       if (generation !== this.currentPlayId) return;
       if (this.onDecodeError) this.onDecodeError(err);
-      this.decodedQueue.set(sequence, { buffer: null, onEnded });
+      this.decodedQueue.set(sequence, { buffer: null, onSettled });
     }
     this.flushDecodedQueue();
   }
@@ -168,8 +172,8 @@ export class AudioPlayerManager {
       const decoded = this.decodedQueue.get(this.nextDecodeSequence)!;
       this.decodedQueue.delete(this.nextDecodeSequence);
       this.nextDecodeSequence += 1;
-      if (decoded.buffer) {
-        this.audioQueue.push({ buffer: decoded.buffer, onEnded: decoded.onEnded });
+      if (decoded.buffer || decoded.onSettled) {
+        this.audioQueue.push(decoded);
       }
     }
     if (!this.isPlaying && this.audioQueue.length > 0) {
@@ -180,7 +184,11 @@ export class AudioPlayerManager {
   private processQueue() {
     if (!this.ctx || !this.analyser) return;
     while (this.audioQueue.length > 0) {
-      const { buffer, onEnded } = this.audioQueue.shift()!;
+      const { buffer, onEnded, onSettled } = this.audioQueue.shift()!;
+      if (!buffer) {
+        onSettled?.();
+        continue;
+      }
       let source: AudioBufferSourceNode | null = null;
       try {
         source = this.ctx.createBufferSource();
@@ -191,7 +199,12 @@ export class AudioPlayerManager {
           if (this.currentSource !== playingSource) return;
           this.currentSource = null;
           playingSource.disconnect();
-          try { onEnded?.(); } finally { this.processQueue(); }
+          try {
+            onEnded?.();
+            onSettled?.();
+          } finally {
+            this.processQueue();
+          }
         };
         source.start(0);
       } catch (err) {
@@ -200,6 +213,7 @@ export class AudioPlayerManager {
           source.disconnect();
         }
         this.onDecodeError?.(err);
+        onSettled?.();
         continue;
       }
       this.currentSource = source;
@@ -242,6 +256,10 @@ export class AudioPlayerManager {
     };
 
     this.animFrameId = requestAnimationFrame(track);
+  }
+
+  hasPendingPlayback(): boolean {
+    return this.isPlaying || this.encodedBacklog.length > 0 || this.nextDecodeSequence !== this.decodeSequence;
   }
 
   stopAll() {

@@ -129,6 +129,53 @@
 .ws2-voicing { margin-top: 6px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
 .ws2-actions { display: flex; gap: 6px; margin-top: 10px; }
 
+/* Low-key per-message menu trigger: hidden until hover/focus-within or open; stays in tab order. */
+.ws2-msg-menu {
+  position: absolute; top: 2px; right: -30px; opacity: 0;
+  transition: opacity .14s ease;
+}
+.ws2-line-user .ws2-msg-menu { right: auto; left: -30px; }
+.ws2-line:is(:hover, :focus-within) .ws2-msg-menu,
+.ws2-msg-menu.is-open { opacity: 1; }
+.ws2 .ws2-msg-more {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 0;
+  background: transparent; color: var(--ws-ink-3); cursor: pointer;
+  transition: color .14s ease, background-color .14s ease;
+}
+.ws2 .ws2-msg-more:is(:hover, :focus-visible, [data-state='open']):not(:disabled) {
+  color: var(--ws-ink); background: rgba(255, 255, 255, .06); outline: 1px solid var(--ws-line-2); outline-offset: -1px;
+}
+.ws2 .ws2-msg-more:disabled { opacity: .35; cursor: default; }
+
+/* Subtle inline replay status under her reply. */
+.ws2-replay-bar {
+  display: inline-flex; align-items: center; gap: 10px; margin-top: 8px;
+  font-family: var(--ws-sans); font-size: 11.5px; letter-spacing: .08em; color: var(--ws-ink-3);
+}
+.ws2-replay-bar .ws2-replay-tag {
+  font-family: var(--ws-mono); font-size: 10px; letter-spacing: .12em; color: var(--ws-ink-2);
+  padding: 1px 6px; box-shadow: inset 0 0 0 1px var(--ws-line-2);
+}
+.ws2-replay-bar button {
+  padding: 0 2px; border: 0; background: none; color: var(--ws-ink-2); cursor: pointer;
+  font-size: 11.5px; letter-spacing: .08em; text-decoration: underline; text-underline-offset: 4px;
+  text-decoration-color: var(--ws-line-2);
+}
+.ws2-replay-bar button:is(:hover, :focus-visible) { color: var(--ws-ink); text-decoration-color: var(--log-pencil); outline: none; }
+
+/* Edit-and-resend field inside ConfirmDialog. */
+.ws2-truncate-edit { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.ws2-truncate-edit > span { font-size: 11.5px; letter-spacing: .14em; color: var(--ws-ink-3); }
+.ws2-truncate-edit textarea {
+  width: 100%; box-sizing: border-box; padding: 9px 11px; resize: vertical;
+  border: 1px solid var(--ws-line-2); border-radius: 0; background: rgba(255, 255, 255, .03);
+  font-family: var(--ws-read); font-size: 14px; line-height: 1.6; color: var(--ws-ink); outline: none;
+}
+.ws2-truncate-edit textarea:focus { border-color: var(--ws-ink-2); }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-msg-menu, .ws2 .ws2-msg-more { transition: none; }
+}
+
 /* Back to the latest entry: on the composer's head, before its leader, so it never covers a line of the log; a
    pencil arrow points down to where the log ends. */
 .ws2 .ws2-to-latest {
