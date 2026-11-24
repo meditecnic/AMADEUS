@@ -21,7 +21,7 @@ export interface ReplayStatus {
   source?: 'original' | 'synthesized';
 }
 
-/** Resolve the backend truncation point and affected turn count for one message action. */
+/** Resolve the backend truncation point and preview turn count for one message action. */
 export function resolveTruncateTarget(messages: readonly Message[], targetId: string, mode: TruncateMode): TruncateTarget | null {
   const index = messages.findIndex((msg) => msg.id === targetId);
   if (index < 0) return null;
@@ -37,8 +37,35 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
     : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user' && !!msg.dbId);
   const fromMessageId = cutIndex >= 0 ? messages[cutIndex].dbId : undefined;
   if (!fromMessageId) return null;
-  const deletedTurns = messages.slice(cutIndex).filter((msg) => !msg.systemError && msg.role === 'user' && !!msg.dbId).length;
+  const deletedTurns = messages
+    .slice(cutIndex)
+    .filter((msg) => !msg.systemError && msg.role === 'user' && Boolean(msg.dbId || msg.turnId))
+    .length;
   return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
+}
+
+/** Recompute the truncation point, last id, and deleted turn count directly from persisted history rows. */
+export function resolveTruncateFromHistory(
+  rows: ReadonlyArray<{ id?: number; role: string }>,
+  target: TruncateTarget,
+): TruncateTarget | null {
+  const targetDbId = target.message.dbId;
+  if (!targetDbId) return null;
+  const persisted = rows
+    .filter((row): row is { id: number; role: string } => typeof row.id === 'number' && row.id > 0)
+    .sort((a, b) => a.id - b.id);
+  if (!persisted.length) return null;
+  const targetRow = persisted.find((row) => row.id === targetDbId);
+  if (!targetRow) return null;
+  const fromRow = target.mode === 'edit'
+    ? (targetRow.role === 'user' ? targetRow : undefined)
+    : persisted.find((row) => row.id > targetRow.id && row.role === 'user');
+  if (!fromRow) return null;
+  const expectedLastMessageId = persisted[persisted.length - 1].id;
+  const deletedTurns = persisted.filter((row) => row.id >= fromRow.id && row.role === 'user').length;
+  return deletedTurns > 0
+    ? { mode: target.mode, message: target.message, fromMessageId: fromRow.id, expectedLastMessageId, deletedTurns }
+    : null;
 }
 
 export function formatTruncateError(code: string | null | undefined, hasQueuedTurn = false): string {
@@ -159,7 +186,7 @@ export function TruncateConfirmDialog({
   const isEdit = target.mode === 'edit';
   const [draft, setDraft] = useState(target.message.content);
   const [localError, setLocalError] = useState<string | null>(null);
-  useEffect(() => { setDraft(target.message.content); setLocalError(null); }, [target]);
+  useEffect(() => { setDraft(target.message.content); setLocalError(null); }, [target.mode, target.message.id]);
 
   return (
     <ConfirmDialog
