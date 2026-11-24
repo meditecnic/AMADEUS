@@ -54,8 +54,9 @@ DIARY_SYSTEM_PROMPT_JA = (
     "今回のやりとりで心に残った印象や気になっていることを簡潔に書き留める。\n"
     "- 話題を一つに絞り、会話ログの具体的な発言で確かめられるやりとりだけを書く。\n"
     "- 発言は引用せず、自分の言葉で短くまとめる。日中どちらの本文にも鉤括弧や引用符を使わない。\n"
-    "- 誰が言ったか、誰が誰に何を頼んだか、どちら側の話かを、ログの user と assistant に照らして確かめる。"
+    "- 誰が言ったか、誰が誰に何を頼んだか、どちら側の話かを、ログの話者ラベル「私（紅莉栖）」と対話相手（「岡部」または「相手」）に照らして確かめる。"
     "私の頼みを相手の発言や承諾に変えない。中国語に訳しても発言者、行動の主体、場所、意味を変えない。\n"
+    "- 本文には会話ログのターン番号を書かない。\n"
     "- 頼みや提案、予定は、実際に済んだこととして書かない。"
     "相手が済ませたと話したときは、そう聞いたこととして書く。\n"
     "- 相手の周りの景色や音は、相手が話したこととして書く。私が直接見聞きしたことにはしない。"
@@ -859,13 +860,22 @@ async def default_diary_completion(**kwargs: Any) -> Mapping[str, Any]:
     ):
         raise RuntimeError("provider_unavailable: invalid or missing credential")
 
+    other_speaker = "岡部" if mode == "okabe" else "相手"
+    dialogue = []
+    turn = 0
+    for message in kwargs.get("messages") or []:
+        if message["role"] == "user":
+            turn += 1
+            speaker = other_speaker
+        else:
+            speaker = "私（紅莉栖）"
+        dialogue.append({"turn": max(turn, 1), "speaker": speaker, "text": message["text"]})
+
     user_payload = {
         "worldline": kwargs.get("worldline"),
         "identity_mode": mode,
         "mode_note": DIARY_MODE_NOTES_JA[mode],
-        "messages": [
-            {"role": m["role"], "text": m["text"]} for m in (kwargs.get("messages") or [])
-        ],
+        "messages": dialogue,
     }
     messages = [
         {"role": "system", "content": DIARY_SYSTEM_PROMPT_JA},
