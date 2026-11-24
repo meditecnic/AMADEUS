@@ -240,6 +240,57 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('reads per-model stored reasoning_effort on auth when manifest has not resolved yet', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    localStorage.setItem('amadeus_pc_reasoning_effort_deepseek_deepseek-flash', 'low');
+    const { unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      providerId: 'deepseek',
+      model: 'deepseek-flash',
+      reasoningEffort: null,
+      conversationId: null,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => socket.onopen?.());
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      type: 'auth',
+      provider_id: 'deepseek',
+      model: 'deepseek-flash',
+      reasoning_effort: 'low',
+    });
+    unmount();
+  });
+
+  it('uses the pendingConversation model stored reasoning_effort on auth instead of the previous model tier', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    localStorage.setItem('amadeus_pc_reasoning_effort_deepseek_deepseek-flash', 'low');
+    const { unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      providerId: 'deepseek',
+      model: 'deepseek-v4-pro',
+      reasoningEffort: 'high',
+      pendingConversation: {
+        conversationId: 'conv-flash',
+        worldline: 'steins_gate',
+        requestEpoch: 2,
+        history: [],
+        providerId: 'deepseek',
+        model: 'deepseek-flash',
+      },
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => socket.onopen?.());
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      type: 'auth',
+      provider_id: 'deepseek',
+      model: 'deepseek-flash',
+      reasoning_effort: 'low',
+    });
+    unmount();
+  });
+
   it('forwards config_applied reasoning_effort to onConfigApplied', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onConfigApplied = vi.fn();

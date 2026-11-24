@@ -100,6 +100,8 @@ const missingHistory = new Set<string>();
 const failedHistory = new Set<string>();
 const statusHistory = new Map<string, number>();
 const heldHistory = new Map<string, Promise<void>>();
+let heldProviders: Promise<void> | null = null;
+let flashThinkingControl: Record<string, unknown> | null = null;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
@@ -112,6 +114,7 @@ beforeEach(() => {
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
   failedHistory.clear(); heldHistory.clear(); statusHistory.clear(); playback.playing = false;
+  heldProviders = null; flashThinkingControl = null;
   listQueryCount = 0; assistantHistory = null; historyByConversation.clear(); wireHistory.clear();
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
@@ -140,21 +143,31 @@ beforeEach(() => {
       rows = rows.map(r => r.id === id ? updated : r);
       return json(updated);
     }
-    if (url === '/api/providers') return json([{ id: 'deepseek', display_name: 'DeepSeek',
-      default_model: model, default_model_capability: cap, catalog_version: 1,
-      configured: true, credential_required: false, model_discovery: true, enabled: true },
-      { id: 'local', display_name: 'Local', default_model: 'local-model',
-        default_model_capability: { ...cap, id: 'local-model', display_name: 'local-model' },
-        catalog_version: 1, configured: true, credential_required: false, model_discovery: true, enabled: true },
-      { id: 'missing-key-provider', display_name: 'Missing Key', default_model: model,
-        default_model_capability: cap, catalog_version: 1, configured: false,
-        credential_required: true, model_discovery: true, enabled: true },
-      { id: 'removed', display_name: 'Removed', default_model: 'gone-model',
-        default_model_capability: { ...cap, id: 'gone-model', display_name: 'gone-model', callable: false, lifecycle: 'unavailable' },
-        catalog_version: 1, configured: false, credential_required: false, model_discovery: true, enabled: false }]);
+    if (url === '/api/providers') {
+      if (heldProviders) await heldProviders;
+      const flashCap = { ...cap, thinking_control: flashThinkingControl };
+      return json([{ id: 'deepseek', display_name: 'DeepSeek',
+        default_model: model, default_model_capability: flashCap, catalog_version: 1,
+        configured: true, credential_required: false, model_discovery: true, enabled: true },
+        { id: 'local', display_name: 'Local', default_model: 'local-model',
+          default_model_capability: { ...cap, id: 'local-model', display_name: 'local-model' },
+          catalog_version: 1, configured: true, credential_required: false, model_discovery: true, enabled: true },
+        { id: 'missing-key-provider', display_name: 'Missing Key', default_model: model,
+          default_model_capability: flashCap, catalog_version: 1, configured: false,
+          credential_required: true, model_discovery: true, enabled: true },
+        { id: 'removed', display_name: 'Removed', default_model: 'gone-model',
+          default_model_capability: { ...cap, id: 'gone-model', display_name: 'gone-model', callable: false, lifecycle: 'unavailable' },
+          catalog_version: 1, configured: false, credential_required: false, model_discovery: true, enabled: false }]);
+    }
     if (url.startsWith('/api/providers/local/models')) return json({ catalog: [{ ...cap, id: 'local-model', display_name: 'local-model' }] });
     if (url.startsWith('/api/providers/removed/models')) return json({ catalog: [] });
-    if (url.startsWith('/api/providers/deepseek/models')) return json({ catalog: [cap, { ...cap, id: 'deepseek-v4-pro', display_name: 'deepseek-v4-pro' }] });
+    if (url.startsWith('/api/providers/deepseek/models')) return json({
+      catalog: [
+        { ...cap, thinking_control: flashThinkingControl },
+        { ...cap, id: 'deepseek-flash', display_name: 'DeepSeek Flash', thinking_control: flashThinkingControl },
+        { ...cap, id: 'deepseek-v4-pro', display_name: 'deepseek-v4-pro' },
+      ],
+    });
     if (url.startsWith('/api/conversations?')) {
       listQueryCount++;
       return json(url.includes('worldline=beta') ? [] : rows);
@@ -1133,4 +1146,67 @@ it('updates portrait emotion when switching between conversations and creating a
   await flush(100);
   expect(active()).toBe('new');
   expect(screen.getByTestId('avatar-stage')).toHaveAttribute('data-emotion', 'neutral');
+});
+
+const FLASH_THINKING_CONTROL = {
+  kind: 'effort',
+  label: '推理强度',
+  native: true,
+  default: 'high',
+  request_mode: 'thinking_and_effort',
+  options: [
+    { value: 'disabled', label: 'OFF' },
+    { value: 'low', label: 'LOW' },
+    { value: 'high', label: 'HIGH' },
+    { value: 'max', label: 'MAX' },
+  ],
+};
+
+it('dispatch337 rework 1: sends saved Flash low tier on auth even when model manifest arrives late', async () => {
+  localStorage.setItem('amadeus_pc_provider', 'deepseek');
+  localStorage.setItem('amadeus_pc_model', 'deepseek-flash');
+  localStorage.setItem('amadeus_pc_reasoning_effort', 'low');
+  localStorage.setItem('amadeus_pc_reasoning_effort_deepseek_deepseek-flash', 'low');
+  flashThinkingControl = FLASH_THINKING_CONTROL;
+  let releaseProviders!: () => void;
+  heldProviders = new Promise<void>(resolve => { releaseProviders = resolve; });
+
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await flush();
+  await act(async () => { FakeWebSocket.instances[0].open(); });
+  await flush();
+
+  await act(async () => { releaseProviders(); });
+  await flush();
+
+  expect(screen.getByRole('button', { name: '推理强度' })).toHaveTextContent('推理强度 · LOW');
+  const effortFrames = FakeWebSocket.instances
+    .flatMap(socket => socket.sent)
+    .filter(frame => frame.type === 'auth' || (frame.type === 'config_update' && 'reasoning_effort' in frame));
+  expect(effortFrames.length).toBeGreaterThan(0);
+  expect(effortFrames.at(-1)?.reasoning_effort).toBe('low');
+});
+
+it('dispatch337 rework 1: leaves unsaved Flash auth tier null so backend uses high default when manifest arrives late', async () => {
+  localStorage.setItem('amadeus_pc_provider', 'deepseek');
+  localStorage.setItem('amadeus_pc_model', 'deepseek-flash');
+  localStorage.setItem('amadeus_pc_reasoning_effort', 'low');
+  flashThinkingControl = FLASH_THINKING_CONTROL;
+  let releaseProviders!: () => void;
+  heldProviders = new Promise<void>(resolve => { releaseProviders = resolve; });
+
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await flush();
+  await act(async () => { FakeWebSocket.instances[0].open(); });
+  await flush();
+
+  await act(async () => { releaseProviders(); });
+  await flush();
+
+  expect(screen.getByRole('button', { name: '推理强度' })).toHaveTextContent('推理强度 · HIGH');
+  const effortFrames = FakeWebSocket.instances
+    .flatMap(socket => socket.sent)
+    .filter(frame => frame.type === 'auth' || (frame.type === 'config_update' && 'reasoning_effort' in frame));
+  expect(effortFrames.length).toBeGreaterThan(0);
+  expect(effortFrames.at(-1)?.reasoning_effort).toBeNull();
 });
