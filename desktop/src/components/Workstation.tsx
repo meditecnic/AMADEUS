@@ -2391,18 +2391,34 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     const entryEpoch = conversationEpochRef.current;
     const wl = latestWorldlineRef.current;
-    const hadActiveTurn = turnActive || isSynthesizing;
+    const isReplaying = replayStatus?.phase === 'playing';
+    const foregroundVoicePlaying = isPlaying && !isReplaying;
+    const hasStreamingMessage = latestVisibleMessagesRef.current.some((msg) => !msg.systemError && msg.streaming);
+    const backgroundRunning = Boolean(activeConversationTurns?.running) && !hasStreamingMessage;
+    const waitForPlaybackTurn = (
+      !isThinking
+      && !backgroundRunning
+      && queuedTurns.length === 0
+      && (turnActive || isSynthesizing)
+      && foregroundVoicePlaying
+    );
+    const activeReplyBusy = (
+      !waitForPlaybackTurn
+      && (turnActive || isSynthesizing || backgroundRunning || queuedTurns.length > 0)
+    );
     const hasUnhydratedTurn = latestVisibleMessagesRef.current.some(
       (msg) => !msg.systemError && (msg.streaming || msg.dbId === undefined),
     );
-    stopReplay(false);
-    audioPlayer.stopAll();
-    if (isPlaying || isSynthesizing || turnActive) stopVoice();
+    if (!activeReplyBusy) {
+      stopReplay(false);
+      audioPlayer.stopAll();
+      if (isPlaying || isSynthesizing || turnActive) stopVoice();
+    }
     setTruncateBusy(true);
     setTruncateError(null);
     try {
       let hydratedRows: HistoryMessageRow[] | null = null;
-      if (hadActiveTurn) {
+      if (waitForPlaybackTurn) {
         const afterReadId = messageHistoryReadRef.current;
         hydratedRows = await new Promise<HistoryMessageRow[] | null>((resolve) => {
           const existing = truncateTurnWaiterRef.current;
@@ -2426,7 +2442,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         )) {
           hydratedRows = await fetchMessageIds(convId);
         }
-      } else if (hasUnhydratedTurn) {
+      } else if (!activeReplyBusy && hasUnhydratedTurn) {
         const inflight = messageIdRefreshRef.current;
         hydratedRows = (inflight && inflight.convId === convId && inflight.epoch === entryEpoch)
           ? await inflight.promise
@@ -2474,6 +2490,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           setTruncateError(formatTruncateError(code, queuedTurns.length > 0));
         }
         return;
+      }
+      if (activeReplyBusy) {
+        stopReplay(false);
+        audioPlayer.stopAll();
       }
       failedEditDraftRef.current = null;
       messageHistoryReadRef.current += 1;

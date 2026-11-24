@@ -37,7 +37,10 @@ export function resolveTruncateTarget(messages: readonly Message[], targetId: st
     : messages.findIndex((msg, i) => i > index && !msg.systemError && msg.role === 'user' && !!msg.dbId);
   const fromMessageId = cutIndex >= 0 ? messages[cutIndex].dbId : undefined;
   if (!fromMessageId) return null;
-  const deletedTurns = messages.slice(cutIndex).filter((msg) => !msg.systemError && msg.role === 'user' && !!msg.dbId).length;
+  const deletedTurns = messages
+    .slice(cutIndex)
+    .filter((msg) => !msg.systemError && msg.role === 'user' && Boolean(msg.dbId || msg.turnId))
+    .length;
   return deletedTurns > 0 ? { mode, message: target, fromMessageId, expectedLastMessageId, deletedTurns } : null;
 }
 

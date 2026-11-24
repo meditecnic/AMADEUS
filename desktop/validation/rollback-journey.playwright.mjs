@@ -152,6 +152,33 @@ try {
   await composer.fill('');
   await row('rollback-busy').getByText('回复中', { exact: true }).waitFor({ state: 'hidden' });
 
+  // --- Stage 1b: Busy rejection when returning to a background-running conversation ---
+  await select('rollback-busy');
+  await send('后台续跑忙态验证');
+  await row('rollback-busy').getByText('回复中', { exact: true }).waitFor();
+  await select('rollback-main');
+  await select('rollback-busy');
+  await page.getByText('她还在回复。', { exact: true }).waitFor();
+  await openMenuAction('最初的前提原样保留。', '回到这里…');
+  await dialog.waitFor();
+  allowBusy409 = true;
+  const bgBusyStartedAt = Date.now();
+  const [busyBgRes] = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/api/conversations/rollback-busy/truncate') && r.request().method() === 'POST'),
+    dialog.getByRole('button', { name: copy.rollbackConfirm, exact: true }).click(),
+  ]);
+  assert.ok(Date.now() - bgBusyStartedAt < 2000, 'Expected immediate busy rejection without waiting for background turn');
+  assert.equal(busyBgRes.status(), 409);
+  assert.equal((await busyBgRes.json())?.detail?.code, 'conversation_busy');
+  await dialog.getByRole('alert').getByText(copy.busyReplying, { exact: true }).waitFor();
+  assert.equal(await row('rollback-busy').getByText('回复中', { exact: true }).count(), 1);
+  assert.equal(await lines.filter({ hasText: '忙态第二轮：忙时不能被删。' }).count(), 1);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  allowBusy409 = false;
+  await row('rollback-busy').getByText('回复中', { exact: true }).waitFor({ state: 'hidden' });
+  await select('rollback-main');
+
   // --- Stage 2: Rollback ("回到这里") + rollback confirmation copy ---
   await openMenuAction('先把第二轮假设暂存下来。', '回到这里…');
   await assertConfirmCopy(dialog, 'rollback', 1);
