@@ -114,7 +114,7 @@ _DATE_RE = re.compile(
 )
 _DATE_FIELD_RE = re.compile(rf"({_TEMPORAL_NUMBER})([年月日号號])")
 _CLOCK_RE = re.compile(
-    rf"(?P<period>午前|午後|上午|下午|晚上|凌晨|深夜)?[ \t]*"
+    rf"(?P<period>午前|午後|上午|下午|晚上|凌晨|深夜|(?:真夜中|朝|昼|夕方|(?<![半午深])夜)の?)?[ \t]*"
     rf"(?<![有这這那哪差每])(?P<hour>{_TEMPORAL_NUMBER})"
     r"(?::(?P<colon_minute>[0-9]{2})(?!\d)|(?P<unit>[時点點])(?!間|点|點|儿|兒|也|的|期)"
     rf"(?:(?P<minute>{_TEMPORAL_NUMBER})分|(?P<half>半)|(?P<oclock>[钟鐘]))?)"
@@ -327,9 +327,10 @@ def _temporal_expressions(text: str):
         minute = _temporal_number(match["colon_minute"] or match["minute"] or "0")
         if match["half"]:
             minute = 30
-        if match["period"] in ("午後", "下午", "晚上") and hour < 12:
+        period = (match["period"] or "").rstrip("の")
+        if period in ("午後", "下午", "晚上", "夜", "夕方", "昼") and hour < 12:
             hour += 12
-        elif match["period"] in ("午前", "上午") and hour == 12:
+        elif period in ("午前", "上午", "夜", "真夜中") and hour == 12:
             hour = 0
         yield ("clock", hour, minute), match.group().strip()
 

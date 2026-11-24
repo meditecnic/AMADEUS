@@ -1535,6 +1535,42 @@ async def test_10_truncate_re_enqueue_avoids_unique_cursor_conflict_and_guards_i
             ["五月三日聊过"], "五月三日に話したわね。", "五月三号聊过。", None,
             id="grounded-month-and-day",
         ),
+        pytest.param(
+            ["夜の八時前に話した"], "夜の八時に話したのね。", "晚上八点聊了。", None,
+            id="grounded-ja-yoru-eight-pm",
+        ),
+        pytest.param(
+            ["朝の八時に話した"], "朝の八時に話したのね。", "晚上八点聊了。", "ungrounded_date",
+            id="ungrounded-ja-asa-vs-evening",
+        ),
+        pytest.param(
+            ["朝八時に起きた"], "朝の八時に起きたのね。", "上午八点起床了。", None,
+            id="grounded-ja-asa-eight-am",
+        ),
+        pytest.param(
+            ["夕方の五時に会った"], "夕方五時に会ったのね。", "下午五点见了面。", None,
+            id="grounded-ja-yuugata-five-pm",
+        ),
+        pytest.param(
+            ["昼の一時に出かけた"], "昼一時に出かけたのね。", "下午一点出门了。", None,
+            id="grounded-ja-hiru-one-pm",
+        ),
+        pytest.param(
+            ["真夜中の二時に目が覚めた"], "真夜中二時に目が覚めたのね。", "凌晨两点醒了。", None,
+            id="grounded-ja-mayonaka-two-am",
+        ),
+        pytest.param(
+            ["夜の十二時に寝た"], "夜の十二時に寝たのね。", "0:00睡了。", None,
+            id="grounded-ja-yoru-twelve-midnight",
+        ),
+        pytest.param(
+            ["夜の十二時に寝た"], "夜の十二時に寝たのね。", "12:00睡了。", "ungrounded_date",
+            id="ungrounded-ja-yoru-twelve-vs-noon",
+        ),
+        pytest.param(
+            ["真夜中の十二時に寝た"], "真夜中の十二時に寝たのね。", "0:00睡了。", None,
+            id="grounded-ja-mayonaka-twelve-midnight",
+        ),
     ],
 )
 def test_diary_grounding_checks_complete_dates_times_and_message_quotes(sources, ja, zh, error):
