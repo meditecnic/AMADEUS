@@ -463,4 +463,30 @@ describe('dev mock protocol v2', () => {
       mock.rest(url('/api/memory/observations?session_id=test-session&worldline=steins_gate&identity_mode=self&scenario=empty'), 'GET').body,
     ).toMatchObject({ observations: [] });
   });
+
+  it('supports rollback scenario busy-409, targeted chatErrorTrigger, and sustained silent replay', () => {
+    vi.useFakeTimers();
+    const mock = createMockRuntime();
+    const q = `${scope}&scenario=rollback`;
+    const list = mock.rest(url(`/api/conversations${q}`), 'GET').body as Array<{ id: string }>;
+    expect(list.map(row => row.id)).toEqual(['rollback-main', 'rollback-busy']);
+    const msgs = mock.rest(url(`/api/conversations/rollback-main/messages${q}`), 'GET').body as Array<{ id: number; role: string }>;
+    expect(msgs).toHaveLength(6);
+    const replay = mock.rest(url(`/api/conversations/rollback-main/messages/${msgs[1].id}/replay${q}`), 'POST');
+    expect(replay.status).toBe(200);
+    const wavBytes = Buffer.from((replay.body as { segments: string[] }).segments[0], 'base64');
+    expect(wavBytes.subarray(0, 4).toString('ascii')).toBe('RIFF');
+    expect(wavBytes.byteLength).toBeGreaterThan(80_000);
+
+    const frames: Record<string, unknown>[] = [];
+    const socket = mock.connect(url('/ws/chat?session_id=test-session&scenario=rollback'), frame => frames.push(frame));
+    socket.receive({ type: 'auth', worldline: 'steins_gate', conversation_id: 'rollback-main' });
+    socket.receive({ type: 'chat.send', content: 'fails [MOCK_SEND_FAIL]' });
+    expect(frames.at(-1)).toMatchObject({ type: 'error', recoverable: true });
+    socket.receive({ type: 'chat.send', content: 'normal turn' });
+    expect(mock.rest(url(`/api/conversations/rollback-main/truncate${q}`), 'POST', {
+      from_message_id: msgs[2].id, expected_last_message_id: msgs[5].id,
+    })).toEqual({ status: 409, body: { detail: { code: 'conversation_busy' } } });
+    socket.close();
+  });
 });

@@ -30,6 +30,7 @@ import dataRestoreFailed from './scenarios/data-restore-failed.json';
 import updateAvailable from './scenarios/update-available.json';
 import updateBroken from './scenarios/update-broken.json';
 import loginPasscodeUnreadable from './scenarios/login-passcode-unreadable.json';
+import rollback from './scenarios/rollback.json';
 
 export type Scenario = Omit<typeof streaming, 'errors' | 'delays' | 'chatError' | 'authError' | 'conversations' | 'memory'> & {
   conversations: Array<typeof streaming.conversations[number] & { model_id?: string }>;
@@ -40,6 +41,8 @@ export type Scenario = Omit<typeof streaming, 'errors' | 'delays' | 'chatError' 
   /** Holds matching REST replies back, e.g. to show a reading state. */
   delays: Array<{ method: string; pathPrefix: string; ms: number }>;
   chatError: string | null;
+  chatErrorTrigger?: string;
+  replayDurationSec?: number;
   authError: string | null;
   /** The data routes' state: backups, a corrupt store, a failed restore. */
   data?: DataSeed;
@@ -55,7 +58,7 @@ type Override = Omit<Partial<Scenario>, 'login' | 'shift'> & {
 export const scenarios: Record<string, Scenario> = Object.fromEntries(
   [streaming, loginSuccess, loginFailure, sessionList, memory, memoryNew, memoryLarge, memoryHuge, memoryMid, memoryLoading, memoryUnavailable,
     memoryError, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose, slice, loginPasscode,
-    dataCorrupt, dataRestoreFailed, updateAvailable, updateBroken, loginPasscodeUnreadable]
+    dataCorrupt, dataRestoreFailed, updateAvailable, updateBroken, loginPasscodeUnreadable, rollback]
     .map((override: Override) => [override.name!, {
       ...streaming, ...override,
       login: { ...streaming.login, ...override.login },
