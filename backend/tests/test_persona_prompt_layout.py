@@ -303,17 +303,27 @@ async def test_self_register_switches_at_six_turns_or_with_prior_history(isolate
     assert familiar.count("<example>") == 6
 
     session.history = []
-    for worldline, mode in [("beta", "self"), ("steins_gate", "okabe"), ("steins_gate", "self")]:
+    for worldline, mode in [("beta", "self"), ("steins_gate", "okabe")]:
         prior = await conversation_service.create(session.session_id, worldline, identity_mode=mode)
+        for _ in range(6):
+            await models.save_message(
+                session.session_id, "user", "前の質問です。", worldline=worldline, conversation_id=prior["id"],
+            )
+            await models.save_message(
+                session.session_id, "assistant", "前の返事です。", worldline=worldline, conversation_id=prior["id"],
+            )
+        assert (await compile_for_session(session, "こんにちは")).count("<example>") == 2
+
+    sg_self = await conversation_service.create(session.session_id, "steins_gate", identity_mode="self")
+    for turn in range(1, 6):
         await models.save_message(
-            session.session_id, "user", "前の質問です。", worldline=worldline, conversation_id=prior["id"],
+            session.session_id, "user", f"前の質問{turn}です。", worldline="steins_gate", conversation_id=sg_self["id"],
         )
         await models.save_message(
-            session.session_id, "assistant", "前の返事です。", worldline=worldline, conversation_id=prior["id"],
+            session.session_id, "assistant", f"前の返事{turn}です。", worldline="steins_gate", conversation_id=sg_self["id"],
         )
         compiled = await compile_for_session(session, "こんにちは")
-        expected = 6 if (worldline, mode) == ("steins_gate", "self") else 2
-        assert compiled.count("<example>") == expected
+        assert compiled.count("<example>") == (6 if turn >= 5 else 2)
 
 
 @pytest.mark.asyncio

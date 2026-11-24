@@ -888,6 +888,35 @@ async def get_clean_text_stream(
             old, [*current, tail_reminder], eff_system_prompt, memory_summary,
             builder, budget,
         )
+        if dropped > 0 and getattr(session, "turn_compiled_prompt", None) is not None:
+            from app.services.prompt_compiler import (
+                _extract_persisted_ids,
+                recompile_session_diaries,
+            )
+            from app.services.session_manager import set_turn_injected_fact_ids
+
+            sent_ids = _extract_persisted_ids(bounded)
+            if sent_ids != _extract_persisted_ids(prompt_history):
+                prev = (
+                    session.system_prompt,
+                    session.turn_compiled_prompt,
+                    getattr(session, "turn_injected_fact_ids", ()),
+                )
+                session.system_prompt = await recompile_session_diaries(session, sent_ids)
+                re_eff = _request_system_prompt(session, prompt_history, tools, attempt)
+                re_tail = turn_tail_message(session, prompt_history)
+                re_bounded, re_dropped = trim_request_history(
+                    old[dropped:], [*current, re_tail], re_eff, memory_summary, builder, budget,
+                )
+                if request_envelope_tokens(re_bounded, re_eff, memory_summary, builder) <= budget:
+                    eff_system_prompt = re_eff
+                    bounded = re_bounded
+                    dropped += re_dropped
+                else:
+                    session.system_prompt, session.turn_compiled_prompt, prev_ids = prev
+                    set_turn_injected_fact_ids(session, prev_ids)
+                    if getattr(session, "turn_execution", None) is not None:
+                        session.turn_execution.injected_fact_ids = session.turn_injected_fact_ids
         record = getattr(session, "turn_execution", None)
         if record is not None:
             stored_old, _ = split_current_turn(session.history)
@@ -2428,6 +2457,23 @@ async def processor_loop(
                             "[MemoryV11] enqueue failed (%s); chat continues",
                             type(exc).__name__,
                         )
+                    try:
+                        from app.services.memory_v11.diary_generation import (
+                            sync_conversation_diary_windows,
+                        )
+
+                        await sync_conversation_diary_windows(
+                            session_id=session.session_id,
+                            identity_mode=turn_record.snapshot.identity_mode,
+                            worldline=turn_worldline,
+                            conversation_id=conversation_id,
+                            through_message_id=assistant_message_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[MemoryV11] diary window sync failed (%s); chat continues",
+                            type(exc).__name__,
+                        )
 
                 if isinstance(user_message_id, int) and user_message_id > 0:
                     _schedule_background_task(session, _enqueue_memory_v11())
@@ -2468,7 +2514,8 @@ async def processor_loop(
                 from app.services.memory_v11.events import referenced_items_for_turn
                 referenced_items = await referenced_items_for_turn(
                     (session.session_id, turn_worldline, turn_record.snapshot.identity_mode),
-                    compiled_prompt, turn_record.sent_recall_fact_ids,
+                    session.turn_compiled_prompt or compiled_prompt,
+                    turn_record.sent_recall_fact_ids,
                 )
             await segment_pipeline.complete(segment_count=segment_count)
             interrupted_history_settled = True

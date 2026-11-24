@@ -28,6 +28,31 @@ def test_persona_metrics_separate_natural_endings_and_repeated_catchphrase():
     assert ev.persona_metrics([[turns[0]], [turns[1]]])["ojousama_and_catchphrase_spam_count"] == 1
 
 
+def test_simulation_counts_chinese_only_hanzi_in_reply_bodies():
+    def turn(ja):
+        return {"ja": ja, "user": "这是什么？", "zh": "我说的是这个。", "native_body": bool(ja),
+                "native_drift": False, "failed": not ja, "rewrites": 0, "refusal": False, "ttft_ms": 1}
+
+    mixed = "这は私たちの話なのよ。今时は黙ってて。"
+    rare_kanji = "髙橋さんと𠮷田さん、凛としていたわね〜。"
+    rows = [
+        {"id": "S01", "candidate": "A", "turns": [turn("そうね。"), turn(f"[EMO:neutral] {mixed}"), turn("")]},
+        {"id": "S02", "candidate": "A", "turns": [turn(rare_kanji)]},
+        {"id": "S01", "candidate": "B", "turns": [turn("そうね。"), turn(rare_kanji)]},
+    ]
+
+    result = ev.sim_result(rows, ev.Budget(0), None)
+    a, b = (result["metrics"][candidate] for candidate in ("A", "B"))
+    assert (a["chinese_only_hanzi_count"], a["chinese_only_hanzi_rate"]) == (1, 1 / 3)
+    assert a["first_chinese_only_hanzi_turn_by_scene"] == {"S01": 2, "S02": None}
+    assert a["chinese_only_hanzi_examples"] == [{"scene": "S01", "turn": 2, "ja": mixed}]
+    assert (b["chinese_only_hanzi_count"], b["chinese_only_hanzi_rate"]) == (0, 0)
+    assert b["first_chinese_only_hanzi_turn_by_scene"] == {"S01": None}
+    assert b["chinese_only_hanzi_examples"] == []
+    assert rows[0]["metrics"]["chinese_only_hanzi_rate"] == 0.5
+    assert rows[1]["metrics"]["chinese_only_hanzi_count"] == 0
+
+
 def test_gate_2b_metrics_use_user_history_through_current_turn():
     turns = [
         {"user": "こんばんは", "ja": "カップ麺とフォーク。十六年よ。寝なさい。どこで調べたの？"},
@@ -556,6 +581,7 @@ async def test_simulation_rewrites_one_drift_without_poisoning_later_turns(cards
     metrics = row["metrics"]
     assert (metrics["native_drift_count"], metrics["native_drift_rate"]) == (1, 0.25)
     assert metrics["first_native_drift_turn_by_scene"] == {"S01": 2}
+    assert metrics["chinese_only_hanzi_count"] == 0
     assert metrics["rewrites"] == 1 and metrics["failed_replies"] == 1 and metrics["question_ending_rate"] == 0.75
     assert metrics["cross_turn_ngram_repeat_rate"] > 0 and not sent["subtitle"]
     assert len(sent["simulator"]) == 4
