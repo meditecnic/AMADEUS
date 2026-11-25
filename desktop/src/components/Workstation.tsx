@@ -1159,6 +1159,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const activeConversationNo = activeConversation ? conversationNos.get(activeConversation.id) : undefined;
   const numberOf = (id: string) => { const n = conversationNos.get(id); return n ? conversationNo(n) : undefined; };
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
+  const activeProviderIdRef = useRef(activeProviderId);
+  activeProviderIdRef.current = activeProviderId;
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const activeModelId = activeConversation?.model_id || model;
   /** Q21: HUD label follows the active conversation's immutable mode; drafts inherit the
@@ -3257,7 +3259,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
             onReload={() => loadProviders()}
             onConfigChanged={(providerId) => {
               bumpConfigVersion(providerId);
-              setPendingConfigReconnect((current) => ({ providerId, seq: (current?.seq ?? 0) + 1 }));
+              if (providerId === activeProviderIdRef.current) {
+                setPendingConfigReconnect((current) => ({ providerId, seq: (current?.seq ?? 0) + 1 }));
+              }
             }}
             search={{
               active: webSearchActiveProvider,

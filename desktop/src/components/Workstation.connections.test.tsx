@@ -1161,6 +1161,72 @@ describe('Workstation first-run key save reconnection ([358])', () => {
     await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
   });
 
+  it('keeps the active provider pending reconnect when an inactive provider is saved before background turns end', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true }),
+      provider('custom:relay', 'Relay Custom', 'gpt-4o', {
+        source: 'user_config',
+        base_url: 'https://relay.example.com/v1',
+        credential_required: true,
+        configured: true,
+      }),
+    ];
+    let state = wsState({
+      status: 'READY',
+      sessionState: 'ready',
+      conversationTurns: { 'conv-other': { running: true, queued: [] } },
+    });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const refreshUrls: string[] = [];
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { provider_id: string };
+        return json(200, { provider_id: body.provider_id, configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        if (url.includes('refresh=true')) refreshUrls.push(url);
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      if (decodeURIComponent(url).startsWith('/api/providers/custom:relay/models')) {
+        return json(200, { catalog: [capability('gpt-4o')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    // 1. Save active provider DeepSeek while another conversation is running.
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-ds-first' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+
+    // 2. Before the background turn finishes, save an inactive provider Relay.
+    const relayToggle = await screen.findByRole('button', { name: /Relay Custom/ });
+    if (relayToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(relayToggle);
+    const relayRow = relayToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(relayRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('Relay Custom 的新密钥'), { target: { value: 'sk-relay-second' } });
+    fireEvent.click(within(relayRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('Relay Custom 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // 3. Background turn finishes: DeepSeek's deferred reconnect and forced model refresh still run once.
+    const refreshesBefore = refreshUrls.length;
+    state = wsState({ status: 'READY', sessionState: 'ready', conversationTurns: {} });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(refreshUrls.length).toBe(refreshesBefore + 1));
+  });
+
   it('keeps normal chat messages mentioning missing-key text and real upstream errors visible', async () => {
     providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
     const messages = [
