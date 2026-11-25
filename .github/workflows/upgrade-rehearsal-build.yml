@@ -1,0 +1,66 @@
+name: Upgrade rehearsal old installer
+
+on:
+  push:
+    branches: [codex/355-upgrade-rehearsal]
+    paths-ignore:
+      - '.github/workflows/upgrade-rehearsal.yml'
+      - 'packaging/windows/upgrade_rehearsal.py'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      BUILD_WORK: ${{ runner.temp }}/amadeus-build
+      JINA_REVISION: ac5d898c8d382b17167c33e5c8af644a3519b47d
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Prepare build tools
+        run: |
+          python -m pip install huggingface_hub==2.4.0 pefile==2024.8.26
+          rustup show active-toolchain
+          python -c "import sys; sys.path.insert(0, 'packaging/windows'); from build_installer import visual_studio; from bundle_support import sanitized_build_environment; print(visual_studio(sanitized_build_environment())['redist'])" | Select-Object -Last 1 | ForEach-Object { "VC_REDIST=$_" >> $env:GITHUB_ENV }
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/jina-snapshot/${{ env.JINA_REVISION }}
+          key: jina-${{ runner.os }}-${{ env.JINA_REVISION }}
+      - name: Download pinned Jina snapshot
+        run: hf download jinaai/jina-embeddings-v5-text-nano-retrieval onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --revision $env:JINA_REVISION --local-dir "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION"
+      - name: Build unsigned old installer
+        run: python packaging/windows/build_installer.py --work-dir $env:BUILD_WORK --embedding-source "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION" --vc-redist $env:VC_REDIST
+      - name: Record old installer identity
+        id: installer
+        run: |
+          $build = Get-Content "$env:BUILD_WORK/installer-result.json" -Raw | ConvertFrom-Json
+          if ($build.config.version -ne '0.0.99' -or $build.updater_signature) {
+            throw 'Expected an unsigned 0.0.99 installer'
+          }
+          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $build.installer).Hash.ToLowerInvariant()
+          Write-Output "OLD_INSTALLER sha=$env:GITHUB_SHA version=0.0.99 sha256=$sha"
+          "path=$($build.installer)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: upgrade-rehearsal-old-0.0.99
+          path: ${{ steps.installer.outputs.path }}
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure()
+        with:
+          name: upgrade-rehearsal-build-logs
+          path: ${{ runner.temp }}/amadeus-build/runs/**/logs/*.log
+          if-no-files-found: ignore

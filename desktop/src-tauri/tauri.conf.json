@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Amadeus",
-  "version": "0.1.0",
+  "version": "0.0.99",
   "identifier": "com.amadeus.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -60,7 +60,8 @@
   "plugins": {
     "updater": {
       "requireSignedVersion": true,
-      "endpoints": ["https://github.com/meditecnic/AMADEUS/releases/latest/download/latest.json"],
+      "endpoints": ["http://127.0.0.1:47855/latest.json"],
+      "dangerousInsecureTransportProtocol": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDAxRTVENDRBOTUyODJFMDYKUldRR0xpaVZTdFRsQWVTR0VzS0tsbCtVNldsdGZsVU5XaEpRajg2dUtrSVFMQ1g4SUM5Z2FxRk8K"
     }
   }
