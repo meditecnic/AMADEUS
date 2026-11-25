@@ -46,7 +46,7 @@ WORLDLINE = "steins_gate"
 SCOPE = f"session_id={SESSION}&worldline={WORLDLINE}"
 MODEL = "rehearsal-local"
 USER_TEXT = "我每天早上都喝黑咖啡。"
-REPLY = "明白了，你每天早上都喝黑咖啡。"
+REPLY = "毎朝ブラックコーヒーを飲むのね。"
 FACT = "每天早上喝黑咖啡"
 OPENER = build_opener(ProxyHandler({}))
 CONFIG = Path(__file__).resolve().parents[2] / "desktop/src-tauri/tauri.conf.json"
@@ -127,7 +127,7 @@ def loopback_service(feed, installer, traffic):
                 sse = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
                 self.respond(sse + "data: [DONE]\n\n", "text/event-stream")
                 return
-            content = REPLY
+            content = json.dumps({"title": FACT}) if payload.get("response_format") else f"{FACT}。"
             messages = payload.get("messages", [])
             if messages and "extract durable user memory" in messages[0].get("content", ""):
                 traffic.append({"completion": "memory"})
@@ -192,15 +192,14 @@ def seed_chat(backend):
             event = json.loads(connection.recv())
             require(event.get("type") != "error", f"Synthetic chat failed ({event.get('code', 'unknown')})")
             if event.get("type") == "turn.completed":
-                return
+                return event["conversation_id"]
     raise RuntimeError("Synthetic chat did not finish")
 
 
 def seed_records(backend):
-    seed_chat(backend)
-    conversations = api(backend, f"/api/conversations?{SCOPE}")
-    require(len(conversations) == 1, "Expected one synthetic conversation")
-    conversation = conversations[0]
+    conversation_id = seed_chat(backend)
+    require(conversation_id, "Completed turn did not identify its conversation")
+    conversation = api(backend, f"/api/conversations/{conversation_id}?{SCOPE}")
     fact = wait_until(
         lambda: next((item for item in api(
             backend, f"/api/memory/facts?{SCOPE}&identity_mode={conversation['identity_mode']}"
