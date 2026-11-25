@@ -1052,6 +1052,11 @@ async def test_7_injection_dedupes_by_sent_message_ids_and_summary_and_drops_del
     assert calls == {"sup": 1, "mem": 1, "res": 1, "fam": 1}
     sent_system = captured[-1]["messages"][0]["content"]
     assert DIARIES_HEADER in sent_system and diary_text in sent_system
+    diaries_guidance = sent_system.split(f"{DIARIES_HEADER}\n", 1)[1].splitlines()[0]
+    assert diaries_guidance.endswith(
+        "あくまで私側の印象の覚え書きで、相手の発言や約束の記録ではない。"
+        "手記だけを根拠に、相手が言った・約束したと決めつけて、持ち出したり問いただしたり責めたりしない。"
+    )
     assert session.turn_compiled_prompt.supplement_fact_ids == ()
     events_out = [q7.get_nowait()[1] for _ in range(q7.qsize())]
     assert any(e.get("type") == "turn.completed" for e in events_out)
