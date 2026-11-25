@@ -1,0 +1,91 @@
+name: Windows in-app upgrade rehearsal
+
+on:
+  push:
+    branches: [codex/355-upgrade-rehearsal]
+    paths:
+      - '.github/workflows/upgrade-rehearsal.yml'
+      - 'packaging/windows/upgrade_rehearsal.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  upgrade:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 25
+    env:
+      OLD_RUN_ID: '45540664929'
+      TARGET_RUN_ID: '45418955078'
+      TARGET_ARTIFACT: amadeus-windows-x64-0.1.0
+      EXPECT: acl-blocked
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify installer sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $old = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:OLD_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $target = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:TARGET_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($old.conclusion -ne 'success' -or $old.head_branch -ne $env:GITHUB_REF_NAME -or
+              $old.path -ne '.github/workflows/upgrade-rehearsal-build.yml') {
+            throw 'Old installer must come from a successful rehearsal build on this branch'
+          }
+          if ($target.conclusion -ne 'success' -or $target.head_branch -ne 'main' -or
+              $target.path -ne '.github/workflows/release.yml' -or $target.event -ne 'workflow_dispatch') {
+            throw 'Target installer must come from a successful manual Windows release run of main'
+          }
+          $exercise = @(
+            ':(exclude).github/workflows/upgrade-rehearsal-build.yml'
+            ':(exclude).github/workflows/upgrade-rehearsal.yml'
+            ':(exclude)packaging/windows/upgrade_rehearsal.py'
+          )
+          git diff --exit-code --name-only $old.head_sha $env:GITHUB_SHA -- . @exercise
+          if ($LASTEXITCODE) { throw 'Old installer build does not match the rehearsal product source and configuration' }
+          if ($env:EXPECT -eq 'upgraded') {
+            git diff --exit-code --name-only $target.head_sha $old.head_sha -- . @exercise ':(exclude)desktop/src-tauri/tauri.conf.json'
+            if ($LASTEXITCODE) { throw 'Positive control requires the old installer and RC to use the same product source' }
+          }
+          Write-Output "SOURCES old=$env:OLD_RUN_ID/$($old.head_sha) target=$env:TARGET_RUN_ID/$($target.head_sha) expect=$env:EXPECT"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: upgrade-rehearsal-old-0.0.99
+          path: ${{ runner.temp }}/upgrade-old
+          github-token: ${{ github.token }}
+          run-id: ${{ env.OLD_RUN_ID }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ${{ env.TARGET_ARTIFACT }}
+          path: ${{ runner.temp }}/upgrade-target
+          github-token: ${{ github.token }}
+          run-id: ${{ env.TARGET_RUN_ID }}
+      - name: Install rehearsal dependencies
+        run: |
+          python -m pip install websocket-client==1.9.0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
+      - name: Exercise the in-app updater
+        run: |
+          $old = @(Get-ChildItem "$env:RUNNER_TEMP/upgrade-old" -Filter '*_x64-setup.exe')
+          if ($old.Count -ne 1) { throw "Expected one old installer, found $($old.Count)" }
+          python packaging/windows/upgrade_rehearsal.py --old $old[0].FullName --target "$env:RUNNER_TEMP/upgrade-target" --expect $env:EXPECT --evidence "$env:RUNNER_TEMP/upgrade-evidence" 2>&1 | Tee-Object "$env:RUNNER_TEMP/upgrade-console.log"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-upgrade-rehearsal-evidence
+          path: |
+            ${{ runner.temp }}/upgrade-evidence/**
+            ${{ runner.temp }}/upgrade-console.log
+          if-no-files-found: warn
