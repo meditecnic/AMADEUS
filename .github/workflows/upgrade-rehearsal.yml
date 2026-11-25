@@ -16,10 +16,10 @@ jobs:
     runs-on: windows-2025-vs2026
     timeout-minutes: 25
     env:
-      OLD_RUN_ID: '45540664929'
-      TARGET_RUN_ID: '45418955078'
+      OLD_RUN_ID: '45557767592'
+      TARGET_RUN_ID: '45558523599'
       TARGET_ARTIFACT: amadeus-windows-x64-0.1.0
-      EXPECT: acl-blocked
+      EXPECT: upgraded
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -50,8 +50,15 @@ jobs:
           git diff --exit-code --name-only $old.head_sha $env:GITHUB_SHA -- . @exercise
           if ($LASTEXITCODE) { throw 'Old installer build does not match the rehearsal product source and configuration' }
           if ($env:EXPECT -eq 'upgraded') {
-            git diff --exit-code --name-only $target.head_sha $old.head_sha -- . @exercise ':(exclude)desktop/src-tauri/tauri.conf.json'
-            if ($LASTEXITCODE) { throw 'Positive control requires the old installer and RC to use the same product source' }
+            $targetBaseline = $target.head_sha
+            # PR #118 changes the icons, favicon reference and asset provenance.
+            if ($targetBaseline -eq '9fa15a6e6833d7a2820d57841334b83c35cd1a43') {
+              $targetBaseline = git rev-parse "$targetBaseline^1"
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            }
+            git diff --exit-code --name-only $targetBaseline $old.head_sha -- . @exercise ':(exclude)desktop/src-tauri/tauri.conf.json'
+            if ($LASTEXITCODE) { throw 'Old installer does not match the approved RC source baseline' }
+            Write-Output "RC_BASELINE $targetBaseline"
           }
           Write-Output "SOURCES old=$env:OLD_RUN_ID/$($old.head_sha) target=$env:TARGET_RUN_ID/$($target.head_sha) expect=$env:EXPECT"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
