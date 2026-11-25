@@ -7,6 +7,22 @@ vi.mock('../apiBase', async (original) => ({
   apiFetch: (path: string, init?: RequestInit) => apiFetch(path, init),
 }));
 
+describe('connecting a built-in in the development backend', () => {
+  it('checks the default model on first save and keeps it when the key changes', () => {
+    const store = createProviderStore();
+    const connect = (key: string) => handleProviders('/api/providers/connect', 'POST', {
+      provider_id: 'glm', api_key: key,
+    }, store, [])!;
+
+    expect(connect('first')).toMatchObject({
+      status: 200, body: { model_id: 'glm-4.6', check: { ok: true, code: 'ok' } },
+    });
+    expect(connect('replacement')).toMatchObject({
+      status: 200, body: { model_id: 'glm-4.6', check: { ok: false, code: 'not_checked' } },
+    });
+  });
+});
+
 describe('changing a connection', () => {
   it('sends the changed fields on their own: the backend refuses them next to a version', async () => {
     const { updateProfile } = await import('./connectApi');

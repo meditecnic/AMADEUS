@@ -102,6 +102,36 @@ def test_second_check_failure_keeps_pending_profile_and_key(connect, monkeypatch
     assert store.get(profile_id) == "original"
 
 
+def test_first_builtin_connect_uses_the_default_model(connect, monkeypatch):
+    client, _ = connect
+    provider_id = "deepseek"
+    model = "deepseek-flash"
+    assert client.portal.call(db.get_provider_configuration, provider_id) is None
+    adapter_class = type(providers.provider_registry.snapshot(provider_id).adapter)
+    monkeypatch.setattr(adapter_class, "list_models", AsyncMock(return_value=[model]))
+
+    async def stream(self, **kwargs):
+        assert kwargs["api_key"] == "fake"
+        assert kwargs["model"] == model
+        yield {"content": "OK"}
+
+    monkeypatch.setattr(adapter_class, "get_chat_stream", stream)
+    response = client.post("/api/providers/connect", json={"provider_id": provider_id, "api_key": "fake"})
+    assert response.status_code == 200, response.text
+
+    check = client.post(f"/api/providers/{provider_id}/chat-check", json={"model_id": model})
+    assert check.status_code == 200, check.text
+    assert check.json() == {"provider_id": provider_id, "model_id": model, "ok": True}
+    assert response.json()["model_id"] == model
+    assert response.json()["check"] == {"ok": True, "code": "ok"}
+    row = client.portal.call(db.get_provider_configuration, provider_id)
+    assert row["default_model"] == model and row["selector_admission"] == "admitted"
+    assert providers.provider_registry.snapshot(provider_id).model_id == model
+    conversation = client.post("/api/conversations", json={"session_id": "first-connect", "provider_id": provider_id})
+    assert conversation.status_code == 201, conversation.text
+    assert conversation.json()["model_id"] == model
+
+
 @pytest.mark.parametrize("provider_id", ["deepseek", "glm", "openai", "gemini"])
 def test_builtin_connect_uses_same_steps(connect, monkeypatch, provider_id):
     client, store = connect
