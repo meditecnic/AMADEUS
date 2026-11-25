@@ -13,8 +13,8 @@ jobs:
     runs-on: windows-2025-vs2026
     timeout-minutes: 20
     env:
-      SOURCE_RUN: '45606934191'
-      RUN_KIND: pr358
+      SOURCE_RUN: '45611724072'
+      RUN_KIND: rc
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
