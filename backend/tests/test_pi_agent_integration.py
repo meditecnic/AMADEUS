@@ -209,6 +209,6 @@ async def test_pi_disabled_complete_request_bytes_match_deepseek_protocol(monkey
     assert b"delegate_task" not in wire
     assert "tools" not in body
     assert body["thinking"] == {"type": "enabled"}
-    assert body["reasoning_effort"] == "low"
+    assert body["reasoning_effort"] == "high"
     assert "temperature" not in body
-    assert hashlib.sha256(wire).hexdigest() == "f94122892104fc6fbbf4c9a0b9d3d0e4528cdc43933ee73b832c107aaf8a6856"
+    assert hashlib.sha256(wire).hexdigest() == "32bf66e900608808d4122d3175cf1ac77153022637cd462e2ed014983e0f8566"

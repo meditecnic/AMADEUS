@@ -68,6 +68,7 @@ import {
   copyText,
   formatReplayError,
   formatTruncateError,
+  resolveTruncateFromHistory,
   type ReplayStatus,
   type TruncateTarget,
 } from '../workstation/MessageMenu';
@@ -279,7 +280,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const hydrateMessageIdsRef = useRef<((rows: ReadonlyArray<HistoryMessageRow>, reconcile?: boolean) => void) | undefined>(undefined);
   const messageHistoryReadRef = useRef(0);
   const messageIdRefreshRef = useRef<{ convId: string; epoch: number; promise: Promise<HistoryMessageRow[] | null> } | null>(null);
-  const truncateTurnWaiterRef = useRef<{ convId: string; epoch: number; afterReadId: number; resolve: (rows: HistoryMessageRow[] | null) => void; timer: number } | null>(null);
   const failedEditDraftRef = useRef<string | null>(null);
   const presentationScope = `${sessionId}:${worldline}:${activeConversationId ?? 'draft'}`;
   const presentationScopeRef = useRef<string | null>(presentationScope);
@@ -366,8 +366,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [draftProviderId, setDraftProviderId] = useState<string>(() => {
     try { return localStorage.getItem('amadeus_pc_provider') || 'deepseek'; } catch { return 'deepseek'; }
   });
-  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() =>
-    localStorage.getItem('amadeus_pc_reasoning_effort'));
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() => {
+    try { return localStorage.getItem(`amadeus_pc_reasoning_effort_${draftProviderId}_${model}`); } catch { return null; }
+  });
   const [audioError, setAudioError] = useState<string | null>(null);
   const [conversationCreateError, setConversationCreateError] = useState<string | null>(null);
   /** Why opening a history conversation failed: "HTTP <status>" or "network". */
@@ -1566,18 +1567,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
       .catch(() => null)
       .then((rows) => {
         if (messageIdRefreshRef.current?.promise === promise) messageIdRefreshRef.current = null;
-        const waiter = truncateTurnWaiterRef.current;
-        if (
-          waiter
-          && waiter.convId === conversationId
-          && waiter.epoch === entryEpoch
-          && readId === messageHistoryReadRef.current
-          && readId > waiter.afterReadId
-        ) {
-          window.clearTimeout(waiter.timer);
-          truncateTurnWaiterRef.current = null;
-          waiter.resolve(rows);
-        }
         return rows;
       });
     messageIdRefreshRef.current = { convId: conversationId, epoch: entryEpoch, promise };
@@ -2312,9 +2301,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
 
-  const latestVisibleMessagesRef = useRef(visibleMessages);
-  latestVisibleMessagesRef.current = visibleMessages;
-
   const preserveEditDraft = (editedText: string, noticeText?: string) => {
     setInputText((current) => {
       if (!current.trim()) return editedText;
@@ -2322,63 +2308,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     });
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
     if (noticeText) setMessageNotice({ text: noticeText, kind: 'error' });
-  };
-
-  useEffect(() => {
-    const waiter = truncateTurnWaiterRef.current;
-    if (!waiter) return;
-    if (activeConversationIdRef.current !== waiter.convId || conversationEpochRef.current !== waiter.epoch) {
-      window.clearTimeout(waiter.timer);
-      truncateTurnWaiterRef.current = null;
-      waiter.resolve(null);
-      return;
-    }
-    if (!turnActive && !isSynthesizing && !messageIdRefreshRef.current) {
-      const wake = window.setTimeout(() => {
-        const current = truncateTurnWaiterRef.current;
-        if (current === waiter && !messageIdRefreshRef.current) {
-          window.clearTimeout(current.timer);
-          truncateTurnWaiterRef.current = null;
-          current.resolve(null);
-        }
-      }, 50);
-      return () => window.clearTimeout(wake);
-    }
-  }, [activeConversationId, isSynthesizing, status, turnActive]);
-
-  useEffect(() => () => {
-    const waiter = truncateTurnWaiterRef.current;
-    if (waiter) {
-      window.clearTimeout(waiter.timer);
-      truncateTurnWaiterRef.current = null;
-      waiter.resolve(null);
-    }
-  }, []);
-
-  const resolveExpectedLastMessageId = (
-    baseline: number,
-    currentMessages: readonly Message[],
-    rows?: ReadonlyArray<HistoryMessageRow> | null,
-  ): number => {
-    let maxId = baseline;
-    const byTurnAndRole = new Map<string, number | null>();
-    if (rows) {
-      for (const row of rows) {
-        if (!row.turn_id || typeof row.id !== 'number' || row.id <= 0
-          || (row.role !== 'user' && row.role !== 'assistant')) continue;
-        const key = `${row.role}:${row.turn_id}`;
-        byTurnAndRole.set(key, byTurnAndRole.has(key) ? null : row.id);
-      }
-    }
-    for (const msg of currentMessages) {
-      if (msg.systemError) continue;
-      if (typeof msg.dbId === 'number' && msg.dbId > maxId) maxId = msg.dbId;
-      if (msg.dbId === undefined && msg.turnId) {
-        const matchedId = byTurnAndRole.get(`${msg.role}:${msg.turnId}`);
-        if (typeof matchedId === 'number' && matchedId > maxId) maxId = matchedId;
-      }
-    }
-    return maxId;
   };
 
   const handleConfirmTruncate = async (editedText?: string) => {
@@ -2391,66 +2320,69 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     const entryEpoch = conversationEpochRef.current;
     const wl = latestWorldlineRef.current;
-    const hadActiveTurn = turnActive || isSynthesizing;
-    const hasUnhydratedTurn = latestVisibleMessagesRef.current.some(
-      (msg) => !msg.systemError && (msg.streaming || msg.dbId === undefined),
+    const activeReplyBusy = (
+      turnActive
+      || isSynthesizing
+      || Boolean(activeConversationTurns?.running)
+      || queuedTurns.length > 0
     );
-    stopReplay(false);
-    audioPlayer.stopAll();
-    if (isPlaying || isSynthesizing || turnActive) stopVoice();
+    if (activeReplyBusy) {
+      if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+      setTruncateError(formatTruncateError('conversation_busy', queuedTurns.length > 0));
+      return;
+    }
+    const closeAndReloadStale = () => {
+      failedEditDraftRef.current = null;
+      setTruncateTarget(null);
+      if (target.mode === 'edit' && editedText) {
+        preserveEditDraft(editedText);
+        setMessageNotice({ text: '对话内容刚刚有更新，改好的话已留在输入框里，请重新选择消息后再确认。', kind: 'info' });
+      } else {
+        setMessageNotice({ text: '对话内容刚刚有更新，请重新选择消息后再确认。', kind: 'info' });
+      }
+      const currentConv = conversations.find((row) => row.id === convId);
+      if (currentConv) void selectConversation(currentConv, true);
+    };
     setTruncateBusy(true);
     setTruncateError(null);
     try {
-      let hydratedRows: HistoryMessageRow[] | null = null;
-      if (hadActiveTurn) {
-        const afterReadId = messageHistoryReadRef.current;
-        hydratedRows = await new Promise<HistoryMessageRow[] | null>((resolve) => {
-          const existing = truncateTurnWaiterRef.current;
-          if (existing) {
-            window.clearTimeout(existing.timer);
-            existing.resolve(null);
-          }
-          const timer = window.setTimeout(() => {
-            if (truncateTurnWaiterRef.current?.resolve === resolve) truncateTurnWaiterRef.current = null;
-            resolve(null);
-          }, 15000);
-          truncateTurnWaiterRef.current = { convId, epoch: entryEpoch, afterReadId, resolve, timer };
-        });
-        if (
-          activeConversationIdRef.current !== convId
-          || conversationEpochRef.current !== entryEpoch
-          || latestWorldlineRef.current !== wl
-        ) return;
-        if (!hydratedRows && latestVisibleMessagesRef.current.some(
-          (msg) => !msg.systemError && msg.dbId === undefined && msg.turnId,
-        )) {
-          hydratedRows = await fetchMessageIds(convId);
-        }
-      } else if (hasUnhydratedTurn) {
-        const inflight = messageIdRefreshRef.current;
-        hydratedRows = (inflight && inflight.convId === convId && inflight.epoch === entryEpoch)
-          ? await inflight.promise
-          : await fetchMessageIds(convId);
-        if (
-          activeConversationIdRef.current !== convId
-          || conversationEpochRef.current !== entryEpoch
-          || latestWorldlineRef.current !== wl
-        ) return;
+      const inflight = messageIdRefreshRef.current;
+      const hasInflightRefresh = Boolean(inflight && inflight.convId === convId && inflight.epoch === entryEpoch);
+      const rows = hasInflightRefresh ? await inflight!.promise : await fetchMessageIds(convId, true);
+      if (
+        activeConversationIdRef.current !== convId
+        || conversationEpochRef.current !== entryEpoch
+        || latestWorldlineRef.current !== wl
+      ) return;
+      if (!rows) {
+        if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+        setTruncateError('回退对话时连接失败，请稍后再试。');
+        return;
       }
+      const verified = resolveTruncateFromHistory(rows, target);
+      if (!verified) {
+        closeAndReloadStale();
+        return;
+      }
+      if (verified.deletedTurns !== target.deletedTurns || verified.fromMessageId !== target.fromMessageId) {
+        if (hasInflightRefresh) hydrateMessageIdsRef.current?.(rows, true);
+        if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
+        setTruncateTarget(verified);
+        setTruncateError(formatTruncateError('conversation_changed'));
+        return;
+      }
+      stopReplay(false);
+      audioPlayer.stopAll();
+      if (isPlaying) stopVoice();
 
-      const expectedLastMessageId = resolveExpectedLastMessageId(
-        target.expectedLastMessageId,
-        latestVisibleMessagesRef.current,
-        hydratedRows,
-      );
       const response = await apiFetch(
         `/api/conversations/${encodeURIComponent(convId)}/truncate?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(wl)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from_message_id: target.fromMessageId,
-            expected_last_message_id: expectedLastMessageId,
+            from_message_id: verified.fromMessageId,
+            expected_last_message_id: verified.expectedLastMessageId,
           }),
         },
       );
@@ -2459,16 +2391,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         const body = await response.json().catch(() => null);
         const code = body?.detail?.code as string | undefined;
         if (code === 'conversation_changed') {
-          failedEditDraftRef.current = null;
-          setTruncateTarget(null);
-          if (target.mode === 'edit' && editedText) {
-            preserveEditDraft(editedText);
-            setMessageNotice({ text: '对话内容刚刚有更新，改好的话已留在输入框里，请重新选择消息后再确认。', kind: 'info' });
-          } else {
-            setMessageNotice({ text: '对话内容刚刚有更新，请重新选择消息后再确认。', kind: 'info' });
-          }
-          const currentConv = conversations.find((row) => row.id === convId);
-          if (currentConv) void selectConversation(currentConv, true);
+          closeAndReloadStale();
         } else {
           if (target.mode === 'edit' && editedText) failedEditDraftRef.current = editedText;
           setTruncateError(formatTruncateError(code, queuedTurns.length > 0));
@@ -2477,7 +2400,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
       failedEditDraftRef.current = null;
       messageHistoryReadRef.current += 1;
-      applyTruncate?.(target.fromMessageId);
+      applyTruncate?.(verified.fromMessageId);
       setTruncateTarget(null);
       setTruncateError(null);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);

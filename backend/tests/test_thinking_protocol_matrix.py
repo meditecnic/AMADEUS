@@ -23,9 +23,12 @@ from app.services.provider_runtime import (
 )
 
 
-DEEPSEEK = ("thinking_and_effort", ("disabled", "low", "high", "max"), "low", {
+_DEEPSEEK_TIERS = ("disabled", "low", "high", "max")
+_DEEPSEEK_ALIASES = {
     "none": "disabled", "minimal": "low", "medium": "high", "xhigh": "high", "ultra": "max",
-})
+}
+DEEPSEEK_FLASH = ("thinking_and_effort", _DEEPSEEK_TIERS, "high", _DEEPSEEK_ALIASES)
+DEEPSEEK_PRO = ("thinking_and_effort", _DEEPSEEK_TIERS, "low", _DEEPSEEK_ALIASES)
 GLM_52 = ("thinking_and_effort", ("disabled", "high", "max"), "max", {
     "none": "disabled", "minimal": "disabled", "low": "high", "medium": "high", "xhigh": "max",
 })
@@ -45,7 +48,7 @@ GROK = ("openai_reasoning_effort", ("low", "medium", "high", "xhigh"), "high", {
 })
 GPT_62 = ("openai_reasoning_effort", ("low", "medium", "high", "xhigh", "max"), "medium", LOWEST_ALIASES)
 
-DEEPSEEK_MODELS = ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro")
+DEEPSEEK_FLASH_MODELS = ("deepseek-flash", "deepseek-v4-flash")
 CUSTOM_ID = "custom:25600000-0000-4000-8000-000000000001"
 CUSTOM_CASES = [
     (url, model, spec)
@@ -59,13 +62,15 @@ CUSTOM_CASES = [
         (("https://api.x.ai/v1",), ("grok-4.7",), GROK),
         (("https://api.openai.com/v1",), ("gpt-6.2-sol", "gpt-6.2-astra"), GPT_62),
         (("https://api.openai.com/v1",), ("gpt-5.6-luna", "gpt-6-luna"), LUNA),
-        (("https://api.deepseek.com", "https://api.deepseek.com/v1"), DEEPSEEK_MODELS, DEEPSEEK),
+        (("https://api.deepseek.com", "https://api.deepseek.com/v1"), DEEPSEEK_FLASH_MODELS, DEEPSEEK_FLASH),
+        (("https://api.deepseek.com", "https://api.deepseek.com/v1"), ("deepseek-v4-pro",), DEEPSEEK_PRO),
     ]
     for url in urls
     for model in models
 ]
 BUILTIN_CASES = [
-    *(("deepseek", None, model, DEEPSEEK) for model in DEEPSEEK_MODELS),
+    *(("deepseek", None, model, DEEPSEEK_FLASH) for model in DEEPSEEK_FLASH_MODELS),
+    ("deepseek", None, "deepseek-v4-pro", DEEPSEEK_PRO),
     ("glm", None, "glm-5.2", GLM_52),
     ("openai", None, "gpt-5.6-luna", ("reasoning_effort", *LUNA[1:])),
     ("gemini", None, "gemini-3.6-flash", GEMINI),
@@ -73,7 +78,7 @@ BUILTIN_CASES = [
 ]
 MESSAGES = [{"role": "user", "content": "検証するわ。"}]
 AUXILIARY_STREAM_CASES = [
-    ("deepseek", None, "deepseek-flash", DEEPSEEK),
+    ("deepseek", None, "deepseek-flash", DEEPSEEK_FLASH),
     ("glm", None, "glm-5.2", GLM_52),
     ("openai", None, "gpt-5.6-luna", ("reasoning_effort", *LUNA[1:])),
     ("gemini", None, "gemini-3.6-flash", GEMINI),
@@ -281,7 +286,7 @@ async def test_every_catalog_tier_matches_wire_protocol(outbound, provider, url,
         retains_temperature = effective == "disabled" or (mode == "openai_reasoning_effort" and effective == "none")
         assert_fields(payload, mode, effective, 0.75 if retains_temperature else None)
 
-    if spec is DEEPSEEK:
+    if spec in (DEEPSEEK_FLASH, DEEPSEEK_PRO):
         tools = [{"type": "function", "function": {"name": "lookup"}}]
         await stream(adapter, model, "max", tools=tools, tool_choice="auto")
         assert captured[-1][1]["tools"] == tools
@@ -356,7 +361,7 @@ def test_legacy_custom_singleton_exposes_verified_controls(app_client):
         assert response.is_success, response.json()
         row = next(row for row in app_client.get("/api/providers").json() if row["id"] == "custom")
         control = row["default_model_capability"]["thinking_control"]
-        assert control["default"] == "low"
+        assert control["default"] == "high"
         assert row["default_model_capability"] in row["catalog"]
     finally:
         configure_custom_provider(**original)

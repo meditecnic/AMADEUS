@@ -41,15 +41,17 @@ function loadMessageMenuCopy() {
 
 const copy = loadMessageMenuCopy();
 const errors = [];
-let allowBusy409 = false;
+let truncateRequestCount = 0;
 let voiceStopFrames = 0;
 
 page.on('pageerror', error => errors.push(`pageerror: ${error.message}`));
+page.on('request', request => {
+  if (request.method() === 'POST' && request.url().includes('/truncate')) truncateRequestCount += 1;
+});
 page.on('console', message => {
   if (message.type() !== 'error') return;
   const text = message.text();
   const url = message.location()?.url || '';
-  if (allowBusy409 && text.includes('409') && url.includes('/truncate')) return;
   errors.push(`console.error: ${text} (${url})`);
 });
 page.on('websocket', ws => {
@@ -119,7 +121,7 @@ try {
     await item.click();
   };
 
-  // --- Stage 1: Busy rejection (queued turn -> 409 conversation_busy, zero messages deleted) ---
+  // --- Stage 1: Busy rejection (queued turn -> local busy rejection, zero POST, zero messages deleted) ---
   await select('rollback-busy');
   await lines.filter({ hasText: '忙态第二轮：忙时不能被删。' }).waitFor();
   assert.equal(await lines.count(), 4);
@@ -134,23 +136,45 @@ try {
   assert.equal(await row('rollback-main').getByText('排队', { exact: true }).count(), 1);
   await openMenuAction('第一轮观测已经记下了。', '回到这里…');
   await dialog.waitFor();
-  allowBusy409 = true;
-  const [busyQueueRes] = await Promise.all([
-    page.waitForResponse(r => r.url().includes('/api/conversations/rollback-main/truncate') && r.request().method() === 'POST'),
-    dialog.getByRole('button', { name: copy.rollbackConfirm, exact: true }).click(),
-  ]);
-  assert.equal(busyQueueRes.status(), 409);
-  assert.equal((await busyQueueRes.json())?.detail?.code, 'conversation_busy');
+  const queueTruncateBefore = truncateRequestCount;
+  await dialog.getByRole('button', { name: copy.rollbackConfirm, exact: true }).click();
   await dialog.getByRole('alert').getByText(copy.busyQueued, { exact: true }).waitFor();
+  assert.equal(truncateRequestCount, queueTruncateBefore, 'Expected local busy rejection without posting truncate');
   assert.equal(await lines.filter({ hasText: '第三轮：这条会被回滚删掉。' }).count(), 1);
   assert.equal(await lines.count(), 6);
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
-  allowBusy409 = false;
   await withdrawBtn.click();
   await withdrawBtn.waitFor({ state: 'hidden' });
   await composer.fill('');
   await row('rollback-busy').getByText('回复中', { exact: true }).waitFor({ state: 'hidden' });
+
+  // --- Stage 1b: Busy rejection when returning to a background-running conversation ---
+  await select('rollback-busy');
+  const bgLinesBefore = await lines.count();
+  await send('后台续跑忙态验证');
+  await row('rollback-busy').getByText('回复中', { exact: true }).waitFor();
+  await select('rollback-main');
+  await select('rollback-busy');
+  await page.getByText('她还在回复。', { exact: true }).waitFor();
+  await openMenuAction('最初的前提原样保留。', '回到这里…');
+  await dialog.waitFor();
+  const bgTruncateBefore = truncateRequestCount;
+  const bgBusyStartedAt = Date.now();
+  await dialog.getByRole('button', { name: copy.rollbackConfirm, exact: true }).click();
+  await dialog.getByRole('alert').getByText(copy.busyReplying, { exact: true }).waitFor();
+  assert.ok(Date.now() - bgBusyStartedAt < 2000, 'Expected immediate busy rejection without waiting for background turn');
+  assert.equal(truncateRequestCount, bgTruncateBefore, 'Expected local busy rejection without posting truncate');
+  assert.equal(await row('rollback-busy').getByText('回复中', { exact: true }).count(), 1);
+  assert.equal(await lines.filter({ hasText: '忙态第二轮：忙时不能被删。' }).count(), 1);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  await row('rollback-busy').getByText('回复中', { exact: true }).waitFor({ state: 'hidden' });
+  await lines.nth(bgLinesBefore + 1).waitFor();
+  assert.equal(await lines.count(), bgLinesBefore + 2);
+  assert.match(await lines.nth(bgLinesBefore).innerText(), /后台续跑忙态验证/);
+  assert.match(await lines.nth(bgLinesBefore + 1).innerText(), /别急着下结论，等下一次结果。/);
+  await select('rollback-main');
 
   // --- Stage 2: Rollback ("回到这里") + rollback confirmation copy ---
   await openMenuAction('先把第二轮假设暂存下来。', '回到这里…');

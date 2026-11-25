@@ -84,6 +84,7 @@ describe('MemorySpace: cone and plate', () => {
     serve('memory');
     mount();
     await coneReady();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     fireEvent.click(screen.getByTestId('memory-display-plate'));
     const { handle } = lastCone();
     expect(handle.toPlate).toHaveBeenCalledTimes(1);
@@ -91,7 +92,10 @@ describe('MemorySpace: cone and plate', () => {
     expect(localStorage.getItem(CHOICE_KEY)).toBe('plate');
     finish(handle);
     expect(document.querySelector('[data-surface-layer="plate"]')).not.toHaveClass('is-hidden');
-    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull(), { timeout: 6000 });
+    expect(screen.getByTestId('memory-cone')).toBeInTheDocument();
+    expect(handle.dispose).not.toHaveBeenCalled();
+    act(() => { vi.runOnlyPendingTimers(); });
+    expect(screen.queryByTestId('memory-cone')).toBeNull();
     expect(handle.dispose).toHaveBeenCalled();
     expect(screen.getByTestId('memory-display-plate')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByTestId('memory-fallback')).toBeNull();

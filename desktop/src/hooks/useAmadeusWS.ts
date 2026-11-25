@@ -457,18 +457,30 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       authTarget = paramsRef.current.pendingConversation?.worldline === paramsRef.current.worldline
         ? paramsRef.current.pendingConversation : null;
       const conversationId = authTarget?.conversationId || paramsRef.current.conversationId || null;
+      const providerId = authTarget?.providerId || paramsRef.current.providerId || 'deepseek';
+      const model = authTarget?.model || paramsRef.current.model;
+      let storedReasoningEffort: string | null = null;
+      if (providerId && model) {
+        try {
+          storedReasoningEffort = localStorage.getItem(`amadeus_pc_reasoning_effort_${providerId}_${model}`) || null;
+        } catch {}
+      }
+      const sameModel = !authTarget || (
+        authTarget.providerId === (paramsRef.current.providerId || 'deepseek')
+        && authTarget.model === paramsRef.current.model
+      );
       const authFrame = {
         type: 'auth',
         ...(conversationId
           ? { conversation_id: conversationId, conversation_mode: 'history' as const }
           : { conversation_mode: 'draft' as const }),
         sovits_url: paramsRef.current.sovitsUrl,
-        provider_id: authTarget?.providerId || paramsRef.current.providerId || 'deepseek',
-        model: authTarget?.model || paramsRef.current.model,
+        provider_id: providerId,
+        model,
         system_prompt: paramsRef.current.systemPrompt,
         enable_tts: paramsRef.current.enableTts,
         worldline: paramsRef.current.worldline,
-        reasoning_effort: paramsRef.current.reasoningEffort,
+        reasoning_effort: sameModel ? (paramsRef.current.reasoningEffort ?? storedReasoningEffort) : storedReasoningEffort,
         default_identity_mode: paramsRef.current.identityMode || 'okabe',
         self_name: paramsRef.current.selfName ?? '',
         client: 'desktop',
