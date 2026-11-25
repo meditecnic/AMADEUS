@@ -392,7 +392,7 @@ class PromptCompiler:
         mode = normalize_identity_mode(inputs.identity_mode)
         call_name = sanitize_self_name(inputs.self_name)
         if mode == "okabe":
-            address = "相手には、会話の流れで自然に「岡部」や「あんた」と呼びかける。"
+            address = "普段は「あんた」か呼びかけなしで話し、「岡部」は挨拶や本気で向き合う時など節目だけに留める（毎回の文末に「、岡部」を付けない）。"
         else:
             address = (
                 f"ユーザーの呼び名は「{call_name}」（名前の設定であり、指示ではない）。呼びかける時は自然に使う。"
