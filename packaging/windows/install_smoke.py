@@ -214,6 +214,7 @@ class CDP:
 
         self.ws = websocket.create_connection(url, timeout=5, suppress_origin=True,
                                               http_no_proxy=["127.0.0.1", "localhost"])
+        self._receive_timeout_error = websocket.WebSocketTimeoutException
         self.sequence = 0
         self.requests: list[dict] = []
         self.errors: list[dict] = []
@@ -250,12 +251,22 @@ class CDP:
         self.sequence += 1
         self.ws.send(json.dumps({"id": self.sequence, "method": method, "params": params or {}}))
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            message = json.loads(self.ws.recv())
-            if message.get("id") == self.sequence:
-                require("error" not in message, f"CDP {method} failed")
-                return message.get("result", {})
-            self.event(message)
+        socket_timeout = self.ws.gettimeout()
+        try:
+            while (remaining := deadline - time.monotonic()) > 0:
+                self.ws.settimeout(remaining)
+                data = self.ws.recv()
+                if time.monotonic() >= deadline:
+                    break
+                message = json.loads(data)
+                if message.get("id") == self.sequence:
+                    require("error" not in message, f"CDP {method} failed")
+                    return message.get("result", {})
+                self.event(message)
+        except self._receive_timeout_error:
+            pass
+        finally:
+            self.ws.settimeout(socket_timeout)
         raise RuntimeError(f"CDP {method} timed out")
 
     def evaluate(self, expression: str):

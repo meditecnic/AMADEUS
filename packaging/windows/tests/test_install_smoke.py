@@ -187,15 +187,52 @@ class InstallSmokeLogicTests(unittest.TestCase):
 
 
 class CDPTests(unittest.TestCase):
-    def client(self):
-        try:
-            import websocket
-        except ModuleNotFoundError:
-            with patch.dict(sys.modules, {"websocket": MagicMock(create_connection=Mock(return_value=Mock()))}):
-                return smoke.CDP("ws://127.0.0.1:9222/page")
+    class ReceiveTimeout(Exception):
+        pass
 
-        with patch.object(websocket, "create_connection", return_value=Mock()):
+    def client(self, create_connection=None):
+        if create_connection is None:
+            create_connection = Mock(return_value=Mock())
+        websocket = SimpleNamespace(
+            create_connection=create_connection,
+            WebSocketTimeoutException=self.ReceiveTimeout,
+        )
+        with patch.dict(sys.modules, {"websocket": websocket}):
             return smoke.CDP("ws://127.0.0.1:9222/page")
+
+    def test_response_after_idle_gap_respects_call_deadline(self):
+        for reply_at in (8, 16):
+            with self.subTest(reply_at=reply_at):
+                now = 0
+                ws = Mock()
+
+                def set_timeout(timeout):
+                    ws.gettimeout.return_value = timeout
+
+                def connect(url, *, timeout, **options):
+                    set_timeout(timeout)
+                    return ws
+
+                def recv():
+                    nonlocal now
+                    if now == 0:
+                        now = 2
+                        return '{"method":"Page.loadEventFired"}'
+                    now = min(reply_at, now + ws.gettimeout())
+                    if now < reply_at:
+                        raise self.ReceiveTimeout("socket was idle")
+                    return '{"id":1,"result":{"value":true}}'
+
+                ws.settimeout.side_effect = set_timeout
+                ws.recv.side_effect = recv
+                with patch.object(smoke.time, "monotonic", side_effect=lambda: now):
+                    client = self.client(connect)
+                    if reply_at == 8:
+                        self.assertEqual(client.call("Page.enable"), {"value": True})
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "CDP Page.enable timed out"):
+                            client.call("Page.enable")
+                        self.assertEqual(now, 15)
 
     def test_replays_events_while_waiting_for_rpc_response(self):
         client = self.client()
