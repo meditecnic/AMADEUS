@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+  <!--
+    Dedicated 16px / 24px optical master for Amadeus woven icon:
+    - No grid lines, no grain/tooth filters, no dark weave gap (per round 4 spec).
+    - Slightly fuller tile & bolder wedges so 16px apex stays crisp #ecebe7.
+    - Bolder woven red stroke (#e64b3e) with slimmer left entry (no red dot at 24px),
+      passing over left leg and tucking directly under right leg.
+  -->
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="#15171a"/>
+  <rect x="14" y="14" width="228" height="228" rx="50" stroke="#ecebe7" stroke-opacity="0.18" stroke-width="4"/>
+
+  <!-- Left white wedge -->
+  <path d="M38 214 L92 214 L126 76 L114 36 Z" fill="#ecebe7"/>
+
+  <!-- Woven red stroke: slightly bolder for 16/24px legibility, slimmer left tip, hidden inside right leg -->
+  <path
+    d="M34.0 172.0
+       C33.8 167.8, 37.6 164.6, 44.5 163.5
+       C68.0 159.8, 118.0 153.5, 177.0 147.2
+       L179.0 163.8
+       C124.0 171.2, 72.0 177.2, 45.5 178.4
+       C37.8 178.8, 34.2 176.0, 34.0 172.0 Z"
+    fill="#e64b3e"
+  />
+
+  <!-- Right white wedge cleanly on top (no dark weave gap at 16/24px) -->
+  <path d="M138 48 L144 48 L218 214 L174 214 Z" fill="#ecebe7"/>
+</svg>

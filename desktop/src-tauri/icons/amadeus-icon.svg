@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
+  <defs>
+    <clipPath id="tile-clip">
+      <rect x="16" y="16" width="224" height="224" rx="52"/>
+    </clipPath>
+    <!-- Subtle matte paper grain (omitted in 16/24px small master) -->
+    <filter id="slate-grain" x="0%" y="0%" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" seed="7" result="noise"/>
+      <feColorMatrix type="matrix" in="noise" values="0 0 0 0 0.92  0 0 0 0 0.92  0 0 0 0 0.90  0 0 0 0.042 0"/>
+    </filter>
+    <!-- Subtle dry brush/pencil tooth on the red stroke -->
+    <filter id="pencil-tooth" x="-4%" y="-12%" width="108%" height="124%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.45 0.82" numOctaves="2" seed="19" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="1.9" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+
+  <!-- Matte dark drafting-slate tile -->
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="#15171a"/>
+
+  <!-- Faint drafting graph paper grid -->
+  <g stroke="#ecebe7" stroke-opacity="0.055" stroke-width="1" clip-path="url(#tile-clip)">
+    <line x1="40" y1="16" x2="40" y2="240"/><line x1="64" y1="16" x2="64" y2="240"/><line x1="88" y1="16" x2="88" y2="240"/>
+    <line x1="112" y1="16" x2="112" y2="240"/><line x1="136" y1="16" x2="136" y2="240"/><line x1="160" y1="16" x2="160" y2="240"/>
+    <line x1="184" y1="16" x2="184" y2="240"/><line x1="208" y1="16" x2="208" y2="240"/><line x1="232" y1="16" x2="232" y2="240"/>
+    <line x1="16" y1="40" x2="240" y2="40"/><line x1="16" y1="64" x2="240" y2="64"/><line x1="16" y1="88" x2="240" y2="88"/>
+    <line x1="16" y1="112" x2="240" y2="112"/><line x1="16" y1="136" x2="240" y2="136"/><line x1="16" y1="160" x2="240" y2="160"/>
+    <line x1="16" y1="184" x2="240" y2="184"/><line x1="16" y1="208" x2="240" y2="208"/><line x1="16" y1="232" x2="240" y2="232"/>
+  </g>
+
+  <!-- Subtle matte paper grain overlay -->
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="#ffffff" filter="url(#slate-grain)" clip-path="url(#tile-clip)"/>
+
+  <!-- Subtle edge hairline so tile stays crisp on dark taskbars -->
+  <rect x="17" y="17" width="222" height="222" rx="51" stroke="#ecebe7" stroke-opacity="0.14" stroke-width="2"/>
+
+  <!-- Left white wedge (under the red stroke) -->
+  <path d="M44 212 L94 212 L129 76 L118 38 Z" fill="#ecebe7"/>
+
+  <!--
+    Woven red stroke (#e0473c):
+    - Passes OVER the left leg, tucks UNDER the right leg and ends cleanly inside it (zero right protrusion).
+    - Keeps exact left overhang position (x≈38) & rising trajectory, with slightly slimmer rounded entry
+      so it never blobs into a separate red dot at 24-32px.
+  -->
+  <g filter="url(#pencil-tooth)">
+    <path
+      d="M38.2 171.2
+         C38.0 167.8, 41.2 165.4, 47.0 164.5
+         C64.0 161.9, 96.0 157.8, 134.0 153.8
+         C150.0 152.1, 163.0 151.1, 174.5 150.6
+         L175.8 160.4
+         C163.0 162.1, 148.0 164.2, 131.0 166.4
+         C94.0 171.2, 63.0 175.0, 47.5 176.2
+         C41.4 176.7, 38.4 174.4, 38.2 171.2 Z"
+      fill="#e0473c"
+    />
+  </g>
+
+  <!-- Right white wedge on top with crisp 3.5u dark weave separation gap -->
+  <path
+    d="M137 50 L212 212 L172 212 Z"
+    fill="#ecebe7"
+    stroke="#15171a"
+    stroke-width="7"
+    stroke-linejoin="round"
+    paint-order="stroke"
+  />
+</svg>
