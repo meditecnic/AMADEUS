@@ -480,7 +480,8 @@ class Journey:
                   "Login did not reveal the workstation", 35)
 
     def open_section(self, label):
-        self.click(self.find('button[aria-label^="系统设置"]'))
+        if not self.cdp.evaluate("Boolean(document.querySelector('.ws2-sysmenu.open'))"):
+            self.click(self.find('button[aria-label^="系统设置"]'))
         self.click(self.button(label, ".ws2-sys-index", "button .zh") + "?.closest('button')")
 
     def close_section(self):
@@ -634,7 +635,7 @@ class Journey:
         backup = self.button("立即备份", ".ws2-data")
         self.click(backup)
         self.wait("document.querySelector('.ws2-sys-body')?.textContent.includes('已备份（')", "Manual backup not confirmed", 60)
-        backups = self.api("/api/data/backups")["backups"]
+        backups = self.api("/api/data/backups")
         manual = next(row for row in backups if row["reason"] == "manual")
         require(manual["can_restore"], "Manual backup was not marked restorable")
         self.cdp.evaluate("document.querySelector('#ws2-data-backups')?.scrollIntoView({block:'center'})")
@@ -648,7 +649,7 @@ class Journey:
         self.click(restore)
         self.click(self.button("安排恢复", '[role="alertdialog"]'))
         self.wait("document.querySelector('.ws2-sys-body')?.textContent.includes('已安排：')", "Restore was not scheduled")
-        require(self.api("/api/data/backups")["restore_pending"] == manual["id"], "Wrong backup scheduled")
+        require(self.api("/api/data/status")["restore_pending"] == manual["id"], "Wrong backup scheduled")
         self.snap("07-restore-pending")
         self.stop()
         self.start()
@@ -661,9 +662,10 @@ class Journey:
         return "Manual backup scheduled through UI; restart retained the first pair and removed the later mutation."
 
     def recall(self):
-        self.send("".join(FILL), 2)
+        turns = len(self.messages(self.conversation)) // 2
+        self.send("".join(FILL), turns + 1)
         wait_until(lambda: self.fact_count() == 34, 130, "Expected 34 separately ingested stable facts", self.tick)
-        self.send(ASK, 3)
+        self.send(ASK, turns + 2)
         toggle = '[data-testid="memory-mark-refs"]'
         self.wait(f"Boolean({self.find(toggle)})", "Related turn did not show the reference toggle", 40)
         self.click(self.find(toggle))
@@ -737,27 +739,32 @@ class Journey:
         from PIL import ImageGrab
         import win32gui
 
+        expected = {row["content"] for row in self.messages(self.conversation) if row["role"] == "user"}
+        require(FIRST in expected, "Export fixture conversation is missing")
         self.open_section("数据")
         section = self.find('section[aria-labelledby="ws2-data-export"]')
         self.wait(f"Boolean({section})", "Export section unavailable")
         self.cdp.evaluate(f"{section}.scrollIntoView({{block:'center'}})")
         self.click(self.find('section[aria-labelledby="ws2-data-export"] .ws2-m-foot button'))
+        modal = None
         try:
             modal = wait_until(lambda: window_for_pid(self.process.pid, "导出另存为"), 15, "Native Save As not found")
             ImageGrab.grab(bbox=win32gui.GetWindowRect(modal)).save(self.root / "10-save-as.png")
             destination = self.root / "10-conversations.zip"
             save_dialog(modal, destination)
         except RuntimeError as exc:
+            if modal:
+                win32gui.PostMessage(modal, 0x0010, 0, 0)
             raise NotCovered(f"{exc}. Manually choose a path in 导出另存为 and inspect the conversation ZIP.") from exc
         wait_until(lambda: destination.is_file() and destination.stat().st_size, 20, "Export file not written")
         self.wait("Boolean(document.querySelector('[data-testid=export-saved-path]'))", "Export confirmation missing")
         with ZipFile(destination) as archive:
             documents = "\n".join(archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".md"))
-        require(FIRST in documents and REPLY in documents and SECOND not in documents and CHANGE not in documents,
-                "Export did not match the restored conversation")
+        require(REPLY in documents and all((text in documents) == (text in expected) for text in (FIRST, SECOND, CHANGE)),
+                "Export did not match the persisted conversation")
         self.snap("10-exported")
         self.close_section()
-        return f"Saved through native dialog; Markdown ZIP matches restored history; SHA-256 {digest(destination)}."
+        return f"Saved through native dialog; Markdown ZIP matches persisted history; SHA-256 {digest(destination)}."
 
 
 class NotCovered(RuntimeError):
@@ -819,9 +826,13 @@ def run(args, result):
                         if journey.step(3, journey.chat):
                             if journey.step(4, journey.star_map):
                                 journey.step(5, journey.diary)
-                            if journey.step(6, journey.rollback) and journey.step(7, journey.restore):
-                                journey.step(10, journey.export)
-                                journey.step(8, journey.recall)
+                            if journey.step(6, journey.rollback):
+                                journey.step(7, journey.restore)
+                                if journey.cdp:
+                                    journey.step(10, journey.export)
+                                    if journey.cdp.evaluate("Boolean(document.querySelector('.ws2-sysmenu.open'))"):
+                                        journey.close_section()
+                                    journey.step(8, journey.recall)
                     if journey.cdp:
                         journey.stop()
                 finally:
