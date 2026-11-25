@@ -1334,11 +1334,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const presentationMessages = shift && !shift.committed ? shiftSourceMessages.current : messages;
   const visibleMessages = needsApiKey
     ? presentationMessages.filter((message) => message.conversationEntryError || !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
-    // After switching away, a "missing key" error about the previous connection no longer describes anything.
+    // After switching away or configuring the key, prior missing-key / unauthenticated notices no longer describe the active session.
     : presentationMessages.filter((message) => {
       if (message.conversationEntryError) return true;
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
-      return !missing || missing[1] === activeProviderId;
+      if (missing) return missing[1] === activeProviderId && (!credentialConfigured || sessionState === 'rejected');
+      if (message.systemError && /未认证.*API\s*Key/i.test(message.content)) {
+        return !credentialConfigured || sessionState === 'rejected';
+      }
+      return true;
     });
   // Drawn ahead under the login it shows what it will show the moment it is unlocked: connecting.
   const sessionConnecting = locked || status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
@@ -3220,7 +3224,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
             onUse={changeProvider}
             onAdmit={admitProvider}
             onReload={() => loadProviders()}
-            onConfigChanged={(providerId) => { bumpConfigVersion(providerId); if (providerId === activeProviderId) void loadProviderModels(providerId, true); }}
+            onConfigChanged={(providerId) => {
+              bumpConfigVersion(providerId);
+              if (providerId === activeProviderId) {
+                void loadProviderModels(providerId, true);
+                if (!turnActive && !isSynthesizing && !relocating) reconnect();
+              }
+            }}
             search={{
               active: webSearchActiveProvider,
               providers: webSearchProviders,
