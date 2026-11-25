@@ -245,11 +245,39 @@ def save_dialog(window, destination):
         return True
 
     win32gui.EnumChildWindows(window, visit, None)
+    named = [child for child in fields if win32gui.GetDlgCtrlID(child) == 1001]
+    fields = named or fields
     require(len(fields) == 1, "Native Save As filename field unavailable")
     win32gui.SendMessage(fields[0], win32con.WM_SETTEXT, 0, str(destination))
     save = win32gui.GetDlgItem(window, win32con.IDOK)
     require(save and win32gui.IsWindowEnabled(save), "Native Save As button unavailable")
     win32gui.PostMessage(save, win32con.BM_CLICK, 0, 0)
+
+
+def prepare_display(root):
+    import win32api
+    import win32con
+
+    current = win32api.EnumDisplaySettings(None, win32con.ENUM_CURRENT_SETTINGS)
+    before = [current.PelsWidth, current.PelsHeight]
+    mode = None
+    if before[0] < 1300 or before[1] < 800:
+        index = 0
+        while True:
+            try:
+                candidate = win32api.EnumDisplaySettings(None, index)
+            except win32api.error:
+                break
+            if candidate is None:
+                break
+            if candidate.PelsWidth >= 1366 and candidate.PelsHeight >= 850 and candidate.BitsPerPel == 32:
+                mode = candidate
+                break
+            index += 1
+    changed = win32api.ChangeDisplaySettings(mode, 0) if mode is not None else None
+    active = win32api.EnumDisplaySettings(None, win32con.ENUM_CURRENT_SETTINGS)
+    write_json(root / "09-display.json", {"screen_before": before, "change_code": changed,
+                                         "screen_active": [active.PelsWidth, active.PelsHeight]})
 
 
 def icon_payloads(ico):
@@ -341,12 +369,17 @@ class Journey:
             raise
         for domain in ("Network", "Log", "Runtime", "Page"):
             self.cdp.call(domain + ".enable")
+        self.reload_login()
+        self.window = wait_until(lambda: window_for_pid(self.process.pid, "Amadeus"), 10, "Main HWND not found")
+
+    def reload_login(self):
+        self.cdp.evaluate("window.__rcBeforeReload = true")
         self.cdp.call("Page.reload", {"ignoreCache": True})
-        wait_until(lambda: settled(self.cdp, "document.querySelector('#salieri-user')?.value === 'Salieri' && "
+        wait_until(lambda: settled(self.cdp, "!window.__rcBeforeReload && "
+                                   "document.querySelector('#salieri-user')?.value === 'Salieri' && "
                                    "document.querySelector('.salieri-login-form button[type=submit]')?.disabled === false"),
                    90, "Login form not ready", self.tick)
         self.cdp.evaluate("localStorage.setItem('amadeus_pc_enable_tts', 'false')")
-        self.window = wait_until(lambda: window_for_pid(self.process.pid, "Amadeus"), 10, "Main HWND not found")
 
     def stop(self):
         require(self.cdp is not None, "Desktop DevTools session is unavailable")
@@ -401,17 +434,26 @@ class Journey:
     def snap(self, name):
         self.cdp.screenshot(self.root / f"{name}.png")
 
-    def api(self, path):
+    def api_result(self, path, payload=None):
         endpoint = json.dumps(path)
+        body = json.dumps(json.dumps(payload)) if payload is not None else "null"
         response = self.cdp.call("Runtime.evaluate", {"awaitPromise": True, "returnByValue": True, "expression": f"""
             (async () => {{
                 const b = await window.__TAURI_INTERNALS__.invoke('get_local_backend');
-                const r = await fetch(b.http_origin + {endpoint}, {{headers: {{Authorization: 'Bearer ' + b.token}}}});
-                return {{status: r.status, data: r.ok ? await r.json() : null}};
+                const headers = {{Authorization: 'Bearer ' + b.token}};
+                const body = {body};
+                const options = body === null ? {{headers}} :
+                    {{method: 'POST', headers: {{...headers, 'Content-Type': 'application/json'}}, body}};
+                const r = await fetch(b.http_origin + {endpoint}, options);
+                const value = await r.json();
+                return {{status: r.status, data: r.ok ? value : {{code: value.detail?.code}}}};
             }})()
         """})
         require("exceptionDetails" not in response, f"Local API read failed: {path.split('?')[0]}")
-        value = response["result"]["value"]
+        return response["result"]["value"]
+
+    def api(self, path):
+        value = self.api_result(path)
         require(value["status"] == 200, f"Local API returned {value['status']}: {path.split('?')[0]}")
         return value["data"]
 
@@ -477,10 +519,16 @@ class Journey:
         self.click(self.find('.ws2-cx-row.is-active form button[type="submit"]'))
         self.wait("document.querySelector('.ws2-cx-row.is-active .detail')?.textContent.includes('已保存 · 不回显')",
                   "Fake key not saved", 35)
+        self.snap("01-key-saved")
         self.click(self.button("测一下", ".ws2-cx-row.is-active .detail"))
-        self.wait("document.querySelector('.ws2-cx-row.is-active .detail')?.textContent.includes('通过 ·')",
-                  "Loopback connection check did not pass", 35)
+        outcome = self.wait("""(() => {
+            const label = [...document.querySelectorAll('.ws2-cx-row.is-active .detail b')]
+                .find(e => e.textContent === '连接测试');
+            const text = label?.nextElementSibling?.textContent.trim();
+            return text && !text.startsWith('正在用 ') && !text.startsWith('会用所选模型') && text;
+        })()""", "Loopback connection check did not settle", 35)
         self.snap("01-connection")
+        require(outcome.startswith("通过 ·"), f"Connection check UI returned: {outcome}")
         self.close_section()
         self.wait("document.querySelector('.ws2-online')?.textContent.trim() === 'ONLINE'", "Workstation went offline", 35)
         self.wait(f"document.querySelector('[aria-label=模型]')?.textContent.includes('{MODEL_LABEL}') && "
@@ -488,6 +536,21 @@ class Journey:
                   "Default model display name or HIGH effort mismatch")
         self.snap("01-default")
         return f"Missing-key CTA, fake key saved, loopback connection check passed; default {MODEL_LABEL} and HIGH."
+
+    def recover_chat_setup(self):
+        # The exact onboarding result is already recorded. Finish the model selection
+        # explicitly via the installed API so the independent checks can still run.
+        result = self.api_result("/api/providers/connect", {
+            "provider_id": "deepseek", "model_id": MODEL, "api_key": "rc-fixture-deepseek-only",
+        })
+        require(result["status"] == 200 and result["data"]["check"]["ok"],
+                f"Fallback local model selection failed: {result['status']} {result['data'].get('code')}")
+        print("FIXTURE selected DeepSeek model explicitly through installed API", flush=True)
+        self.reload_login()
+        self.sign_in()
+        self.wait("document.querySelector('.ws2-online')?.textContent.trim() === 'ONLINE'",
+                  "Configured fixture did not reach ONLINE", 35)
+        self.snap("01-explicit-model")
 
     def send(self, text, count):
         before = sum(item["kind"] == "chat" for item in self.requests)
@@ -525,7 +588,8 @@ class Journey:
     def diary(self):
         self.click(self.find('[data-testid="memory-tab-archive"]'))
         self.click(self.find('[data-testid="archive-tab-diary"]'))
-        self.wait('Boolean(document.querySelector("[data-testid=archive-diaries-total]"))',
+        self.wait('Boolean(document.querySelector("[data-testid=archive-diaries-total]") && '
+                  '!document.querySelector("#archive-panel-diary")?.textContent.includes("正在读取"))',
                   "Diary archive list did not render")
         self.snap("05-diary")
         self.click(self.find('[data-testid="memory-tab-chart"]'))
@@ -586,6 +650,10 @@ class Journey:
                   "Reference list did not expand")
         self.snap("08-references")
         self.click(self.find('[data-testid="memory-refs-open"]'))
+        plate = self.find('[data-testid="memory-display-plate"]')
+        self.wait("Boolean(document.querySelector('[data-testid=memory-ref-hint]'))", "Reference hint missing")
+        if self.cdp.evaluate(f"Boolean({plate} && {plate}.getAttribute('aria-pressed') === 'false')"):
+            self.click(plate)
         self.wait("""(() => {
             const mark = document.querySelector('[data-testid=plate-ref] circle');
             return Boolean(document.querySelector('[data-testid=memory-ref-hint]') &&
@@ -665,6 +733,7 @@ def run(args, result):
             and os.name == "nt" and ctypes.windll.shell32.IsUserAnAdmin(),
             "Use the elevated GitHub-hosted Windows runner")
     ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    prepare_display(args.evidence)
     installer, = args.artifact.rglob("*_x64-setup.exe")
     entries = dict(line.split("  ", 1)[::-1] for line in
                    (args.artifact / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines())
@@ -706,7 +775,9 @@ def run(args, result):
                         result["layout_setup_error"] = safe_text(str(exc))
                     if journey.step(2, journey.login):
                         journey.step(9, journey.window_layout)
-                        if journey.step(1, journey.onboarding) and journey.step(3, journey.chat):
+                        if not journey.step(1, journey.onboarding):
+                            journey.recover_chat_setup()
+                        if journey.step(3, journey.chat):
                             if journey.step(4, journey.star_map):
                                 journey.step(5, journey.diary)
                             if journey.step(6, journey.rollback) and journey.step(7, journey.restore):
