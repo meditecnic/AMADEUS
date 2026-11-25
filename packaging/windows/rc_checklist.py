@@ -237,10 +237,13 @@ def window_for_pid(pid, title):
     return windows[0] if windows else None
 
 
-def save_dialog(window, destination):
+def save_dialog_button(window):
     import win32con
     import win32gui
 
+    save = win32gui.GetDlgItem(window, win32con.IDOK)
+    if not (save and win32gui.IsWindowVisible(save) and win32gui.IsWindowEnabled(save)):
+        return None
     fields = []
 
     def visit(child, _):
@@ -252,11 +255,7 @@ def save_dialog(window, destination):
     win32gui.EnumChildWindows(window, visit, None)
     named = [child for child in fields if win32gui.GetDlgCtrlID(child) == 1001]
     fields = named or fields
-    require(len(fields) == 1, "Native Save As filename field unavailable")
-    win32gui.SendMessage(fields[0], win32con.WM_SETTEXT, 0, str(destination))
-    save = win32gui.GetDlgItem(window, win32con.IDOK)
-    require(save and win32gui.IsWindowEnabled(save), "Native Save As button unavailable")
-    win32gui.PostMessage(save, win32con.BM_CLICK, 0, 0)
+    return save if len(fields) == 1 else None
 
 
 def prepare_display(root):
@@ -657,6 +656,7 @@ class Journey:
         rows = self.messages(self.conversation)
         require(len(rows) == 2 and rows[0]["content"] == FIRST and all(r["content"] != CHANGE for r in rows),
                 "Restored history does not match the manual backup")
+        self.click(self.find(f'[data-conversation-id="{self.conversation}"] .conversation-select'))
         self.wait(f"document.querySelectorAll('{LINES}').length === 2", "Restored history did not appear in the UI", 40)
         self.snap("07-restored")
         return "Manual backup scheduled through UI; restart retained the first pair and removed the later mutation."
@@ -665,12 +665,17 @@ class Journey:
         turns = len(self.messages(self.conversation)) // 2
         self.send("".join(FILL), turns + 1)
         wait_until(lambda: self.fact_count() == 34, 130, "Expected 34 separately ingested stable facts", self.tick)
-        self.send(ASK, turns + 2)
+        self.click(self.find('button[aria-label="新建会话"]') + " || " + self.button("新建会话", ".ws2-side"))
+        self.wait(f"document.querySelectorAll('{LINES}').length === 0 && !{self.find(INPUT)}?.disabled",
+                  "The fresh conversation did not open")
+        self.send(ASK, 1)
         toggle = '[data-testid="memory-mark-refs"]'
         self.wait(f"Boolean({self.find(toggle)})", "Related turn did not show the reference toggle", 40)
         self.click(self.find(toggle))
         self.wait("document.querySelector('[data-testid=memory-refs-open]')?.getClientRects().length",
                   "Reference list did not expand")
+        require(self.cdp.evaluate(f"document.querySelector('[data-testid=memory-refs-list]')?.textContent"
+                                  f".includes({json.dumps(FIRST)})"), "References omitted the matching fact")
         self.snap("08-references")
         self.click(self.find('[data-testid="memory-refs-open"]'))
         plate = self.find('[data-testid="memory-display-plate"]')
@@ -737,6 +742,7 @@ class Journey:
 
     def export(self):
         from PIL import ImageGrab
+        import win32con
         import win32gui
 
         expected = {row["content"] for row in self.messages(self.conversation) if row["role"] == "user"}
@@ -749,22 +755,26 @@ class Journey:
         modal = None
         try:
             modal = wait_until(lambda: window_for_pid(self.process.pid, "导出另存为"), 15, "Native Save As not found")
+            save = wait_until(lambda: save_dialog_button(modal), 15, "Native Save As controls did not become ready")
+            win32gui.UpdateWindow(modal)
             ImageGrab.grab(bbox=win32gui.GetWindowRect(modal)).save(self.root / "10-save-as.png")
-            destination = self.root / "10-conversations.zip"
-            save_dialog(modal, destination)
+            win32gui.PostMessage(save, win32con.BM_CLICK, 0, 0)
         except RuntimeError as exc:
             if modal:
-                win32gui.PostMessage(modal, 0x0010, 0, 0)
+                win32gui.PostMessage(modal, win32con.WM_CLOSE, 0, 0)
             raise NotCovered(f"{exc}. Manually choose a path in 导出另存为 and inspect the conversation ZIP.") from exc
-        wait_until(lambda: destination.is_file() and destination.stat().st_size, 20, "Export file not written")
-        self.wait("Boolean(document.querySelector('[data-testid=export-saved-path]'))", "Export confirmation missing")
-        with ZipFile(destination) as archive:
+        saved = Path(self.wait("document.querySelector('[data-testid=export-saved-path] .ws2-path')?.textContent",
+                               "Export confirmation missing", 30)).resolve(strict=True)
+        require(saved.is_relative_to(Path(os.environ["USERPROFILE"]).resolve()) and saved.suffix == ".zip",
+                "Unexpected path from native Save As")
+        with ZipFile(saved) as archive:
             documents = "\n".join(archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".md"))
         require(REPLY in documents and all((text in documents) == (text in expected) for text in (FIRST, SECOND, CHANGE)),
                 "Export did not match the persisted conversation")
         self.snap("10-exported")
         self.close_section()
-        return f"Saved through native dialog; Markdown ZIP matches persisted history; SHA-256 {digest(destination)}."
+        (self.root / "10-conversations.zip").write_bytes(saved.read_bytes())
+        return f"Saved through native dialog; Markdown ZIP matches persisted history; SHA-256 {digest(saved)}."
 
 
 class NotCovered(RuntimeError):
