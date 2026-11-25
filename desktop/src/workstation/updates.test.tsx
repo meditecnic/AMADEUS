@@ -1,11 +1,8 @@
+import { mockIPC } from '@tauri-apps/api/mocks';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const updaterCheck = vi.fn();
-
-vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: (...args: unknown[]) => updaterCheck(...args),
-}));
 
 vi.mock('./shell', () => ({
   CC_BY_NC_URL: 'https://example.invalid/cc',
@@ -19,8 +16,17 @@ vi.mock('./shell', () => ({
   shellVersion: vi.fn(async () => '0.1.0'),
 }));
 
+beforeEach(() => {
+  vi.stubGlobal('__TAURI_INTERNALS__', {});
+  mockIPC((command) => {
+    if (command !== 'check_update') throw new Error(`Unexpected IPC command: ${command}`);
+    return updaterCheck();
+  });
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   updaterCheck.mockReset();
   vi.resetModules();
 });
@@ -75,7 +81,14 @@ describe('updates store (#5 silent check failure)', () => {
 
   it('preserves already discovered available state if a silent check later fails', async () => {
     updaterCheck
-      .mockResolvedValueOnce({ version: '0.2.0', body: 'notes', date: '2026-11-18T00:00:00Z' })
+      .mockResolvedValueOnce({
+        rid: 1,
+        currentVersion: '0.1.0',
+        version: '0.2.0',
+        body: 'notes',
+        date: '2026-11-18T00:00:00Z',
+        rawJson: {},
+      })
       .mockRejectedValueOnce(new Error('offline'));
     const { checkForUpdate, useUpdates } = await import('./updates');
 
