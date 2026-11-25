@@ -898,3 +898,359 @@ describe('Workstation embedded settings', () => {
     expect(updateConfig.mock.lastCall?.[0]).not.toHaveProperty('temperature');
   });
 });
+
+describe('Workstation first-run key save reconnection ([358])', () => {
+  it('reconnects to ONLINE and hides stale missing-key / unauthenticated notices after first-run key save', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: false })];
+    localStorage.setItem('amadeus_pc_model', 'deepseek-flash');
+    const priorMessages = [
+      {
+        id: 'err-missing',
+        role: 'assistant',
+        content: 'SYSTEM ERROR: 缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。',
+        systemError: true,
+      },
+      {
+        id: 'err-unauth',
+        role: 'assistant',
+        content: 'SYSTEM ERROR: 未认证。请打开设置并配置您的 API Key。',
+        systemError: true,
+      },
+    ];
+    let state = wsState({ status: 'ERROR', sessionState: 'rejected', retry: null, messages: priorMessages });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    hoisted.reconnect.mockImplementationOnce(() => {
+      // Real useAmadeusWS keeps prior messages across reconnect and updates status/sessionState on session.ready.
+      state = wsState({ status: 'READY', sessionState: 'ready', retry: null, messages: priorMessages });
+    });
+
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        providers = providers.map((row) => (
+          row.id === 'deepseek' ? { ...row, configured: true, configuration_version: 'v1' } : row
+        ));
+        return json(200, {
+          provider_id: 'deepseek',
+          models: ['deepseek-flash'],
+          models_listed: true,
+          model_id: 'deepseek-flash',
+          check: { ok: true, code: 'ok' },
+          configuration_version: 'v1',
+        });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByRole('heading', { name: '尚未接通' })).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveTextContent('OFFLINE · 待配置');
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    expect(screen.queryByText(/SYSTEM ERROR/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '填写密钥' }));
+    const keyInput = await screen.findByLabelText('DeepSeek 的新密钥');
+    fireEvent.change(keyInput, { target: { value: 'sk-first-run' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '回到对话' }));
+
+    await waitFor(() => expect(view.container.querySelector('.ws2-online')).toHaveTextContent('ONLINE'));
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'READY');
+    expect(screen.getByLabelText('输入消息')).toBeEnabled();
+    expect(screen.queryByText(/SYSTEM ERROR/)).toBeNull();
+    expect(screen.getByRole('heading', { name: 'NO DATA' })).toBeInTheDocument();
+  });
+
+  it('does not reconnect when editing an inactive provider or while a reply turn is active', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true }),
+      provider('custom:relay', 'Relay Custom', 'gpt-4o', {
+        source: 'user_config',
+        base_url: 'https://relay.example.com/v1',
+        credential_required: true,
+        configured: true,
+      }),
+    ];
+    let thinking = false;
+    hoisted.useAmadeusWS.mockImplementation(() => wsState({ status: 'READY', sessionState: 'ready', isThinking: thinking }));
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { provider_id: string };
+        return json(200, { provider_id: body.provider_id, configuration_version: 'v2', model_id: 'gpt-4o' });
+      }
+      if (decodeURIComponent(url).startsWith('/api/providers/custom:relay/models')) {
+        return json(200, { catalog: [capability('gpt-4o')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    // 1. Rekeying an inactive provider leaves the active WebSocket alone.
+    const relayToggle = await screen.findByRole('button', { name: /Relay Custom/ });
+    if (relayToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(relayToggle);
+    const relayRow = relayToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(relayRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('Relay Custom 的新密钥'), { target: { value: 'sk-other' } });
+    fireEvent.click(within(relayRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('Relay Custom 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // 2. Rekeying the active provider mid-turn must not abort the active turn.
+    thinking = true;
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-mid-turn' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+  });
+
+  it('uses live turn state when an in-flight save settles: skips during a newly started turn and reconnects once idle', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    let state = wsState({ status: 'READY', sessionState: 'ready', isThinking: false });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    let releaseConnect!: () => void;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        await new Promise<void>((resolve) => { releaseConnect = resolve; });
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-race-forward' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(releaseConnect).toBeTypeOf('function'));
+
+    // Before the save resolves, the user starts a reply turn.
+    state = wsState({ status: 'READY', sessionState: 'ready', isThinking: true, isTurnActive: true });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await act(async () => { releaseConnect(); });
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // Once the active turn settles, the deferred reconnect applies the saved credentials.
+    state = wsState({ status: 'READY', sessionState: 'ready', isThinking: false, isTurnActive: false });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+  });
+
+  it('recovers a session that became rejected while a mid-turn save was in flight', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    let state = wsState({ status: 'READY', sessionState: 'ready', isThinking: true, isTurnActive: true });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    hoisted.reconnect.mockImplementationOnce(() => {
+      state = wsState({ status: 'READY', sessionState: 'ready', isThinking: false, isTurnActive: false });
+    });
+    let releaseConnect!: () => void;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        await new Promise<void>((resolve) => { releaseConnect = resolve; });
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-race-reverse' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(releaseConnect).toBeTypeOf('function'));
+
+    // Before the save resolves, the turn ends and the open session drops to rejected.
+    state = wsState({ status: 'ERROR', sessionState: 'rejected', isThinking: false, isTurnActive: false });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await act(async () => { releaseConnect(); });
+
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '回到对话' }));
+    await waitFor(() => expect(view.container.querySelector('.ws2-online')).toHaveTextContent('ONLINE'));
+  });
+
+  it('defers reconnect while another conversation has running or queued turns on the same connection', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    let state = wsState({
+      status: 'READY',
+      sessionState: 'ready',
+      isThinking: false,
+      isTurnActive: false,
+      conversationTurns: { 'conv-other': { running: true, queued: ['task-1'] } },
+    });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-bg-turn' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // Still queued (not running) on the other conversation: must still wait.
+    state = wsState({
+      status: 'READY',
+      sessionState: 'ready',
+      conversationTurns: { 'conv-other': { running: false, queued: ['task-1'] } },
+    });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // Once all background turns finish, reconnect runs once.
+    state = wsState({ status: 'READY', sessionState: 'ready', conversationTurns: {} });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps the active provider pending reconnect when an inactive provider is saved before background turns end', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true }),
+      provider('custom:relay', 'Relay Custom', 'gpt-4o', {
+        source: 'user_config',
+        base_url: 'https://relay.example.com/v1',
+        credential_required: true,
+        configured: true,
+      }),
+    ];
+    let state = wsState({
+      status: 'READY',
+      sessionState: 'ready',
+      conversationTurns: { 'conv-other': { running: true, queued: [] } },
+    });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const refreshUrls: string[] = [];
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { provider_id: string };
+        return json(200, { provider_id: body.provider_id, configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        if (url.includes('refresh=true')) refreshUrls.push(url);
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      if (decodeURIComponent(url).startsWith('/api/providers/custom:relay/models')) {
+        return json(200, { catalog: [capability('gpt-4o')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    // 1. Save active provider DeepSeek while another conversation is running.
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-ds-first' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+
+    // 2. Before the background turn finishes, save an inactive provider Relay.
+    const relayToggle = await screen.findByRole('button', { name: /Relay Custom/ });
+    if (relayToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(relayToggle);
+    const relayRow = relayToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(relayRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('Relay Custom 的新密钥'), { target: { value: 'sk-relay-second' } });
+    fireEvent.click(within(relayRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('Relay Custom 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // 3. Background turn finishes: DeepSeek's deferred reconnect and forced model refresh still run once.
+    const refreshesBefore = refreshUrls.length;
+    state = wsState({ status: 'READY', sessionState: 'ready', conversationTurns: {} });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(refreshUrls.length).toBe(refreshesBefore + 1));
+  });
+
+  it('keeps normal chat messages mentioning missing-key text and real upstream errors visible', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    const messages = [
+      { id: 'user-mention', role: 'user' as const, content: '刚才看到缺失 deepseek API Key。该怎么处理？' },
+      { id: 'err-upstream', role: 'assistant' as const, content: 'SYSTEM ERROR: Invalid API Key', systemError: true },
+      {
+        id: 'err-stale-missing',
+        role: 'assistant' as const,
+        content: 'SYSTEM ERROR: 缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。',
+        systemError: true,
+      },
+      {
+        id: 'err-stale-unauth',
+        role: 'assistant' as const,
+        content: 'SYSTEM ERROR: 未认证。请打开设置并配置您的 API Key。',
+        systemError: true,
+      },
+    ];
+    hoisted.useAmadeusWS.mockImplementation(() => wsState({ status: 'READY', sessionState: 'ready', messages }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByText('刚才看到缺失 deepseek API Key。该怎么处理？')).toBeInTheDocument();
+    expect(screen.getByText(/Invalid API Key/)).toBeInTheDocument();
+    expect(screen.queryByText(/请打开设置保存供应商凭据后重新连接/)).toBeNull();
+    expect(screen.queryByText(/请打开设置并配置您的 API Key/)).toBeNull();
+  });
+});

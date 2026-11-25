@@ -105,12 +105,15 @@ export function handleProviders(path: string, method: string, body: Record<strin
     if (row.credential_required && !row.configured && !key) {
       return stepFail(409, 'credential_missing', 'list');
     }
+    const firstBuiltin = row.source === 'builtin' && row.configuration_version === null;
+    if (firstBuiltin) row.configuration_version = `v${++store.versions}`;
     if (key) { row.configured = true; store.refused.delete(row.id); }
-    const kept = !made && Boolean(row.default_model);
+    const hasModel = !made && Boolean(row.default_model);
+    const checked = firstBuiltin && hasModel;
     return ok({
       provider_id: row.id, models: row.id === 'deepseek' ? (catalog as { id: string }[]).map((m) => m.id) : modelsFor(row), models_listed: true,
-      model_id: kept ? row.default_model : null,
-      check: { ok: false, code: kept ? 'not_checked' : 'model_selection_required' },
+      model_id: hasModel ? row.default_model : null,
+      check: { ok: checked, code: checked ? 'ok' : hasModel ? 'not_checked' : 'model_selection_required' },
       configuration_version: row.configuration_version ?? null,
     });
   }

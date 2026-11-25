@@ -366,6 +366,8 @@ async def _connect_provider(body: ProviderConnect):
     try:
         keep_selection = body.model_id is None and existing is not None and bool(existing["default_model"])
         model = str(existing["default_model"]) if keep_selection else (body.model_id or "").strip()
+        if is_builtin_id and existing is None and body.model_id is None:
+            model = old_definition.default_model
         if body.model_id is not None and not model:
             raise HTTPException(422, detail={"code": "model_id_required"})
         if is_custom_profile_id(provider_id):
