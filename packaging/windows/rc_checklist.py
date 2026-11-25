@@ -55,6 +55,8 @@ SECOND = "我很喜欢柚子果酱。"
 CHANGE = "我今天把桌面的灯换成紫色了。"
 ASK = "我每天早晨喝的紫苏乌龙，你还记得吗？"
 FILL = [f"我收藏第{i:02d}号天文观测模型。" for i in range(1, 34)]
+# The ingest contract accepts at most eight observations from one user message.
+FILL_TURNS = {"".join(FILL[i:i + 8]): FILL[i:i + 8] for i in range(0, len(FILL), 8)}
 INPUT = "#ws2-composer-input"
 LINES = ".ws2-lines article.ws2-line"
 SESSION = "localStorage.getItem('amadeus_pc_session_id')"
@@ -80,7 +82,7 @@ def fixture_completion(messages):
         return "routing", {"search_query": "", "recall_needs": [FIRST] if query == ASK else []}
     if system.startswith("You extract durable user memory"):
         user = json.loads(messages[-1]["content"])["user_text"]
-        texts = FILL if user == "".join(FILL) else [user] if user in (FIRST, SECOND) else []
+        texts = FILL_TURNS.get(user, [user] if user in (FIRST, SECOND) else [])
         return "ingest", {"observations": [
             observation(text, index, 0.92 if text == FIRST else 0.99)
             for index, text in enumerate(texts, 1)
@@ -666,8 +668,10 @@ class Journey:
 
     def recall(self):
         turns = len(self.messages(self.conversation)) // 2
-        self.send("".join(FILL), turns + 1)
+        for turn, text in enumerate(FILL_TURNS, turns + 1):
+            self.send(text, turn)
         wait_until(lambda: self.fact_count() == 34, 130, "Expected 34 separately ingested stable facts", self.tick)
+        print("FIXTURE chart confirmed 34 stored facts above the resident cap", flush=True)
         self.click(self.find('button[aria-label="新建会话"]') + " || " + self.button("新建会话", ".ws2-side"))
         self.wait(f"document.querySelectorAll('{LINES}').length === 0 && !{self.find(INPUT)}?.disabled",
                   "The fresh conversation did not open")
