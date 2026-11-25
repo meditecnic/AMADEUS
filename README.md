@@ -17,7 +17,7 @@
 
 ## 现在做到哪了
 
-从 6 月中旬动手到现在，前前后后做了大约五个月。**Windows 安装包已经打出来了**，我拿一台干净的 Windows Server 2022 虚拟机把安装、对话、记忆、重启、卸载保留数据这套 10 项验收完整跑过了一遍。现在每次打包，CI 也会在干净的 Windows 上自动装一遍、查一遍。v0.1.0 还在做最后的发版准备，暂时还没公开发布。
+从 6 月中旬动手到现在，前前后后做了大约五个月。**Windows 安装包已经打出来了**，我拿一台干净的 Windows Server 2022 虚拟机把安装、对话、记忆、重启、卸载保留数据这套 10 项验收完整跑过了一遍。现在每次打包，CI 也会在干净的 Windows 上自动装一遍、查一遍。**v0.1.0 已经发布**，安装包在 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases/latest)。
 
 目前能用的功能：
 
@@ -67,7 +67,7 @@ flowchart LR
 
 ## 安装与常见问题
 
-桌面版目前只支持 **Windows 10/11（64 位）**。等 v0.1.0 发布后，直接去 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下安装包就行。
+桌面版目前只支持 **Windows 10/11（64 位）**。去 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases/latest) 下最新的 `Amadeus_<版本>_x64-setup.exe` 就行。以后出新版本，「系统」按钮上会有提示，在「系统 → 关于」里点一下就能更新，聊天记录和设置都留着。
 
 - 装的时候要是弹出 SmartScreen 提示「未知发布者」，别慌——个人项目，实在还没买代码签名证书。确认是从本仓库 Releases 下的、校验和也对得上（看下一条），点「**更多信息 → 仍要运行**」就可以。
 - 想核对安装包的话，发布页会附 `SHA256SUMS.txt`。在 PowerShell 里跑一下 `Get-FileHash .\Amadeus_<版本>_x64-setup.exe -Algorithm SHA256`，跟文件里对应那一行比对（不分大小写），完全一致再装。
@@ -194,7 +194,7 @@ STEINS;GATE、STEINS;GATE 0 及其角色、名称与原作素材均归 MAGES. In
 
 ## 个人的碎碎念吧
 
-因为一直是个人开发，中途的困难挫折也有很多，目前最棘手的应该就是版权问题了。之前说尽量在 1 个月左右推送首个 MVP 安装包——安装包已经打好、过了工程验收，等我自己完整体验一轮就放出来。
+因为一直是个人开发，中途的困难挫折也有很多，目前最棘手的应该就是版权问题了。之前说尽量在 1 个月左右推送首个 MVP 安装包——v0.1.0 现在放出来了。
 
 okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo.
 
@@ -215,7 +215,7 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server (see [Voice](#voice-optional)).
 - **Local by design.** Services bind to loopback only. Conversation text goes only to the model provider you configure; with web search on, search queries also go to the search provider you chose.
 
-**Status:** v0.1.0 is being prepared; there is no public release yet. The installer passed a 10-item acceptance run on a clean Windows Server 2022 VM. English and Japanese UIs are planned; she always speaks Japanese, with English subtitles in English mode and none in Japanese mode.
+**Status:** v0.1.0 is out; download it from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases/latest). The installer passed a 10-item acceptance run on a clean Windows Server 2022 VM. English and Japanese UIs are planned; she always speaks Japanese, with English subtitles in English mode and none in Japanese mode.
 
 ### Under the hood
 
@@ -228,7 +228,7 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 
 ### Install and troubleshooting
 
-The desktop app supports **Windows 10/11 x64 only**. Once v0.1.0 is out, download it from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases).
+The desktop app supports **Windows 10/11 x64 only**. Download the latest `Amadeus_<version>_x64-setup.exe` from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases/latest). New versions can be installed from inside the app, and your data is kept.
 
 - **SmartScreen warning.** The installer is not code-signed. Check that it came from this repository's Releases and that its hash matches `SHA256SUMS.txt`, then choose **More info → Run anyway**.
 - **Verify the download.** Run `Get-FileHash .\Amadeus_<version>_x64-setup.exe -Algorithm SHA256` in PowerShell and compare `Hash` (case-insensitive) with the matching line in `SHA256SUMS.txt`.
@@ -364,7 +364,7 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 
 この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
-デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。複数ベンダーの AI エージェント協業による開発フローと実例（中国語）は [docs/engineering/README.md](docs/engineering/README.md) にまとめている。
+デスクトップ版は **Windows 10/11 x64 のみ**に対応する。v0.1.0 を公開済みで、[GitHub Releases](https://github.com/meditecnic/AMADEUS/releases/latest) から最新のインストーラーを入手できる。新しいバージョンはアプリ内から更新でき、データはそのまま残る。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。複数ベンダーの AI エージェント協業による開発フローと実例（中国語）は [docs/engineering/README.md](docs/engineering/README.md) にまとめている。
 
 コードは MIT。インストーラーには CC BY-NC 4.0 の jina 埋め込みモデルが含まれるため、インストーラー全体は非商用利用に限る。音声コンポーネントには eSpeak NG（GPLv3）が含まれ、対応するソース `amadeus-0.1.0-speech-sources.zip` は各バージョンと一緒に Releases で公開する。詳細は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照。
 
