@@ -238,10 +238,10 @@ def test_tail_clock_only_marks_meaningful_intervals(hour, gap, expected):
 
 
 @pytest.mark.parametrize(("worldline", "mode", "familiarity", "ids"), [
-    ("steins_gate", "okabe", "initial", "A1 B1 B2 C1 C2 D2"),
-    ("beta", "okabe", "initial", "A1 B1 B2 C1 C2 D2 E1"),
+    ("steins_gate", "okabe", "initial", "A1 B1 B2 C1 D2 F2"),
+    ("beta", "okabe", "initial", "A1 B1 B2 C1 D2 F2 E1"),
     ("steins_gate", "self", "initial", "D1 F1"),
-    ("beta", "self", "familiar", "A2 C1 C2 D1 E2 F2"),
+    ("beta", "self", "familiar", "A2 B2 C1 D1 E2 F2"),
 ])
 def test_examples_are_whole_and_filtered(worldline, mode, familiarity, ids):
     assert set(example_pool(worldline, mode, familiarity)) == set(ids.split())

@@ -18,7 +18,7 @@ const flashModel: ModelCatalogEntry = {
     kind: 'effort',
     label: '推理强度',
     native: true,
-    default: 'low',
+    default: 'high',
     request_mode: 'thinking_and_effort',
     options: [
       { value: 'disabled', label: 'OFF' },
@@ -276,6 +276,12 @@ describe('ProviderControls', () => {
     );
     expect(resolveThinkingValue(openAiModel.thinking_control, 'max', 'high')).toBe(
       'max',
+    );
+    expect(resolveThinkingValue(flashModel.thinking_control, null, null)).toBe(
+      'high',
+    );
+    expect(resolveThinkingValue(flashModel.thinking_control, 'low', null)).toBe(
+      'low',
     );
     expect(resolveThinkingValue(flashModel.thinking_control, 'xhigh', 'high')).toBe(
       'high',

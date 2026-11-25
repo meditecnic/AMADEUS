@@ -122,10 +122,10 @@ SUMMARY_HEADER = "【これまでの流れ】"
 SEARCH_NOT_RUN = "【今回のネット検索：未実施】"
 REPLY_FORMAT = "先頭に [EMO:…] を1つだけ置き、本文は自然な日本語のみ"
 
-_OKABE_EXAMPLES = ("A1", "B1", "B2", "C1", "C2", "D2")
+_OKABE_EXAMPLES = ("A1", "B1", "B2", "C1", "D2", "F2")
 _SELF_EXAMPLES = {
     "initial": ("F1", "D1"),
-    "familiar": ("A2", "C1", "C2", "D1", "E2", "F2"),
+    "familiar": ("A2", "B2", "C1", "D1", "E2", "F2"),
 }
 
 

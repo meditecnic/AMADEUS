@@ -29,6 +29,8 @@ from app.services.memory_v11.diaries import (
     register_diary_window,
 )
 from app.services.memory_v11.diary_generation import (
+    _CLOCK_RE,
+    _temporal_expressions,
     promote_due_diary_windows,
     sync_conversation_diary_windows,
     validate_diary_grounding,
@@ -1549,10 +1551,121 @@ async def test_10_truncate_re_enqueue_avoids_unique_cursor_conflict_and_guards_i
             ["五月三日聊过"], "五月三日に話したわね。", "五月三号聊过。", None,
             id="grounded-month-and-day",
         ),
+        pytest.param(
+            ["夜の八時前に話した"], "夜の八時に話したのね。", "晚上八点聊了。", None,
+            id="grounded-ja-yoru-eight-pm",
+        ),
+        pytest.param(
+            ["朝の八時に話した"], "朝の八時に話したのね。", "晚上八点聊了。", "ungrounded_date",
+            id="ungrounded-ja-asa-vs-evening",
+        ),
+        pytest.param(
+            ["朝八時に起きた"], "朝の八時に起きたのね。", "上午八点起床了。", None,
+            id="grounded-ja-asa-eight-am",
+        ),
+        pytest.param(
+            ["夕方の五時に会った"], "夕方五時に会ったのね。", "下午五点见了面。", None,
+            id="grounded-ja-yuugata-five-pm",
+        ),
+        pytest.param(
+            ["昼の一時に出かけた"], "昼一時に出かけたのね。", "下午一点出门了。", None,
+            id="grounded-ja-hiru-one-pm",
+        ),
+        pytest.param(
+            ["真夜中の二時に目が覚めた"], "真夜中二時に目が覚めたのね。", "凌晨两点醒了。", None,
+            id="grounded-ja-mayonaka-two-am",
+        ),
+        pytest.param(
+            ["夜の十二時に寝た"], "夜の十二時に寝たのね。", "0:00睡了。", None,
+            id="grounded-ja-yoru-twelve-midnight",
+        ),
+        pytest.param(
+            ["夜の十二時に寝た"], "夜の十二時に寝たのね。", "12:00睡了。", "ungrounded_date",
+            id="ungrounded-ja-yoru-twelve-vs-noon",
+        ),
+        pytest.param(
+            ["真夜中の十二時に寝た"], "真夜中の十二時に寝たのね。", "0:00睡了。", None,
+            id="grounded-ja-mayonaka-twelve-midnight",
+        ),
+        pytest.param(
+            ["夜の一時に話した"], "夜の一時に話したのね。", "凌晨一点聊了。", None,
+            id="grounded-ja-yoru-one-am",
+        ),
+        pytest.param(
+            ["夜の一時に話した"], "夜の一時に話したのね。", "下午一点聊了。", "ungrounded_date",
+            id="ungrounded-ja-yoru-one-am-vs-pm",
+        ),
+        pytest.param(
+            ["夜の四時に寝た"], "夜の四時に寝たのね。", "凌晨四点睡了。", None,
+            id="grounded-ja-yoru-four-am",
+        ),
+        pytest.param(
+            ["夜の五時に起きた"], "夜の五時に起きたのね。", "下午五点醒了。", None,
+            id="grounded-ja-yoru-five-pm",
+        ),
+        pytest.param(
+            ["夜八時に話した"], "夜八時に話したのね。", "晚上八点聊了。", None,
+            id="grounded-ja-bare-yoru-eight-pm",
+        ),
+        pytest.param(
+            ["昨夜一点半聊过"], "夜中に話したのね。", "凌晨一点半聊过。", None,
+            id="grounded-zh-zuoye-one-thirty-am",
+        ),
+        pytest.param(
+            ["昨夜一点半聊过"], "夜中に話したのね。", "下午一点半聊过。", "ungrounded_date",
+            id="ungrounded-zh-zuoye-vs-pm",
+        ),
+        pytest.param(
+            ["连夜一点半出发"], "出発したのね。", "下午一点半出发。", "ungrounded_date",
+            id="ungrounded-zh-lianye-vs-pm",
+        ),
+        pytest.param(
+            ["昨夜08:00聊过"], "話したのね。", "晚上八点聊过。", "ungrounded_date",
+            id="ungrounded-zh-zuoye-colon-vs-evening",
+        ),
+        pytest.param(
+            ["今夜8点聊"], "話したのね。", "晚上八点聊。", "ungrounded_date",
+            id="ungrounded-zh-jinye-eight-vs-evening",
+        ),
+        pytest.param(
+            ["不分昼夜一点空都没有"], "忙しかったのね。", "下午一点有空。", "ungrounded_date",
+            id="ungrounded-zh-zhouye-yidian",
+        ),
+        pytest.param(
+            ["不分昼夜一点空都没有"], "忙しかったのね。", "凌晨一点有空。", "ungrounded_date",
+            id="ungrounded-zh-zhouye-yidian-am",
+        ),
+        pytest.param(
+            ["白昼一点阴影都没有"], "明るかったのね。", "下午一点很亮。", "ungrounded_date",
+            id="ungrounded-zh-baizhou-yidian",
+        ),
+        pytest.param(
+            ["朝八点方向走去"], "歩いたのね。", "上午八点走去。", "ungrounded_date",
+            id="ungrounded-zh-chao-direction",
+        ),
     ],
 )
 def test_diary_grounding_checks_complete_dates_times_and_message_quotes(sources, ja, zh, error):
     assert validate_diary_grounding(ja, zh, [{"text": text} for text in sources])[0] == error
+
+
+def test_ja_period_capture_and_zh_non_clock_boundaries():
+    assert _CLOCK_RE.search("朝八時に起きた")["period"] == "朝"
+    assert _CLOCK_RE.search("朝の八時に起きた")["period"] == "朝の"
+    assert _CLOCK_RE.search("夜八時")["period"] == "夜"
+    assert _CLOCK_RE.search("昨夜八時")["period"] is None
+    assert [v for v, _ in _temporal_expressions("夜八時")] == [("clock", 20, 0)]
+    for non_clock in ("不分昼夜一点空都没有", "白昼一点阴影都没有", "朝八点方向"):
+        assert list(_temporal_expressions(non_clock)) == []
+    for text, expected in (
+        ("昨夜一点半", ("clock", 1, 30)),
+        ("连夜一点半", ("clock", 1, 30)),
+        ("昨夜08:00", ("clock", 8, 0)),
+        ("今夜8点", ("clock", 8, 0)),
+    ):
+        match = _CLOCK_RE.search(text)
+        assert match is not None and match["period"] is None
+        assert [v for v, _ in _temporal_expressions(text)] == [expected]
 
 
 @pytest.mark.asyncio
