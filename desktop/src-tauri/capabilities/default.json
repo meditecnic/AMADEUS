@@ -7,8 +7,6 @@
     "core:default",
     "core:webview:allow-set-webview-zoom",
     "opener:default",
-    "updater:allow-check",
-    "updater:allow-download",
-    "updater:allow-install"
+    "updater:allow-download-and-install"
   ]
 }

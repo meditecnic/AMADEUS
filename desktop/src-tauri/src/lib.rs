@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 mod backend_logs;
 use backend_logs::CappedLog;
@@ -299,21 +300,53 @@ fn resolve_data_location(default: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+fn stop_backend_and_release_lock(app: &tauri::AppHandle) {
+    if let Some(backend) = app.try_state::<Arc<BackendProcess>>() {
+        backend.stop();
+    }
+    if let Some(lock) = app.try_state::<InstanceLock>() {
+        lock.release();
+    }
+}
+
 #[tauri::command]
 async fn restart_app(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
     if window.label() != "main" {
         return Err("restart is only available to the main window".into());
     }
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Some(backend) = handle.try_state::<Arc<BackendProcess>>() {
-            backend.stop();
-        }
-    }).await.map_err(|_| "backend shutdown failed".to_string())?;
-    if let Some(lock) = app.try_state::<InstanceLock>() {
-        lock.release();
-    }
+    tauri::async_runtime::spawn_blocking(move || stop_backend_and_release_lock(&handle))
+        .await
+        .map_err(|_| "backend shutdown failed".to_string())?;
     app.restart();
+}
+
+#[tauri::command]
+async fn check_update(webview: tauri::Webview) -> Result<Option<serde_json::Value>, String> {
+    if webview.label() != "main" {
+        return Err("updates are only available to the main window".into());
+    }
+    let app = webview.app_handle().clone();
+    // The hook belongs to the Update created by this check.
+    let updater = webview
+        .updater_builder()
+        .on_before_exit(move || {
+            stop_backend_and_release_lock(&app);
+            app.cleanup_before_exit();
+        })
+        .build()
+        .map_err(|error| error.to_string())?;
+    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::json!({
+        "currentVersion": update.current_version,
+        "version": update.version,
+        "body": update.body,
+        "date": update.raw_json.get("pub_date"),
+        "rawJson": update.raw_json,
+        "rid": webview.resources_table().add(update),
+    })))
 }
 
 const SENSITIVE_KEYS: &[&str] = &[
@@ -2119,6 +2152,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_local_backend,
             restart_app,
+            check_update,
             get_startup_diagnostics,
             open_startup_log_dir,
             pick_path,
