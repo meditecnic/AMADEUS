@@ -367,6 +367,8 @@ class Journey:
         except RuntimeError:
             cdp_diagnostics(self.process, self.port, self.root / f"desktop-{len(self.launches)}.log")
             raise
+        # The socket read must allow CDP.call's full response window while the WebView is busy.
+        self.cdp.ws.settimeout(15)
         for domain in ("Network", "Log", "Runtime", "Page"):
             self.cdp.call(domain + ".enable")
         self.reload_login()
@@ -600,8 +602,14 @@ class Journey:
     def rollback(self):
         self.send(SECOND, 2)
         wait_until(lambda: self.fact_count() == 2, 100, "Second turn fact did not ingest before rollback", self.tick)
-        self.click(self.find(".ws2-line-kurisu .ws2-msg-more"))
-        self.click(self.button("回到这里…", ".ws2", '[role="menuitem"]'))
+        trigger = self.find(".ws2-line-kurisu .ws2-msg-more")
+        self.wait(f"Boolean({trigger} && !{trigger}.disabled)", "First reply's message menu is unavailable")
+        self.cdp.evaluate(f"{trigger}.focus()")
+        for event in ("rawKeyDown", "keyUp"):
+            self.cdp.call("Input.dispatchKeyEvent", {
+                "type": event, "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13,
+            })
+        self.click(self.button("回到这里…", "body", '[role="menuitem"]:not([aria-disabled=true])'))
         self.click(self.button("确认回到这里", '[role="alertdialog"]'))
         self.wait(f"document.querySelectorAll('{LINES}').length === 2", "Rollback did not remove one pair from the UI")
         wait_until(lambda: len(self.messages(self.conversation)) == 2 and self.fact_count() == 1,
@@ -624,7 +632,9 @@ class Journey:
         require(any(row["content"] == CHANGE for row in self.messages(self.conversation)), "Mutation not persisted")
         self.open_section("数据")
         self.click(self.button("备份", ".ws2-sys-body"))
-        self.click(self.find('button[aria-label^="恢复到 "]'))
+        restore = ("[...document.querySelectorAll('ol[aria-label=备份] > li')]"
+                   ".find(e => e.textContent.includes('手动'))?.querySelector('button[aria-label^=\"恢复到 \"]')")
+        self.click(restore)
         self.click(self.button("安排恢复", '[role="alertdialog"]'))
         self.wait("document.querySelector('.ws2-sys-body')?.textContent.includes('已安排：')", "Restore was not scheduled")
         require(self.api("/api/data/backups")["restore_pending"] == manual["id"], "Wrong backup scheduled")
@@ -687,14 +697,30 @@ class Journey:
 
     def window_layout(self):
         self.wait(f"innerWidth === {self.login_size[0]}", "Original workstation size was not restored")
-        sizes = self.cdp.evaluate("""[document.documentElement, document.querySelector('.ws2'),
-            document.querySelector('[data-testid=transcript-viewport]')]
-            .map(e => [e.clientWidth, e.scrollWidth])""")
+        layout = self.cdp.evaluate("""(() => {
+            const root = document.querySelector('.ws2');
+            const visible = [document.documentElement, root, ...root.querySelectorAll('*')]
+                .filter(e => e instanceof HTMLElement && e.clientWidth && e.getClientRects().length);
+            const scrollbars = visible.filter(e => {
+                const overflow = getComputedStyle(e).overflowX;
+                return overflow === 'scroll' || ((overflow === 'auto' || e === document.documentElement)
+                    && e.scrollWidth > e.clientWidth + 1);
+            });
+            const controls = [...root.querySelectorAll('.ws2-top, .ws2-composer')]
+                .map(e => {
+                    const r = e.getBoundingClientRect();
+                    return [Math.round(r.left), Math.round(r.right)];
+                });
+            return {scrollbars: scrollbars.map(e => e.className || e.tagName), controls,
+                rootOverflowX: getComputedStyle(root).overflowX};
+        })()""")
         self.snap("09-workstation")
+        write_json(self.root / "09-workstation.json", layout)
         require(self.login_size[:2] == [1280, 720], f"Default viewport measured {self.login_size[:2]}")
-        require(self.login_fit and all(scroll <= client + 1 for client, scroll in sizes),
-                f"Login clipping or workstation horizontal overflow: {sizes}")
-        return f"Default viewport 1280×720; resized login fit; workstation client/scroll widths {sizes}."
+        require(self.login_fit and not layout["scrollbars"]
+                and all(0 <= left < right <= 1280 for left, right in layout["controls"]),
+                f"Login clipping or workstation horizontal scrollbar: {layout}")
+        return "Default viewport 1280×720; resized login fits; no horizontal scrollbar in the workstation."
 
     def export(self):
         from PIL import ImageGrab
