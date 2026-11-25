@@ -395,6 +395,71 @@ async def test_r5_experience_retrieval_failure_fail_soft(isolated_store, monkeyp
     assert "自然な日本語に直して話す" in prompt
     assert "【あなたについて覚えていること】" in prompt
 
+def _split_prompt_around_memory(prompt: str, header: str) -> tuple[str, list[str], str]:
+    """Split a compiled prompt into (before_memory, memory_lines, after_memory)."""
+    prefix, sep, rest = prompt.partition(f"\n\n{header}\n")
+    assert sep, f"missing memory section header {header!r}"
+    memory_block, sep_after, suffix = rest.partition("\n\n")
+    assert sep_after, f"missing trailing sections after {header!r}"
+    return prefix, memory_block.splitlines(), suffix
+
+
+def _assert_frame_and_whole_memories(
+    prompt: str,
+    *,
+    baseline_prompt: str,
+    session: SimpleNamespace,
+    header: str,
+    rule_lines: list[str],
+    seeded: list[tuple[str, str]],
+) -> None:
+    """Assert persona/principles/examples stay intact and memory lines are whole seeds."""
+    from app.services import prompt_compiler as pc_module
+
+    base_prefix, _, base_suffix = _split_prompt_around_memory(baseline_prompt, header)
+    prefix, mem_lines, suffix = _split_prompt_around_memory(prompt, header)
+    compiled = session.turn_compiled_prompt
+    assert compiled is not None and compiled.inputs is not None
+
+    expected_persona = pc_module.persona_bible.render_prompt(
+        session.worldline,
+        identity_mode=session.identity_mode,
+        year=compiled.inputs.local_year,
+    )
+    expected_principles = (
+        pc_module.persona_bible.guidance["interval"]
+        + "\n\n"
+        + pc_module.persona_bible.guidance["search"]
+    )
+    expected_examples = pc_module.render_persona_examples(
+        session.identity_mode,
+        worldline=session.worldline,
+        familiarity=compiled.inputs.familiarity,
+        conversation_key=session.session_id,
+        year=compiled.inputs.local_year,
+    )
+    assert prefix == base_prefix, "persona/identity prefix changed under budget pressure"
+    assert suffix == base_suffix, "principles/examples suffix changed under budget pressure"
+    assert expected_persona in prefix, "persona block truncated or missing"
+    assert expected_principles in suffix, "principles block truncated or missing"
+    assert expected_examples in suffix, "examples block truncated or missing"
+
+    assert mem_lines[: len(rule_lines)] == rule_lines, (
+        "surviving memory section must keep the usage contract intact"
+    )
+    item_lines = mem_lines[len(rule_lines) :]
+    seeded_texts = {text for _, text in seeded}
+    for line in item_lines:
+        assert line.startswith("- "), f"unexpected non-bullet memory line: {line!r}"
+        assert line[2:] in seeded_texts, (
+            f"memory line is partial/truncated or unknown: {line!r}"
+        )
+
+    survivors = [marker for marker, _ in seeded if marker in prompt]
+    assert 0 < len(survivors) < len(seeded)
+    assert len(item_lines) == len(survivors)
+
+
 @pytest.mark.asyncio
 async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
     isolated_store, monkeypatch
@@ -410,6 +475,8 @@ async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
         seeded.append((marker, text))
         await _seed_prompt_experience(session_id=session_id, display_text=text)
 
+    baseline_prompt = await compile_for_session(_session_obj(session_id), "秋葉原")
+
     real_counter = pc_module.prompt_compiler.token_counter
     monkeypatch.setattr(
         pc_module.prompt_compiler,
@@ -420,17 +487,16 @@ async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
     # remaining room only fits one or two whole experiences under 1.5x pressure.
     monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6500)
 
-    prompt = await compile_for_session(_session_obj(session_id), "秋葉原")
-    survivors = [marker for marker, _ in seeded if marker in prompt]
-    assert 0 < len(survivors) < len(seeded)
-    for marker, text in seeded:
-        assert marker not in prompt or text in prompt, (
-            f"{marker}: experience marker present but content partial/truncated"
-        )
-    if survivors:
-        assert "話の流れに合う時だけ自然に触れて" in prompt, (
-            "surviving experiences must keep the usage contract intact"
-        )
+    session = _session_obj(session_id)
+    prompt = await compile_for_session(session, "秋葉原")
+    _assert_frame_and_whole_memories(
+        prompt,
+        baseline_prompt=baseline_prompt,
+        session=session,
+        header=pc_module.EPISODES_HEADER,
+        rule_lines=pc_module.persona_bible.guidance["episodes"].splitlines(),
+        seeded=seeded,
+    )
 
 
 @pytest.mark.asyncio
@@ -454,6 +520,8 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
             semantic_json={"subject": "user", "relation": "likes", "object": f"a{i:02d}"},
         )
 
+    baseline_prompt = await compile_for_session(_session_obj(session_id), "このすば")
+
     real_counter = pc_module.prompt_compiler.token_counter
     monkeypatch.setattr(
         pc_module.prompt_compiler,
@@ -463,17 +531,18 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
     # Budget scales with persona length so remaining room only fits one or two whole facts.
     monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6500)
 
-    prompt = await compile_for_session(_session_obj(session_id), "このすば")
-    survivors = [marker for marker, _ in seeded if marker in prompt]
-    assert 0 < len(survivors) < len(seeded)
-    for marker, text in seeded:
-        assert marker not in prompt or text in prompt, (
-            f"{marker}: stable fact marker present but content partial/truncated"
-        )
-    if survivors:
-        assert "自然な日本語に直して話す" in prompt, (
-            "surviving facts must keep the usage contract intact"
-        )
+    session = _session_obj(session_id)
+    prompt = await compile_for_session(session, "このすば")
+    _assert_frame_and_whole_memories(
+        prompt,
+        baseline_prompt=baseline_prompt,
+        session=session,
+        header=pc_module.FACTS_HEADERS["self"],
+        rule_lines=pc_module.resident_fact_rule(
+            complete=False, tool_capable=False
+        ).splitlines(),
+        seeded=seeded,
+    )
 
 
 # ---------------------------------------------------------------------------
