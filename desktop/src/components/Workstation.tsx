@@ -535,6 +535,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
    * its first chat-check passes or the user enables it by hand. */
   const pendingProviders = providers.filter((row) => row.selector_admission === 'pending').map((row) => row.id);
   const [modelApplyError, setModelApplyError] = useState<string | null>(null);
+  const [pendingConfigReconnect, setPendingConfigReconnect] = useState<{ providerId: string; seq: number } | null>(null);
   /** Address, key or model changes invalidate earlier results for that provider. */
   const bumpConfigVersion = useCallback((providerId: string) => {
     const next = (configVersionsRef.current[providerId] ?? 0) + 1;
@@ -1333,13 +1334,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const needsApiKey = credentialChecked && Boolean(activeProvider) && !credentialConfigured;
   const presentationMessages = shift && !shift.committed ? shiftSourceMessages.current : messages;
   const visibleMessages = needsApiKey
-    ? presentationMessages.filter((message) => message.conversationEntryError || !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
-    // After switching away or configuring the key, prior missing-key / unauthenticated notices no longer describe the active session.
+    ? presentationMessages.filter((message) => !message.systemError || message.conversationEntryError || !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
+    // After switching away or configuring the key, prior missing-key / unauthenticated system notices no longer describe the active session.
     : presentationMessages.filter((message) => {
-      if (message.conversationEntryError) return true;
+      if (!message.systemError || message.conversationEntryError) return true;
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
       if (missing) return missing[1] === activeProviderId && (!credentialConfigured || sessionState === 'rejected');
-      if (message.systemError && /未认证.*API\s*Key/i.test(message.content)) {
+      if (/未认证.*请打开设置.*API\s*Key/i.test(message.content)) {
         return !credentialConfigured || sessionState === 'rejected';
       }
       return true;
@@ -1450,6 +1451,35 @@ export const Workstation: React.FC<WorkstationProps> = ({
       && status !== 'CONNECTING') reconnect();
     setConversationReconnectEpoch(null);
   }, [conversationReconnectEpoch, pendingConversation, reconnect, status, worldline]);
+
+  // Any running, streaming or queued work on this connection (including background conversations) must finish
+  // before a config-triggered reconnect drops the socket and cancels the connection's turn queue.
+  const hasConnectionTurns = turnActive
+    || isSynthesizing
+    || messages.some((message) => message.streaming)
+    || Object.values(conversationTurns ?? {}).some((turn) => turn.running || turn.queued.length > 0);
+  useEffect(() => {
+    if (!pendingConfigReconnect) return;
+    const { providerId } = pendingConfigReconnect;
+    if (relocating || providerId !== activeProviderId) {
+      setPendingConfigReconnect(null);
+      return;
+    }
+    if (hasConnectionTurns || conversationBusy || Boolean(pendingConversation) || Boolean(shift)) return;
+    setPendingConfigReconnect(null);
+    void loadProviderModels(providerId, true);
+    reconnect();
+  }, [
+    pendingConfigReconnect,
+    activeProviderId,
+    hasConnectionTurns,
+    conversationBusy,
+    pendingConversation,
+    shift,
+    relocating,
+    loadProviderModels,
+    reconnect,
+  ]);
 
   const handleJumpToLatest = useCallback(() => {
     scrollTranscriptToLatest({ smooth: true });
@@ -1797,6 +1827,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_provider', providerId);
       localStorage.setItem('amadeus_pc_model', modelId);
     } catch {}
+    setPendingConfigReconnect(null);
     reconnect();
   };
 
@@ -3226,10 +3257,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             onReload={() => loadProviders()}
             onConfigChanged={(providerId) => {
               bumpConfigVersion(providerId);
-              if (providerId === activeProviderId) {
-                void loadProviderModels(providerId, true);
-                if (!turnActive && !isSynthesizing && !relocating) reconnect();
-              }
+              setPendingConfigReconnect((current) => ({ providerId, seq: (current?.seq ?? 0) + 1 }));
             }}
             search={{
               active: webSearchActiveProvider,

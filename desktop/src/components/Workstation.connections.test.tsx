@@ -1020,4 +1020,171 @@ describe('Workstation first-run key save reconnection ([358])', () => {
     await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
     expect(hoisted.reconnect).not.toHaveBeenCalled();
   });
+
+  it('uses live turn state when an in-flight save settles: skips during a newly started turn and reconnects once idle', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    let state = wsState({ status: 'READY', sessionState: 'ready', isThinking: false });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    let releaseConnect!: () => void;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        await new Promise<void>((resolve) => { releaseConnect = resolve; });
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-race-forward' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(releaseConnect).toBeTypeOf('function'));
+
+    // Before the save resolves, the user starts a reply turn.
+    state = wsState({ status: 'READY', sessionState: 'ready', isThinking: true, isTurnActive: true });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await act(async () => { releaseConnect(); });
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // Once the active turn settles, the deferred reconnect applies the saved credentials.
+    state = wsState({ status: 'READY', sessionState: 'ready', isThinking: false, isTurnActive: false });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+  });
+
+  it('recovers a session that became rejected while a mid-turn save was in flight', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    let state = wsState({ status: 'READY', sessionState: 'ready', isThinking: true, isTurnActive: true });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    hoisted.reconnect.mockImplementationOnce(() => {
+      state = wsState({ status: 'READY', sessionState: 'ready', isThinking: false, isTurnActive: false });
+    });
+    let releaseConnect!: () => void;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        await new Promise<void>((resolve) => { releaseConnect = resolve; });
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-race-reverse' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(releaseConnect).toBeTypeOf('function'));
+
+    // Before the save resolves, the turn ends and the open session drops to rejected.
+    state = wsState({ status: 'ERROR', sessionState: 'rejected', isThinking: false, isTurnActive: false });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await act(async () => { releaseConnect(); });
+
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '回到对话' }));
+    await waitFor(() => expect(view.container.querySelector('.ws2-online')).toHaveTextContent('ONLINE'));
+  });
+
+  it('defers reconnect while another conversation has running or queued turns on the same connection', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    let state = wsState({
+      status: 'READY',
+      sessionState: 'ready',
+      isThinking: false,
+      isTurnActive: false,
+      conversationTurns: { 'conv-other': { running: true, queued: ['task-1'] } },
+    });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', model_id: 'deepseek-flash' });
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return json(200, { catalog: [capability('deepseek-flash')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const dsToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (dsToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(dsToggle);
+    const dsRow = dsToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(dsRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('DeepSeek 的新密钥'), { target: { value: 'sk-bg-turn' } });
+    fireEvent.click(within(dsRow).getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // Still queued (not running) on the other conversation: must still wait.
+    state = wsState({
+      status: 'READY',
+      sessionState: 'ready',
+      conversationTurns: { 'conv-other': { running: false, queued: ['task-1'] } },
+    });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+
+    // Once all background turns finish, reconnect runs once.
+    state = wsState({ status: 'READY', sessionState: 'ready', conversationTurns: {} });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps normal chat messages mentioning missing-key text and real upstream errors visible', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-flash', { credential_required: true, configured: true })];
+    const messages = [
+      { id: 'user-mention', role: 'user' as const, content: '刚才看到缺失 deepseek API Key。该怎么处理？' },
+      { id: 'err-upstream', role: 'assistant' as const, content: 'SYSTEM ERROR: Invalid API Key', systemError: true },
+      {
+        id: 'err-stale-missing',
+        role: 'assistant' as const,
+        content: 'SYSTEM ERROR: 缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。',
+        systemError: true,
+      },
+      {
+        id: 'err-stale-unauth',
+        role: 'assistant' as const,
+        content: 'SYSTEM ERROR: 未认证。请打开设置并配置您的 API Key。',
+        systemError: true,
+      },
+    ];
+    hoisted.useAmadeusWS.mockImplementation(() => wsState({ status: 'READY', sessionState: 'ready', messages }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByText('刚才看到缺失 deepseek API Key。该怎么处理？')).toBeInTheDocument();
+    expect(screen.getByText(/Invalid API Key/)).toBeInTheDocument();
+    expect(screen.queryByText(/请打开设置保存供应商凭据后重新连接/)).toBeNull();
+    expect(screen.queryByText(/请打开设置并配置您的 API Key/)).toBeNull();
+  });
 });
