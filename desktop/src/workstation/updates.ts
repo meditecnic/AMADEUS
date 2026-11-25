@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useSyncExternalStore } from 'react';
 import { inShell, shellVersion } from './shell';
 
@@ -32,8 +33,9 @@ function shellSource(): Source {
   let pending: import('@tauri-apps/plugin-updater').Update | null = null;
   return {
     async check() {
-      const { check } = await import('@tauri-apps/plugin-updater');
-      pending = await check();
+      const { Update } = await import('@tauri-apps/plugin-updater');
+      const metadata = await invoke<ConstructorParameters<typeof Update>[0] | null>('check_update');
+      pending = metadata ? new Update(metadata) : null;
       return pending ? { version: pending.version, notes: pending.body ?? '', date: pending.date ?? null } : null;
     },
     async install(progress) {
