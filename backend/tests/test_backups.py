@@ -1,5 +1,6 @@
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -71,6 +72,38 @@ def test_snapshot_includes_wal_and_only_product_data(data_root):
     assert not backups.list_backups()[0]['can_restore']
     with pytest.raises(backups.BackupError, match='checksum mismatch'):
         backups.schedule_restore(manifest['id'])
+
+
+def test_backup_completes_when_wal_disappears_during_estimate(data_root, monkeypatch):
+    path = make_database(data_root)
+    wal = path.with_name(path.name + '-wal')
+    exists, stat = Path.exists, Path.stat
+    wal_disappeared = False
+
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute("UPDATE sample SET value='in-wal'")
+        connection.commit()
+        assert wal.is_file()
+
+        def stat_after_checkpoint(candidate, *args, **kwargs):
+            nonlocal wal_disappeared
+            if candidate == wal:
+                connection.close()
+                wal_disappeared = not os.path.exists(candidate)
+            return stat(candidate, *args, **kwargs)
+
+        # Let the existence probe succeed before the size lookup closes SQLite.
+        def exists_before_checkpoint(candidate):
+            return os.path.exists(candidate) if candidate == wal else exists(candidate)
+
+        monkeypatch.setattr(Path, 'exists', exists_before_checkpoint)
+        monkeypatch.setattr(Path, 'stat', stat_after_checkpoint)
+        manifest = backups.create_backup('weekly')
+
+    assert wal_disappeared
+    snapshot = data_root / 'backups' / manifest['id'] / path.name
+    assert value_at(snapshot) == 'in-wal'
 
 
 def test_failed_snapshot_and_space_leave_no_partial(data_root, monkeypatch):

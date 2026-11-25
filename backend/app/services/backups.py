@@ -1,5 +1,5 @@
 """SQLite online snapshots and restore-before-opening startup protocol."""
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -162,9 +162,12 @@ def create_backup(reason: str = "manual", *, salvage: bool = False, stop: thread
         root = _root()
         root.mkdir(parents=True, exist_ok=True)
         files = sorted(name for name in database_files() | CONFIG_FILES if _local(root, name).exists())
-        estimate = sum(_local(root, name).stat().st_size + (
-            Path(str(root / name) + "-wal").stat().st_size
-            if Path(str(root / name) + "-wal").exists() else 0) for name in files)
+        estimate = 0
+        for name in files:
+            estimate += _local(root, name).stat().st_size
+            wal = Path(str(root / name) + "-wal")
+            with suppress(FileNotFoundError):
+                estimate += wal.stat().st_size
         needed = int(estimate * 1.2)
         if shutil.disk_usage(root).free < needed:
             raise BackupError("insufficient_space", f"Backup requires {needed} bytes of free space")
