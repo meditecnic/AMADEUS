@@ -1,0 +1,66 @@
+name: Windows RC checklist
+
+on:
+  push:
+    branches: [codex/357-rc-checklist]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  checklist:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN: '45555101078'
+      RUN_KIND: rehearsal
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: source
+        name: Record installer provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:SOURCE_RUN -notmatch '^[1-9][0-9]*$') { throw 'Invalid source run ID' }
+          $src = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($src.path -ne '.github/workflows/release.yml') { throw 'Expected a Windows release build' }
+          if ($env:RUN_KIND -eq 'rc' -and ($src.event -ne 'workflow_dispatch' -or $src.head_branch -ne 'main' -or $src.conclusion -ne 'success')) {
+            throw 'Expected a successful main release build for RC acceptance'
+          }
+          "revision=$($src.head_sha)" >> $env:GITHUB_OUTPUT
+          "Source $env:RUN_KIND run $env:SOURCE_RUN, commit $($src.head_sha), event $($src.event)" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.source.outputs.revision }}
+          path: installer-source
+          sparse-checkout: desktop/src-tauri/icons
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: amadeus-windows-x64-*
+          path: ${{ runner.temp }}/rc-installer
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - name: Install checklist dependencies
+        run: python -m pip install websocket-client==1.9.0 cryptography==46.0.3 pywin32==311 pillow==12.1.1 pefile==2024.8.26
+      - name: Run installed desktop checklist
+        env:
+          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
+        run: |
+          python packaging/windows/rc_checklist.py --artifact "$env:RUNNER_TEMP/rc-installer" --evidence "$env:RUNNER_TEMP/rc-evidence" --icon installer-source/desktop/src-tauri/icons/icon.ico
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-rc-checklist-${{ env.RUN_KIND }}-${{ env.SOURCE_RUN }}
+          path: ${{ runner.temp }}/rc-evidence/*
+          if-no-files-found: warn
