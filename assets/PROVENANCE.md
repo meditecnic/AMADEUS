@@ -15,6 +15,7 @@ never go here; they belong in the separately distributed asset pack.
 | `desktop/public/assets/sheet/tape-1.webp`, `tape-2.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [05c Masking tape](#05c-masking-tape) |
 | `desktop/public/assets/sheet/grain.webp`, `tooth.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [08 Grain tile](#08-grain-tile) |
 | `desktop/public/assets/sheet/eraser.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [09 Eraser marks](#09-eraser-marks) |
+| `desktop/src-tauri/icons/amadeus-icon.svg`, `amadeus-icon-small.svg`, `icon.ico`, `icon.icns`, `*.png`; `desktop/public/favicon.png` | Hand-written SVG (rasterized via Chromium + Pillow; no image-gen model) | 2026-11-25 | Claude Opus 5.5 (prototype), Gemini 4 Neon (refinement & packaging) | [10 App icon](#10-app-icon) |
 
 Post-processing (designer, 2026-11-07): cropped to the subject, converted to WebP (quality 70–80, alpha kept).
 The specimens and the rings were generated on flat black and flat white and cut out by brightness (alpha from the
@@ -145,3 +146,9 @@ pure black #000000 background: black is untouched, white is rubbed hardest.
 No drawing, no lines, no shapes, no paper texture, no text, no objects.
 Not transparent, not a checkerboard.
 ```
+
+## 10 App icon
+
+Hand-written original SVG sources only (no AI image generation, no original game assets or silhouettes):
+- Prototype (`dual-wedge A + woven red stroke`): Claude Opus 5.5 (hand-written SVG).
+- Refinement (`amadeus-icon.svg` for 32–512 px; dedicated optical small master `amadeus-icon-small.svg` for 16 & 24 px) and icon set rasterization/packing (`icon.ico` with 16/24/32/48/64/128/256 px, `icon.icns`, Windows Store/Tauri PNGs, `desktop/public/favicon.png`): Gemini 4 Neon.
