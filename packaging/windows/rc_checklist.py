@@ -656,6 +656,9 @@ class Journey:
         rows = self.messages(self.conversation)
         require(len(rows) == 2 and rows[0]["content"] == FIRST and all(r["content"] != CHANGE for r in rows),
                 "Restored history does not match the manual backup")
+        expand = self.find('.ws2-top button[aria-label="展开会话列表"]')
+        if self.cdp.evaluate(f"Boolean({expand})"):
+            self.click(expand)
         self.click(self.find(f'[data-conversation-id="{self.conversation}"] .conversation-select'))
         self.wait(f"document.querySelectorAll('{LINES}').length === 2", "Restored history did not appear in the UI", 40)
         self.snap("07-restored")
