@@ -15,7 +15,6 @@ jobs:
     runs-on: windows-2025-vs2026
     timeout-minutes: 90
     env:
-      BUILD_WORK: ${{ runner.temp }}/amadeus-build
       JINA_REVISION: ac5d898c8d382b17167c33e5c8af644a3519b47d
       PYTHONUTF8: '1'
     steps:
@@ -31,8 +30,11 @@ jobs:
           node-version: '22'
       - name: Prepare build tools
         run: |
+          "BUILD_WORK=$env:RUNNER_TEMP/amadeus-build" >> $env:GITHUB_ENV
           python -m pip install huggingface_hub==2.4.0 pefile==2024.8.26
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           rustup show active-toolchain
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -c "import sys; sys.path.insert(0, 'packaging/windows'); from build_installer import visual_studio; from bundle_support import sanitized_build_environment; print(visual_studio(sanitized_build_environment())['redist'])" | Select-Object -Last 1 | ForEach-Object { "VC_REDIST=$_" >> $env:GITHUB_ENV }
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
