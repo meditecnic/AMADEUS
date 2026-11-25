@@ -2,7 +2,7 @@ name: Windows RC checklist
 
 on:
   push:
-    branches: [codex/357-rc-checklist]
+    branches: [claude/elegant-allen-93yaey]
 
 permissions:
   contents: read
@@ -13,8 +13,8 @@ jobs:
     runs-on: windows-2025-vs2026
     timeout-minutes: 20
     env:
-      SOURCE_RUN: '45558523599'
-      RUN_KIND: rc
+      SOURCE_RUN: '45567673796'
+      RUN_KIND: pr358
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
