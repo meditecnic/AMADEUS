@@ -49,6 +49,7 @@ from smoke_frozen import REPLY, fake_service, process_snapshot, update_children,
 MODEL = "deepseek-flash"
 MODEL_LABEL = "DeepSeek-V4.1-Flash"
 HOST = "api.deepseek.com"
+SUBTITLE = "已确认安装包运行正常。"
 FIRST = "我每天早晨喝紫苏乌龙。"
 SECOND = "我很喜欢柚子果酱。"
 CHANGE = "我今天把桌面的灯换成紫色了。"
@@ -72,6 +73,8 @@ def observation(text, index, confidence):
 
 def fixture_completion(messages):
     system = messages[0].get("content", "") if messages else ""
+    if system.startswith("あなたは日本語から中国語（簡体字）への字幕翻訳者です。"):
+        return "subtitle", SUBTITLE
     if system.startswith("Classify retrieval for the current chat turn."):
         query = json.loads(messages[-1]["content"])["current"]
         return "routing", {"search_query": "", "recall_needs": [FIRST] if query == ASK else []}
@@ -169,9 +172,11 @@ def model_service(root, scratch):
                 ], stream=True)
             else:
                 kind, content = fixture_completion(payload.get("messages", []))
-                requests.append({"kind": kind, "observations": len(content.get("observations", []))})
+                requests.append({"kind": kind, "observations":
+                                 len(content.get("observations", [])) if isinstance(content, dict) else 0})
                 self.reply({"choices": [{"message": {"role": "assistant", "content":
-                                                     json.dumps(content, ensure_ascii=False)},
+                                                     json.dumps(content, ensure_ascii=False)
+                                                     if isinstance(content, dict) else content},
                                          "finish_reason": "stop"}]})
 
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
@@ -515,6 +520,7 @@ class Journey:
     def onboarding(self):
         self.wait("document.querySelector('.ws2-empty-head')?.textContent === '尚未接通'",
                   "Missing-key guide did not appear")
+        self.check_default_model()
         self.snap("01-missing-key")
         self.click(self.button("填写密钥", ".ws2-empty"))
         self.write('[data-testid="credential-input"]', "rc-fixture-deepseek-only")
@@ -533,11 +539,14 @@ class Journey:
         require(outcome.startswith("通过 ·"), f"Connection check UI returned: {outcome}")
         self.close_section()
         self.wait("document.querySelector('.ws2-online')?.textContent.trim() === 'ONLINE'", "Workstation went offline", 35)
+        self.check_default_model()
+        self.snap("01-default")
+        return f"Missing-key CTA, fake key saved, loopback connection check passed; default {MODEL_LABEL} and HIGH."
+
+    def check_default_model(self):
         self.wait(f"document.querySelector('[aria-label=模型]')?.textContent.includes('{MODEL_LABEL}') && "
                   "document.querySelector('[aria-label=推理强度]')?.textContent.includes('HIGH')",
                   "Default model display name or HIGH effort mismatch")
-        self.snap("01-default")
-        return f"Missing-key CTA, fake key saved, loopback connection check passed; default {MODEL_LABEL} and HIGH."
 
     def recover_chat_setup(self):
         # The exact onboarding result is already recorded. Finish the model selection
@@ -570,8 +579,10 @@ class Journey:
         self.conversation = self.send(FIRST, 1)
         require(any(item.get("effort") == "high" for item in self.requests if item["kind"] == "chat"),
                 "Chat request did not use reasoning effort high")
+        self.wait(f"document.querySelector('.ws2-line-kurisu')?.textContent.includes({json.dumps(SUBTITLE)})",
+                  "Chinese subtitle did not render", 30)
         self.snap("03-chat")
-        return "Fixed Japanese text visible in the transcript and stored with its user message; loopback stream used high."
+        return "Fixed Japanese reply and Chinese subtitle rendered; history persisted and loopback stream used high."
 
     def chart(self):
         return self.api("/api/memory/chart" + self.query() + "&identity_mode=okabe")
@@ -620,18 +631,18 @@ class Journey:
 
     def restore(self):
         self.open_section("数据")
-        self.click(self.button("备份", ".ws2-sys-body"))
-        self.click(self.button("立即备份", ".ws2-sys-body"))
+        backup = self.button("立即备份", ".ws2-data")
+        self.click(backup)
         self.wait("document.querySelector('.ws2-sys-body')?.textContent.includes('已备份（')", "Manual backup not confirmed", 60)
         backups = self.api("/api/data/backups")["backups"]
         manual = next(row for row in backups if row["reason"] == "manual")
         require(manual["can_restore"], "Manual backup was not marked restorable")
+        self.cdp.evaluate("document.querySelector('#ws2-data-backups')?.scrollIntoView({block:'center'})")
         self.snap("07-backup")
         self.close_section()
         self.send(CHANGE, 2)
         require(any(row["content"] == CHANGE for row in self.messages(self.conversation)), "Mutation not persisted")
         self.open_section("数据")
-        self.click(self.button("备份", ".ws2-sys-body"))
         restore = ("[...document.querySelectorAll('ol[aria-label=备份] > li')]"
                    ".find(e => e.textContent.includes('手动'))?.querySelector('button[aria-label^=\"恢复到 \"]')")
         self.click(restore)
@@ -727,7 +738,9 @@ class Journey:
         import win32gui
 
         self.open_section("数据")
-        self.click(self.button("导出", ".ws2-sys-body"))
+        section = self.find('section[aria-labelledby="ws2-data-export"]')
+        self.wait(f"Boolean({section})", "Export section unavailable")
+        self.cdp.evaluate(f"{section}.scrollIntoView({{block:'center'}})")
         self.click(self.find('section[aria-labelledby="ws2-data-export"] .ws2-m-foot button'))
         try:
             modal = wait_until(lambda: window_for_pid(self.process.pid, "导出另存为"), 15, "Native Save As not found")
